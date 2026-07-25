@@ -17,14 +17,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        # actions/checkout v7.0.0
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
 
       - name: Run Gitleaks
         run: |
+          # gitleaks v8.28.0
           set -euo pipefail
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/repo" \
@@ -38,13 +39,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        # actions/checkout v7.0.0
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
       - name: Run actionlint
         run: |
+          # actionlint v1.7.7
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/repo" \
             -w /repo \
@@ -56,8 +58,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        # actions/checkout v7.0.0
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
@@ -86,8 +88,10 @@ jobs:
           import tomllib
           from pathlib import Path
 
-          project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
-          dependencies = list(project.get("dependencies", []))
+          config = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          project = config["project"]
+          dependencies = list(config.get("build-system", {}).get("requires", []))
+          dependencies.extend(project.get("dependencies", []))
           for group in project.get("optional-dependencies", {}).values():
               dependencies.extend(group)
           output = Path(os.environ["RUNNER_TEMP"]) / "project-dependencies.txt"
@@ -104,8 +108,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        # actions/checkout v7.0.0
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
 
@@ -117,6 +121,7 @@ jobs:
             echo "No tracked shell scripts found; skipping ShellCheck."
             exit 0
           fi
+          # ShellCheck v0.11.0
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/mnt" \
             -w /mnt \
