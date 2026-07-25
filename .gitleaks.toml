@@ -1,0 +1,13 @@
+title = "better-hermes-hindsight gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Narrow placeholder values used in public documentation"
+regexes = [
+  '''(?i)^your-api-key$''',
+  '''(?i)^example-token$''',
+  '''(?i)^example\.invalid$''',
+  '''^\[REDACTED\]$''',
+]

@@ -1,0 +1,124 @@
+name: Security scans
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        # actions/checkout v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Run Gitleaks
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/repo" \
+            -w /repo \
+            --entrypoint /bin/sh \
+            ghcr.io/gitleaks/gitleaks@sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854 \
+            -c 'git config --global --add safe.directory /repo && gitleaks git --config=/repo/.gitleaks.toml --redact --verbose /repo'
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        # actions/checkout v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - name: Run actionlint
+        run: |
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/repo" \
+            -w /repo \
+            docker.io/rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 \
+            -color
+
+  python-security:
+    name: Python static/security checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        # actions/checkout v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        # actions/setup-python v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+
+      - name: Install scanners
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install semgrep==1.168.0 zizmor==1.26.1 pip-audit==2.10.1
+
+      - name: Run Semgrep
+        run: semgrep scan --config p/ci --config p/secrets --error --metrics=off .
+
+      - name: Run zizmor
+        run: zizmor .github/workflows
+
+      - name: Prepare dependency manifest
+        id: dependencies
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import tomllib
+          from pathlib import Path
+
+          project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
+          dependencies = list(project.get("dependencies", []))
+          for group in project.get("optional-dependencies", {}).values():
+              dependencies.extend(group)
+          output = Path(os.environ["RUNNER_TEMP"]) / "project-dependencies.txt"
+          output.write_text(chr(10).join(dependencies), encoding="utf-8")
+          print(f"present={str(bool(dependencies)).lower()}")
+          PY
+
+      - name: Run pip-audit
+        if: steps.dependencies.outputs.present == 'true'
+        run: pip-audit --progress-spinner off -r "${RUNNER_TEMP}/project-dependencies.txt"
+
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        # actions/checkout v7.0.0
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - name: Run ShellCheck when shell scripts exist
+        run: |
+          set -euo pipefail
+          mapfile -t scripts < <(git ls-files '*.sh' '*.bash')
+          if [ "${#scripts[@]}" -eq 0 ]; then
+            echo "No tracked shell scripts found; skipping ShellCheck."
+            exit 0
+          fi
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/mnt" \
+            -w /mnt \
+            docker.io/koalaman/shellcheck@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d \
+            -x "${scripts[@]}"
