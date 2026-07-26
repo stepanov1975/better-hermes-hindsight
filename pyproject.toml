@@ -23,7 +23,9 @@ classifiers = [
 dependencies = ["hindsight-client==0.8.5"]
 
 [project.optional-dependencies]
-proof = []
+proof = [
+  "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git@3ef6bbd201263d354fd83ec55b3c306ded2eb72a",
+]
 dev = [
   "build>=1.3,<2",
   "mypy>=1.18,<3",
@@ -43,6 +45,9 @@ package-dir = {"" = "src"}
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["better_hermes_hindsight*"]
+
+[tool.setuptools.package-data]
+"better_hermes_hindsight.hermes_plugin" = ["plugin.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
