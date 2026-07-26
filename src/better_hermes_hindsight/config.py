@@ -400,7 +400,10 @@ def _parse_hermes_home(value: str | Path) -> Path:
     path = Path(value)
     if not path.is_absolute():
         raise _error("hermes_home must be absolute; cwd discovery is disabled")
-    return path.resolve(strict=False)
+    try:
+        return path.resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        raise _error("hermes_home must be a valid absolute path") from None
 
 
 def _load_profile_json(home: Path) -> dict[str, object]:
@@ -418,8 +421,10 @@ def _load_profile_json(home: Path) -> dict[str, object]:
         raise _error("profile config.json contains a duplicate JSON key") from None
     except json.JSONDecodeError as exc:
         raise _error(
-            f"profile config.json is invalid JSON at line {exc.lineno}, column {exc.colno}"
+            f"profile config.json is not valid JSON at line {exc.lineno}, column {exc.colno}"
         ) from None
+    except ValueError:
+        raise _error("profile config.json is not valid JSON") from None
     mapping = _expect_mapping(loaded, "profile config.json")
     _reject_secret_json_keys(mapping)
     return dict(mapping)
@@ -596,7 +601,12 @@ def _parse_bounded_float(
 ) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise _error(f"{field_name} must be a number greater than {minimum} and at most {maximum}")
-    parsed = float(value)
+    try:
+        parsed = float(value)
+    except (OverflowError, ValueError):
+        raise _error(
+            f"{field_name} must be a number greater than {minimum} and at most {maximum}"
+        ) from None
     if not math.isfinite(parsed) or parsed <= minimum or parsed > maximum:
         raise _error(f"{field_name} must be a number greater than {minimum} and at most {maximum}")
     return parsed
@@ -735,7 +745,10 @@ def _parse_min_scores(value: object) -> RecallMinScores | None:
             return None
         if isinstance(raw, bool) or not isinstance(raw, (int, float)):
             raise _error(f"recall.min_scores.{name} must be a finite non-negative number")
-        parsed = float(raw)
+        try:
+            parsed = float(raw)
+        except (OverflowError, ValueError):
+            raise _error(f"recall.min_scores.{name} must be a finite non-negative number") from None
         if not math.isfinite(parsed) or parsed < 0.0:
             raise _error(f"recall.min_scores.{name} must be a finite non-negative number")
         return parsed
@@ -828,7 +841,10 @@ def _parse_outbox_path(home: Path, value: object) -> Path:
         raise _error("outbox.path must be a non-empty profile-local path")
     configured = Path(value)
     candidate = configured if configured.is_absolute() else home / configured
-    normalized = candidate.resolve(strict=False)
+    try:
+        normalized = candidate.resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        raise _error("outbox.path must resolve inside hermes_home") from None
     try:
         normalized.relative_to(home)
     except ValueError:

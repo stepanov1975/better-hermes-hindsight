@@ -88,6 +88,16 @@ def test_environment_beats_profile_and_profile_beats_defaults(tmp_path: Path) ->
     assert defaults.api_key is None
 
 
+def test_hermes_home_must_be_explicit_valid_and_absolute(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="absolute"):
+        load_config(hermes_home=Path("relative/profile"), environ={})
+
+    malformed_home = str(tmp_path) + "/invalid\0profile"
+    with pytest.raises(ConfigError, match="valid absolute path") as caught:
+        load_config(hermes_home=malformed_home, environ={})
+    assert caught.value.__cause__ is None
+
+
 def test_loader_never_discovers_dotenv_or_cwd_configuration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -172,6 +182,20 @@ def test_duplicate_profile_json_keys_are_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(ConfigError, match="duplicate JSON key"):
         load_config(hermes_home=tmp_path, environ={})
+
+
+def test_unbounded_json_integer_is_a_sanitized_config_error(tmp_path: Path) -> None:
+    path = tmp_path / "better_hindsight" / "config.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        '{"recall":{"timeout_seconds":' + ("9" * 5000) + "}}",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="valid JSON") as caught:
+        load_config(hermes_home=tmp_path, environ={})
+
+    assert caught.value.__cause__ is None
 
 
 @pytest.mark.parametrize(
@@ -407,6 +431,7 @@ def test_bare_empty_observation_scope_is_rejected(tmp_path: Path) -> None:
         {"bank_id": "   "},
         {"integration_mode": "embedded"},
         {"recall": {"timeout_seconds": 0}},
+        {"recall": {"timeout_seconds": 10**1000}},
         {"recall": {"timeout_seconds": 31}},
         {"recall": {"input_max_chars": 0}},
         {"recall": {"context_max_bytes": 0}},
@@ -419,11 +444,14 @@ def test_bare_empty_observation_scope_is_rejected(tmp_path: Path) -> None:
         {"recall": {"tag_mode": "loose"}},
         {"recall": {"min_scores": {"final": -0.01}}},
         {"recall": {"min_scores": {"semantic": float("nan")}}},
+        {"recall": {"min_scores": {"semantic": 10**1000}}},
         {"recall": {"max_source_facts_tokens": 0}},
         {"retain": {"segment_max_bytes": 0}},
         {"retain": {"tags": [f"tag-{index}" for index in range(65)]}},
         {"missions": {"policy": "startup-apply"}},
         {"outbox": {"busy_timeout_seconds": 0}},
+        {"outbox": {"busy_timeout_seconds": 10**1000}},
+        {"outbox": {"path": "invalid\0path.sqlite3"}},
         {"outbox": {"busy_timeout_seconds": 6}},
         {"outbox": {"path": "../outside.sqlite3"}},
     ],
