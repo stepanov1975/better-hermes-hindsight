@@ -337,6 +337,12 @@ def test_complete_typed_configuration_round_trips(tmp_path: Path) -> None:
     assert config.outbox.payload_schema == PAYLOAD_SCHEMA_VERSION
     assert config.outbox.busy_timeout_seconds == 0.5
     assert config.outbox.busy_timeout_ms == 500
+    tiny_timeout = load_config(
+        hermes_home=tmp_path / "tiny-timeout",
+        environ={},
+        injected={"outbox": {"busy_timeout_seconds": 0.0001}},
+    )
+    assert tiny_timeout.outbox.busy_timeout_ms == 1
     assert config.allowed_principals[0].as_tuple() == (
         "sample-gateway",
         "user_id",

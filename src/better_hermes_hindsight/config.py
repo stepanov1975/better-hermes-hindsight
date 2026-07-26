@@ -196,7 +196,7 @@ class OutboxConfig:
     @property
     def busy_timeout_ms(self) -> int:
         """Return the configured SQLite busy timeout in whole milliseconds."""
-        return round(self.busy_timeout_seconds * 1000)
+        return math.ceil(self.busy_timeout_seconds * 1000)
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,7 +282,8 @@ def load_config(
 ) -> BetterHindsightConfig:
     """Load and validate configuration with deterministic, explicit precedence.
 
-    Precedence, highest first, is ``injected`` values, standard ``HINDSIGHT_*`` process
+    Precedence, highest first, is explicit non-secret test ``injected`` values, standard
+    ``HINDSIGHT_*`` process
     variables, ``$HERMES_HOME/better_hindsight/config.json``, then documented defaults.  The
     explicit ``hermes_home`` argument is the only profile root used; no cwd or dotenv discovery
     occurs. ``api_key`` is accepted only through ``HINDSIGHT_API_KEY``.
@@ -543,7 +544,7 @@ def _parse_api_key(value: object) -> str | None:
     if value is None or value == "":
         return None
     if not isinstance(value, str):
-        raise _error("api_key must be a string when injected or supplied by the environment")
+        raise _error("HINDSIGHT_API_KEY must be a string")
     return value
 
 

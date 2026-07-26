@@ -14,7 +14,7 @@ $HERMES_HOME/better_hindsight/config.json
 
 Values resolve in this order, highest precedence first:
 
-1. explicitly injected non-secret values used by tests or management code;
+1. explicitly injected non-secret test values;
 2. the existing process variables `HINDSIGHT_API_URL`, `HINDSIGHT_API_KEY`, and
    `HINDSIGHT_BANK_ID`;
 3. profile `config.json`; and
