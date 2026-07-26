@@ -320,7 +320,7 @@ def test_complete_typed_configuration_round_trips(tmp_path: Path) -> None:
     assert config.recall.types == ("observation",)
     assert config.recall.tags == ("project:sample",)
     assert config.recall.tag_mode == "all_strict"
-    assert config.recall.tags_match == "all_strict"
+    assert not hasattr(config.recall, "tags_match")
     assert config.recall.prefer_observations is True
     assert config.recall.min_scores is not None
     assert config.recall.min_scores.as_dict() == {"semantic": 0.1, "final": 1.2}

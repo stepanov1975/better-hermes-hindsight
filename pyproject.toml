@@ -20,10 +20,10 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
 ]
-dependencies = []
+dependencies = ["hindsight-client==0.8.5"]
 
 [project.optional-dependencies]
-proof = ["hindsight-client==0.8.5"]
+proof = []
 dev = [
   "build>=1.3,<2",
   "mypy>=1.18,<3",

@@ -160,11 +160,6 @@ class RecallConfig:
     include_source_facts: bool | None = None
     max_source_facts_tokens: int | None = None
 
-    @property
-    def tags_match(self) -> RecallTagMode | None:
-        """Return the Hindsight 0.8.5 request name for ``tag_mode``."""
-        return self.tag_mode
-
 
 @dataclass(frozen=True, slots=True)
 class RetainConfig:
