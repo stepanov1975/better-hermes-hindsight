@@ -1,5 +1,10 @@
 # Public release checklist
 
+> **Planning notice:** This checklist is subordinate to tracked
+> [IMPLEMENTATION.md](../IMPLEMENTATION.md) and the canonical active plan it names. Any old
+> core-prerequisite or pre-return admission implication is retired; active-plan Task 0 owns the full
+> checklist rewrite before implementation proceeds.
+
 Do not change repository visibility or publish a package until every applicable item is
 verified against the intended release commit.
 

@@ -4,10 +4,15 @@ These instructions apply to the entire repository.
 
 ## Start here
 
-1. Read `README.md`, `DESIGN.md`, and `CONTRIBUTING.md`.
-2. Check `git status --short --branch` and protect existing work.
-3. Keep changes focused on the current proof gate; avoid speculative abstractions.
-4. Treat generated state and all real memory data as off limits for commits.
+1. Read `IMPLEMENTATION.md` first. It names the only active implementation plan and the
+   retired plans that must never be resumed; verify its recorded plan hash before feature
+   work.
+2. Read `README.md`, `DESIGN.md`, and `CONTRIBUTING.md`, applying the precedence rules in
+   `IMPLEMENTATION.md` while Task 0 finishes the best-effort documentation rewrite.
+3. Check `git status --short --branch` and protect existing work.
+4. Keep changes focused on the next task in the canonical active plan; avoid speculative
+   abstractions.
+5. Treat generated state and all real memory data as off limits for commits.
 
 ## Agentic Python coding discipline (Karpathy-style)
 
@@ -107,6 +112,9 @@ controls or replace them with prose to accommodate generated code.
 
 ## Project invariants
 
+- `IMPLEMENTATION.md` is the tracked cross-session router. Only the canonical plan it names
+  may direct implementation; plans it marks retired are historical evidence, not fallback
+  instructions.
 - Provider identity remains `better_hindsight`; bundled `hindsight` is the rollback path.
 - The initial implementation is local-external-only.
 - Tests use a temporary `HERMES_HOME` and fake service before any disposable live bank.

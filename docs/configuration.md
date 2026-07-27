@@ -1,5 +1,10 @@
 # Configuration
 
+> **Current-code notice:** This page describes the recall-only checkpoint at `4e437fc`, not the
+> final best-effort configuration. Active-plan Task 0 removes redundant mode/policy settings, keeps
+> recall enabled by default, and makes automatic retention opt-in. Read tracked
+> [IMPLEMENTATION.md](../IMPLEMENTATION.md); retired plans are not configuration authority.
+
 Better Hermes Hindsight configuration is explicit, profile-scoped, and local-external-only. Loading
 configuration does not contact Hindsight, create a client, import Hermes, discover a `.env` file, or
 search the current working directory.

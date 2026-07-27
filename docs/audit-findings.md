@@ -1,5 +1,10 @@
 # Sanitized audit findings
 
+> **Evidence versus requirements:** The aggregate measurements below remain evidence. The original
+> core-dependent requirements have been superseded where they conflict with tracked
+> [IMPLEMENTATION.md](../IMPLEMENTATION.md) and its canonical best-effort plan. The two older plans
+> are retired and must not be used to reinterpret this audit.
+
 A read-only audit completed on 2026-07-25 found that Hermes's bundled Hindsight integration was
 functional but exposed only part of the current Hindsight capability surface. The complete
 instance-specific audit remains outside this public-intended repository. The figures below are
@@ -36,24 +41,28 @@ A small relevance trial found `min_scores.final = 0.10` removed every tested neg
 result set while preserving every tested initial positive operational case. This is a promising
 project-specific candidate to evaluate, not a justified universal default.
 
-## Requirements derived from the audit
+## Active disposition of the audit findings
 
 1. Preserve current-query first-turn recall and a bounded fail-open path.
 2. Make recall the only remote or potentially long-running pre-LLM memory operation.
 3. Accept and forward Hindsight's documented `shared` observation scope only after principal and
    bank-isolation proof.
 4. Separate retain, reflect, and observation missions.
-5. Filter synthetic/internal turns through structured lifecycle origin rather than text heuristics;
-   unknown origin remains ineligible.
+5. Accept the non-empty completed-turn callback released Hermes supplies when opt-in retention is
+   enabled; do not infer human/synthetic origin from text. Authoritative structured origin is
+   deferred rather than a product prerequisite.
 6. Support calibrated recall score floors and observation preference.
 7. Present recalled material as potentially stale, untrusted historical evidence.
-8. Preserve provenance and truthful operation status for explicit memory tools.
-9. Commit eligible redacted turns to a local durable outbox before turn completion, then preserve
-   FIFO replay, destination matching, profile-wide sender ownership, and final recovery.
+8. Preserve compact provenance in automatic context and truthful operator status; no model-facing
+   memory tool ships in the first prerelease.
+9. Commit the complete redacted callback atomically when released Hermes executes `sync_turn()`;
+   durability begins at that plugin commit. Preserve destination matching, one profile sender,
+   bounded cross-process polling, and retry recovery without claiming pre-callback losslessness,
+   pre-turn-return admission, exactly-once transport, or global FIFO.
 10. Preserve source documents and repair ingress/retrieval before considering any separately
     authorized legacy-bank migration.
 
-These findings are requirements, not proof that the future provider has implemented them. Each
-item needs a contract test and integration-shaped verification before release. The exact version,
-caller, lifecycle, preservation, and go/no-go baseline is frozen in
-[compatibility.md](compatibility.md).
+These active dispositions are requirements, not proof that the provider has implemented them. Each
+needs a contract test and integration-shaped verification before release. The canonical task order
+and acceptance criteria live in tracked [IMPLEMENTATION.md](../IMPLEMENTATION.md) and the active
+plan it names; [compatibility.md](compatibility.md) remains the version/source evidence baseline.

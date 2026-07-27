@@ -1,5 +1,10 @@
 # Compatibility and preservation contract
 
+> **Implementation precedence notice:** Version/source evidence in this document remains useful,
+> but its core-prerequisite, structured-origin, inline-admission, and rollout conclusions predate the
+> best-effort rescope. Until active-plan Task 0 rewrites them, they must not direct implementation.
+> Read tracked [IMPLEMENTATION.md](../IMPLEMENTATION.md) and only the canonical active plan it names.
+
 This document freezes the public-safe compatibility baseline inspected on 2026-07-26 UTC.
 It records source revisions and aggregate evidence only: no endpoint, credential, bank identity,
 principal identifier, transcript, memory text, database, log, or local checkout path belongs here.

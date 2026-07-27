@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -24,26 +25,36 @@ def _assert_terms(text: str, *terms: str) -> None:
     assert not missing, f"missing repository contract terms: {missing}"
 
 
-def test_provider_scope_and_lifecycle_are_explicit() -> None:
-    public_contract = _read("README.md") + _read("DESIGN.md")
+def test_best_effort_provider_scope_and_lifecycle_are_explicit() -> None:
+    public_contract = (
+        _read("IMPLEMENTATION.md")
+        + _read("README.md")
+        + _read("DESIGN.md")
+        + _read("docs/audit-findings.md")
+    )
 
     _assert_terms(
         public_contract,
+        "canonical plan",
         "better_hindsight",
         "external/self-hosted only",
         "hindsight-client==0.8.5",
         "Hindsight server 0.8.5",
         "current-query recall",
         "only remote or potentially long-running memory work before the first model call",
-        "inline local SQLite admission",
-        "before Hermes reports the turn complete",
+        "opt-in automatic retention",
+        "sync_turn()",
+        "durability begins at that plugin commit",
+        "no pre-callback or pre-turn-return zero-loss claim",
         "profile-wide POSIX advisory lock",
+        "bounded SQLite polling",
         "destination fingerprint",
         'update_mode="replace"',
         "stable document ID",
         "source documents are the preserved record",
-        "no production auto-install",
-        "no production bank mutation",
+        "no Hermes-core prerequisite",
+        "no model-facing memory tools in the first prerelease",
+        "isolated Hindsight development/canary instances",
     )
 
 
@@ -98,34 +109,22 @@ def test_compatibility_baseline_and_public_apis_are_frozen() -> None:
         assert commit in compatibility
 
 
-def test_caller_inventory_fails_closed_for_non_user_origins() -> None:
-    compatibility = _read("docs/compatibility.md")
+def test_callback_boundary_and_retired_plan_precedence_are_explicit() -> None:
+    router = _read("IMPLEMENTATION.md")
+    public_contract = router + _read("README.md") + _read("docs/audit-findings.md")
 
     _assert_terms(
-        compatibility,
-        "run_conversation() caller inventory",
-        "direct-user",
-        "synthetic/automation",
-        "unknown",
-        "ineligible",
-        "cli.py:12086",
-        "gateway/run.py:21026",
-        "gateway/platforms/api_server.py:4680",
-        "gateway/platforms/api_server.py:4979",
-        "tui_gateway/server.py:10090",
-        "acp_adapter/server.py:1513",
-        "cli.py:15522",
-        "cli.py:15979",
-        "gateway/run.py:14821",
-        "tui_gateway/server.py:11117",
-        "tui_gateway/server.py:11229",
-        "hermes_cli/oneshot.py:442",
-        "hermes_cli/cli_commands_mixin.py:1698",
-        "batch_runner.py:349",
-        "tools/delegate_tool.py:2005",
-        "agent/curator.py:1955",
-        "agent/background_review.py:851",
+        public_contract,
+        "completed-turn callbacks Hermes actually supplies",
+        "do not infer human/synthetic origin from text",
+        "callbacks lost before Hermes executes the provider hook are outside that guarantee",
+        "retired plans",
+        "2026-07-25_194157-better-hermes-hindsight-implementation.md",
+        "2026-07-27_055353-plugin-only-rescope.md",
+        "must never drive implementation",
     )
+    assert "separate generic Hermes core prerequisite" not in _normalized(_read("README.md"))
+    assert "before hermes reports the turn complete" not in _normalized(_read("README.md"))
 
 
 def test_sanitized_audit_evidence_is_recorded_without_universal_claims() -> None:
@@ -149,9 +148,10 @@ def test_sanitized_audit_evidence_is_recorded_without_universal_claims() -> None
     _assert_terms(public_contract, "narrower", "not universally better")
 
 
-def test_preservation_go_no_go_and_implementation_order_are_frozen() -> None:
+def test_preservation_evidence_and_active_implementation_order_are_frozen() -> None:
     compatibility = _read("docs/compatibility.md")
     design = _read("DESIGN.md")
+    router = _read("IMPLEMENTATION.md")
 
     _assert_terms(
         compatibility,
@@ -169,16 +169,58 @@ def test_preservation_go_no_go_and_implementation_order_are_frozen() -> None:
         "go — continue",
     )
     _assert_terms(
-        design,
-        "recall-first",
-        "separate generic core prerequisite",
-        "durable retain",
+        router,
+        "Plan state",
+        "Active. The two Important findings",
+        "Next action",
+        "active-plan Task 0",
+        "No Hermes-core prerequisite",
+        "If the canonical file is missing or its hash differs, stop",
     )
+    _assert_terms(
+        design,
+        "Implementation precedence notice",
+        "not implementation authority",
+        "The two older plans are retired",
+    )
+
+
+def test_local_plan_files_match_the_tracked_router_when_present() -> None:
+    router = _read("IMPLEMENTATION.md")
+    active_match = re.search(r"Canonical plan:\*\* `([^`]+)`", router)
+    hash_match = re.search(r"Canonical SHA-256:\*\* `([0-9a-f]{64})`", router)
+    assert active_match is not None
+    assert hash_match is not None
+
+    active_path = ROOT / active_match.group(1)
+    if active_path.is_file():
+        active_bytes = active_path.read_bytes()
+        assert hashlib.sha256(active_bytes).hexdigest() == hash_match.group(1)
+        assert "ACTIVE — CANONICAL IMPLEMENTATION PLAN" in active_bytes.decode("utf-8")[:1000]
+
+    for retired_name in (
+        "2026-07-25_194157-better-hermes-hindsight-implementation.md",
+        "2026-07-27_055353-plugin-only-rescope.md",
+    ):
+        retired_path = ROOT / ".hermes" / "plans" / retired_name
+        if retired_path.is_file():
+            retired_header = "\n".join(retired_path.read_text(encoding="utf-8").splitlines()[:10])
+            _assert_terms(retired_header, "RETIRED — DO NOT IMPLEMENT", "HISTORICAL RECORD ONLY")
 
 
 def test_changed_markdown_links_resolve_inside_repository() -> None:
     readme = _read("README.md")
-    _assert_terms(readme, "docs/compatibility.md", "docs/audit-findings.md")
+    _assert_terms(
+        readme,
+        "IMPLEMENTATION.md",
+        "docs/compatibility.md",
+        "docs/audit-findings.md",
+    )
 
-    for relative_target in ("docs/compatibility.md", "docs/audit-findings.md", "DESIGN.md"):
+    for relative_target in (
+        "IMPLEMENTATION.md",
+        "docs/compatibility.md",
+        "docs/audit-findings.md",
+        "DESIGN.md",
+    ):
         assert (ROOT / relative_target).is_file(), f"broken repository link: {relative_target}"

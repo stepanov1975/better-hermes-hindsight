@@ -1,5 +1,11 @@
 # Design and proof contract
 
+> **Implementation precedence notice:** This document contains the pre-rescope design baseline and
+> has not yet received the complete active-plan Task 0 rewrite. It is not implementation authority
+> for a Hermes-core prerequisite, structured-origin gate, inline pre-return admission, or any other
+> conflicting requirement. Read tracked [IMPLEMENTATION.md](IMPLEMENTATION.md) and only the
+> canonical active plan it names. The two older plans are retired.
+
 ## Status
 
 Pre-alpha repository scaffold, created 2026-07-25. The repository is private during the proof and
