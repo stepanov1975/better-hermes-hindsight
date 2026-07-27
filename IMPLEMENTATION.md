@@ -4,9 +4,9 @@
 
 - **Canonical plan:** `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
 - **Canonical SHA-256:** `e51752970fc91f5d604e5c5bb74e6ca938172d275d0d70ea559e704fc31e34c7`
-- **Plan state:** Active. The two Important findings from the first independent review have been incorporated; a bounded amendment-only recheck is pending.
+- **Plan state:** Active and independently approved. The amendment-only recheck approved the exact canonical hash after confirming both prior Important findings were resolved; no Blocking or Important plan finding remains open.
 - **Code checkpoint:** `spike/local-external-provider` at `4e437fc` is the completed recall-only baseline. No task from the active best-effort plan has been implemented yet.
-- **Next action:** Verify the amended plan, then begin active-plan Task 0. Do not resume work from a retired plan.
+- **Next action:** Begin active-plan Task 0. Do not resume work from a retired plan.
 
 The canonical plan is intentionally local under `.hermes/plans/`, which is ignored because Hermes runtime state and private artifacts do not belong in Git. This tracked file is the durable cross-session router. If the canonical file is missing or its hash differs, stop and resolve the plan state instead of selecting another plan.
 

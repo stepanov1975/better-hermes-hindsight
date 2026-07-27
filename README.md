@@ -66,9 +66,9 @@ their complete best-effort contract rewrite.
 ## Repository state
 
 The active implementation branch is `spike/local-external-provider`; commit `4e437fc` is the
-completed recall-only baseline. The next implementation slice is Task 0 from the canonical plan,
-after its amendment-only review is closed. The separate Hermes-core worktree is frozen research and
-must not be imported, installed, committed, or used as a prerequisite.
+completed recall-only baseline. The amended canonical plan is independently approved; the next
+implementation slice is Task 0. The separate Hermes-core worktree is frozen research and must not be
+imported, installed, committed, or used as a prerequisite.
 
 ## Development
 

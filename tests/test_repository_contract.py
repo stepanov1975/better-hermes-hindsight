@@ -171,9 +171,10 @@ def test_preservation_evidence_and_active_implementation_order_are_frozen() -> N
     _assert_terms(
         router,
         "Plan state",
-        "Active. The two Important findings",
+        "Active and independently approved",
+        "no Blocking or Important plan finding remains open",
         "Next action",
-        "active-plan Task 0",
+        "Begin active-plan Task 0",
         "No Hermes-core prerequisite",
         "If the canonical file is missing or its hash differs, stop",
     )
