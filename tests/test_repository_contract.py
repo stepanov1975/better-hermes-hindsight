@@ -156,7 +156,7 @@ def test_callback_boundary_and_retired_plan_precedence_are_explicit() -> None:
         "2026-07-25_194157-better-hermes-hindsight-implementation.md",
         "2026-07-27_055353-plugin-only-rescope.md",
         "must never drive implementation",
-        "active-plan Task 1",
+        "active-plan Task 2",
     )
 
 

@@ -3,10 +3,10 @@
 ## Current status
 
 - **Canonical plan:** `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
-- **Canonical SHA-256:** `e51752970fc91f5d604e5c5bb74e6ca938172d275d0d70ea559e704fc31e34c7`
-- **Plan state:** Active and independently approved. The amendment-only recheck approved the exact canonical hash after confirming both prior Important findings were resolved; no Blocking or Important plan finding remains open.
-- **Code checkpoint:** `5488269` is the completed Task 0 best-effort contract and typed-configuration checkpoint. The current `spike/local-external-provider` branch adds active-plan Task 1's byte-stable trust policy, shared high-confidence redaction boundary, and released-Hermes current-query recall proof; automatic retention remains unimplemented until later tasks.
-- **Next action:** Begin active-plan Task 2 after the Task 1 candidate passes its full verification and independent checkpoint reviews. Do not resume work from a retired plan.
+- **Canonical SHA-256:** `1b34ff824c02f1e1757f5d189d51fe6f130205e55d68586a4e2434c922b95d12`
+- **Plan state:** Active and independently approved. The amendment-only reviewer approved this exact hash with no Critical, Important, or Minor findings after verifying the frozen Task 2 accounting, identity, schema, and integration-test contracts.
+- **Code checkpoint:** `17f0963` is the completed Task 1 trust/redaction/current-query recall checkpoint. Automatic retention and local admission remain unimplemented.
+- **Next action:** Begin active-plan Task 2 from checkpoint `17f0963`. Do not resume work from a retired plan.
 
 The canonical plan is intentionally local under `.hermes/plans/`, which is ignored because Hermes runtime state and private artifacts do not belong in Git. This tracked file is the durable cross-session router. If the canonical file is missing or its hash differs, stop and resolve the plan state instead of selecting another plan.
 
