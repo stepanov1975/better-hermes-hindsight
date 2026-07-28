@@ -1,9 +1,9 @@
 # Sanitized audit findings
 
-> **Evidence versus requirements:** The aggregate measurements below remain evidence. The original
-> core-dependent requirements have been superseded where they conflict with tracked
-> [IMPLEMENTATION.md](../IMPLEMENTATION.md) and its canonical best-effort plan. The two older plans
-> are retired and must not be used to reinterpret this audit.
+This document preserves public-safe aggregate evidence from the read-only audit. It does not make a
+Hermes-core patch or ideal host lifecycle a release prerequisite. The active product contract is the
+best-effort plugin described by tracked [IMPLEMENTATION.md](../IMPLEMENTATION.md) and its canonical
+plan; the two older plans are retired historical records.
 
 A read-only audit completed on 2026-07-25 found that Hermes's bundled Hindsight integration was
 functional but exposed only part of the current Hindsight capability surface. The complete
@@ -41,28 +41,47 @@ A small relevance trial found `min_scores.final = 0.10` removed every tested neg
 result set while preserving every tested initial positive operational case. This is a promising
 project-specific candidate to evaluate, not a justified universal default.
 
-## Active disposition of the audit findings
+## Active product disposition
 
-1. Preserve current-query first-turn recall and a bounded fail-open path.
-2. Make recall the only remote or potentially long-running pre-LLM memory operation.
-3. Accept and forward Hindsight's documented `shared` observation scope only after principal and
-   bank-isolation proof.
-4. Separate retain, reflect, and observation missions.
-5. Accept the non-empty completed-turn callback released Hermes supplies when opt-in retention is
-   enabled; do not infer human/synthetic origin from text. Authoritative structured origin is
-   deferred rather than a product prerequisite.
-6. Support calibrated recall score floors and observation preference.
-7. Present recalled material as potentially stale, untrusted historical evidence.
-8. Preserve compact provenance in automatic context and truthful operator status; no model-facing
-   memory tool ships in the first prerelease.
-9. Commit the complete redacted callback atomically when released Hermes executes `sync_turn()`;
-   durability begins at that plugin commit. Preserve destination matching, one profile sender,
-   bounded cross-process polling, and retry recovery without claiming pre-callback losslessness,
-   pre-turn-return admission, exactly-once transport, or global FIFO.
-10. Preserve source documents and repair ingress/retrieval before considering any separately
+1. Preserve current-query first-turn recall with a bounded fail-open deadline. Recall is enabled by
+   default and remains the only remote or potentially long-running pre-model memory operation.
+2. Treat recalled material as potentially stale, untrusted historical evidence. Support bounded
+   score-floor and observation-preference controls without turning the project-specific trial into a
+   universal default.
+3. Keep automatic retention disabled by default. When explicitly enabled, accept the non-empty
+   completed-turn callbacks released Hermes actually supplies through released `sync_turn()` and do
+   not infer human/synthetic origin from text.
+4. Local durability starts only after provider admission commits the complete redacted callback to
+   the profile SQLite outbox. There is no direct-user provenance claim and no pre-return or no-loss
+   guarantee.
+5. Preserve destination matching, one profile sender, bounded cross-process polling, stable
+   replace-mode replay, and retry recovery. Do not claim exactly-once transport or global FIFO.
+6. Keep retain and observation mission text distinct. Checking or applying it is explicit future
+   operator behavior, not initialization policy.
+7. Accept Hindsight's documented `shared` observation scope only after exact principal and exclusive
+   bank proof. Hindsight's shared write-capable key is not a server-enforced provider policy boundary.
+8. Ship no model-facing memory tools in the first prerelease.
+9. Require an isolated Hindsight instance and Hermes profile for development writes. Use a separate
+   canary instance and bank for production evaluation, preserving the old deployment and bank for
+   rollback.
+10. Preserve source documents and improve ingress/retrieval before considering any separately
     authorized legacy-bank migration.
 
-These active dispositions are requirements, not proof that the provider has implemented them. Each
-needs a contract test and integration-shaped verification before release. The canonical task order
-and acceptance criteria live in tracked [IMPLEMENTATION.md](../IMPLEMENTATION.md) and the active
-plan it names; [compatibility.md](compatibility.md) remains the version/source evidence baseline.
+## Superseded ideal requirements
+
+Two former requirements are retained here only as design history:
+
+- **Authoritative structured origin.** A typed direct-human versus synthetic signal across every
+  Hermes ingress would be useful upstream, but released callbacks do not provide that authority and
+  Better Hindsight does not guess it.
+- **Inline admission before turn return.** A host-owned pre-return durable callback could close more
+  loss windows, but the released provider lifecycle does not expose it. Better Hindsight starts its
+  guarantee at its own successful admission after released Hermes executes the callback.
+
+These are superseded ideal requirements, not active release gates. The plugin has no Hermes-core
+prerequisite, `codex_app_server` is unsupported on the pinned release, and the product makes no
+pre-callback losslessness claim.
+
+The active dispositions are requirements, not evidence that every planned retention component is
+already implemented. Each needs focused contract and integration-shaped proof before release.
+[Compatibility](compatibility.md) remains the version/source evidence baseline.

@@ -3,72 +3,90 @@
 [![CI](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/ci.yml/badge.svg)](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/ci.yml)
 [![Security scans](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/security.yml/badge.svg)](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/security.yml)
 
-An unofficial, external/self-hosted-only Hindsight memory provider project for Hermes Agent. The
-provider ID is `better_hindsight`, deliberately distinct from bundled `hindsight` so rollback is a
-configuration change.
+Better Hermes Hindsight is an unofficial Hermes memory provider for external/self-hosted Hindsight.
+The provider ID is `better_hindsight`, deliberately distinct from bundled `hindsight` so rollback is
+a configuration change rather than a data migration.
 
-> **Status: pre-alpha.** A recall-only development checkpoint exists, but automatic retention,
-> retry delivery, managed installation, and isolated live-write proof are not implemented yet. Do
-> not install or select this project in a production Hermes profile. Read
+> **Status: pre-alpha.** A recall-only development checkpoint exists. Automatic retention, the
+> durable outbox sender, managed installation, and isolated live-write proof are planned but are not
+> implemented yet. Do not install or select this project in a production Hermes profile. Read
 > [IMPLEMENTATION.md](IMPLEMENTATION.md) before changing code; it identifies the only active plan.
 
-## Goal
+## What it is for
 
-Build a smaller, testable plugin for released Hermes that recalls against the current user query and,
-when explicitly enabled, best-effort retains the completed-turn callbacks Hermes actually supplies.
-Local retry durability begins only after Better Hindsight's own SQLite admission commits; callbacks
-lost before Hermes executes the provider hook are outside that guarantee.
+The primary goal is useful memory on unmodified released Hermes:
 
-“Better” is narrower: it means better for the documented external/self-hosted use case and proof
+- bounded recall against the current user query;
+- opt-in best-effort retention of the completed-turn callbacks released Hermes actually supplies;
+- short local admission followed by retryable background delivery to self-hosted Hindsight; and
+- easy rollback to the bundled provider while old data stays untouched.
+
+Recall is enabled by default. Automatic retention is disabled by default until an operator proves
+writes against an isolated development deployment and explicitly enables it for a canary.
+
+“Better” is narrower: it means better for this documented external/self-hosted use case and its proof
 criteria. It is not universally better than official Hermes or Hindsight.
+
+## Honest best-effort boundary
+
+The product has **no Hermes-core prerequisite**. It uses the public lifecycle in released Hermes
+`v2026.7.20` / package 0.19.0. Automatic retention uses released `sync_turn()` best-effort semantics:
+Hermes schedules the callback on its memory worker, and Better Hindsight does short local work only
+after that callback starts.
+
+Local durability starts only after provider admission commits the complete redacted turn to Better
+Hindsight's SQLite outbox. Callbacks lost before Hermes executes the provider hook are outside that
+guarantee. Local admission can also fail because of shutdown, contention, invalid input, queue
+saturation, or local I/O. There is no direct-user provenance claim and no pre-return or no-loss
+guarantee. Retried remote delivery uses a stable document ID and `update_mode="replace"`; it does
+not claim exactly-once transport.
+
+`codex_app_server` is unsupported on the pinned release because that runtime bypasses normal provider
+memory behavior. No model-facing memory tools in the first prerelease are registered; recall is
+automatic context and mission changes are future explicit operator commands.
 
 ## Initial scope
 
 - External/self-hosted only; no cloud or embedded-daemon management.
 - Exact initial target: `hindsight-client==0.8.5` with Hindsight server 0.8.5.
 - Current-query recall is the only remote or potentially long-running memory work before the first
-  model call, with a bounded fail-open deadline.
-- Automatic retention is opt-in and accepts non-empty user/final-assistant text from released
-  Hermes `sync_turn()` without claiming authoritative human-versus-synthetic origin.
-- `sync_turn()` performs only bounded local redaction, segmentation, and atomic SQLite admission;
-  remote retention stays off the response path. No pre-callback or pre-turn-return durability is
-  claimed.
-- One profile-wide POSIX advisory lock elects the remote sender across processes; bounded SQLite
-  polling lets the owner observe rows admitted by another process.
-- Pending rows are destination fingerprint matched and replay the stable document ID with
-  `update_mode="replace"` until synchronous confirmation.
-- Source documents are the preserved record; facts, observations, embeddings, and summaries are
+  model call. It has a bounded fail-open deadline.
+- Retention accepts non-empty user/final-assistant text from the released callback as-is. It does not
+  infer authoritative human-versus-synthetic origin from text, platform names, or transcript shape.
+- The callback path performs bounded redaction, segmentation, and one atomic SQLite admission. It
+  performs no Hindsight request and does not wait for remote drain.
+- One profile-wide POSIX advisory lock elects the sender. Bounded SQLite polling lets that owner see
+  rows admitted by another process.
+- Pending rows are matched to a credential-free destination fingerprint and replay the same stable
+  document ID with replace mode until synchronous response validation succeeds.
+- Logical pending-row and payload-byte limits bound admitted work; they are not an exact SQLite/WAL
+  file-size guarantee.
+- Source documents are the preserved record. Facts, observations, embeddings, and summaries are
   derived indexes.
-- Recall controls and separate retain/observation mission check/apply operations use audited public
-  Hindsight 0.8.5 surfaces; automatic reflection is outside the first prerelease.
-- A distinct `better_hindsight` identity for safe rollback to bundled `hindsight` without bank
-  migration or deletion.
+- Retain and observation mission text remain distinct. Check/apply is explicit future operator
+  behavior, never automatic initialization policy.
 
-There is no production auto-install, provider selection, service restart, or production-bank
-mutation during implementation. Fake tests run first; live writes require a separate Hindsight
-development instance, datastore, key, generated bank, and Hermes profile. Cloud setup,
-`codex_app_server` memory support, production-bank migration, model-facing memory tools, and
-automatic reflection are outside the first prerelease.
+## Isolation and rollback
 
-## Implementation boundary
+Development writes require an isolated Hindsight instance and Hermes profile, with separate storage,
+API key, and disposable bank. Deterministic fake-service tests run first and no production credential
+belongs in the test process.
 
-The product has **no Hermes-core prerequisite**. It uses released public `MemoryProvider` hooks and
-documents the host limitations it cannot close instead of patching Hermes. The tracked
-[implementation router](IMPLEMENTATION.md) identifies the canonical plan, its hash, current
-checkpoint, and two explicitly retired plans. Never infer an implementation path from an older plan
-or from stale proof wording in a detailed document.
+Production rollout uses a separate canary instance and bank and preserves the old deployment. The
+existing Hindsight instance and bank remain running, unmodified, and available for rollback; this
+prerelease performs no initial migration, deduplication, reconstruction, or deletion. Canary
+activation, publication, and any production mutation remain separately authorized.
 
-The exact version/source baseline and public API observations remain in
-[docs/compatibility.md](docs/compatibility.md). Sanitized operational aggregates and their limited
-interpretation remain in [docs/audit-findings.md](docs/audit-findings.md). Active-plan Task 0 owns
-their complete best-effort contract rewrite.
+## Repository and implementation authority
 
-## Repository state
+The tracked [implementation router](IMPLEMENTATION.md) identifies the canonical local plan, its hash,
+the completed recall-only checkpoint, and two explicitly retired plans. Never infer implementation
+requirements from a retired plan or from stale proof wording. The separate Hermes-core worktree is
+frozen research and must not be imported, installed, committed, or treated as a prerequisite.
 
-The active implementation branch is `spike/local-external-provider`; commit `4e437fc` is the
-completed recall-only baseline. The amended canonical plan is independently approved; the next
-implementation slice is Task 0. The separate Hermes-core worktree is frozen research and must not be
-imported, installed, committed, or used as a prerequisite.
+The exact version/source observations are in [docs/compatibility.md](docs/compatibility.md). Sanitized
+operational aggregates and their limited interpretation are in
+[docs/audit-findings.md](docs/audit-findings.md).
 
 ## Development
 
@@ -76,11 +94,11 @@ Requires Python 3.11-3.13 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync --extra dev --extra proof
-uv run --extra dev --extra proof python -m pytest
-uv run --extra dev --extra proof python -m ruff check .
-uv run --extra dev --extra proof python -m ruff format --check .
-uv run --extra dev --extra proof python -m mypy
-uv run --extra dev --extra proof python -m build
+uv run --frozen --extra dev --extra proof python -m pytest
+uv run --frozen --extra dev --extra proof python -m ruff check .
+uv run --frozen --extra dev --extra proof python -m ruff format --check .
+uv run --frozen --extra dev --extra proof python -m mypy
+uv run --frozen --extra dev --extra proof python -m build
 ```
 
 Read [IMPLEMENTATION.md](IMPLEMENTATION.md), then [CONTRIBUTING.md](CONTRIBUTING.md) and
@@ -89,10 +107,8 @@ Read [IMPLEMENTATION.md](IMPLEMENTATION.md), then [CONTRIBUTING.md](CONTRIBUTING
 ## Safety
 
 Never commit endpoints, credentials, private bank names, principal identifiers, raw memories,
-transcripts, databases, logs, or local runtime state. Proofs must use a temporary `HERMES_HOME`, a
-fake server first, and a separately credentialed Hindsight development instance only after
-deterministic tests pass. The live guard must fail closed on development endpoint/fingerprint or
-pre-upsert bank-absence mismatch. Production canary activation remains separately authorized.
+transcripts, databases, logs, or local runtime state. Use a temporary `HERMES_HOME`, synthetic
+fixtures, and a fake service before any explicitly enabled isolated live proof.
 
 ## Licensing and attribution
 

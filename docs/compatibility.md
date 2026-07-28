@@ -1,37 +1,33 @@
 # Compatibility and preservation contract
 
-> **Implementation precedence notice:** Version/source evidence in this document remains useful,
-> but its core-prerequisite, structured-origin, inline-admission, and rollout conclusions predate the
-> best-effort rescope. Until active-plan Task 0 rewrites them, they must not direct implementation.
-> Read tracked [IMPLEMENTATION.md](../IMPLEMENTATION.md) and only the canonical active plan it names.
-
-This document freezes the public-safe compatibility baseline inspected on 2026-07-26 UTC.
-It records source revisions and aggregate evidence only: no endpoint, credential, bank identity,
-principal identifier, transcript, memory text, database, log, or local checkout path belongs here.
+This document freezes the public-safe version and source observations inspected on 2026-07-26 UTC,
+then states the released callback boundary used by the best-effort plugin. It records no endpoint,
+credential, bank identity, principal identifier, transcript, memory text, database, log, or local
+checkout path.
 
 ## Product boundary
 
-Better Hermes Hindsight registers only the distinct provider ID `better_hindsight`; bundled
-`hindsight` remains the configuration-only rollback target. The first prerelease is for
-external/self-hosted Hindsight only. It does not implement cloud setup or supervise an embedded
-server.
+Better Hermes Hindsight registers only `better_hindsight`; bundled `hindsight` remains the rollback
+target. The first prerelease is external/self-hosted only. It does not implement cloud setup,
+supervise an embedded server, or require a Hermes core patch.
 
-“Better” is deliberately narrower: it means better for this documented external/self-hosted use
-case and its proof criteria. It is not universally better than official Hermes or Hindsight.
-Only one external Hermes memory provider may be active at a time.
+The supported path is unmodified released Hermes's normal conversation loop. Recall is enabled by
+default and automatic retention is disabled by default. `codex_app_server` is unsupported on the
+pinned release because it bypasses normal provider memory behavior. No model-facing memory tools in
+the first prerelease are registered.
 
 ## Frozen version baseline
 
 | Surface | Frozen evidence | Project contract |
 | --- | --- | --- |
 | Released Hermes | `v2026.7.20`, package 0.19.0, tag commit `3ef6bbd201263d354fd83ec55b3c306ded2eb72a`; published 2026-07-20 | Release compatibility baseline |
-| Effective audited checkout | Clean `main` at `41e0b6cf60942b7a4962aa7c7e2f1173527dfe2f`; installed package 0.19.0 and installed hindsight-client 0.6.1 | Exact behavior baseline; location intentionally omitted |
-| Cached upstream ref in that checkout | `origin/main` at `4dae897265f09ed5b26f5e02b0f0fcb1325e0b6d`; the checkout was ahead by 9 and behind by 1,416 | The counts are against this cached ref, not the later remote observation |
-| Current upstream observation | `NousResearch/hermes-agent` `main` at `eb52760564dbba2e5971fa54bd67384e281cd3b8`, observed 2026-07-26 UTC | Recheck at Tasks 11 and release time |
+| Effective audited checkout | Clean `main` at `41e0b6cf60942b7a4962aa7c7e2f1173527dfe2f`; installed package 0.19.0 and installed hindsight-client 0.6.1 | Historical behavior comparison; location intentionally omitted |
+| Cached upstream ref in that checkout | `origin/main` at `4dae897265f09ed5b26f5e02b0f0fcb1325e0b6d`; the checkout was ahead by 9 and behind by 1,416 | Counts describe this cached observation only |
+| Current upstream observation at audit time | `NousResearch/hermes-agent` `main` at `eb52760564dbba2e5971fa54bd67384e281cd3b8`, observed 2026-07-26 UTC | Historical audit evidence, not a runtime prerequisite |
 | Hindsight | Release `v0.8.5`, commit `705757f362552918dfb0242906cb8466de320378` | Hindsight server 0.8.5 and `hindsight-client==0.8.5` are the exact initial target |
 | Python | 3.11, 3.12, and 3.13 | All three remain release gates |
 
-The nine carried checkout commits, newest first, are part of the exact local comparison:
+The nine carried checkout commits, newest first, are retained as historical comparison evidence:
 
 1. `41e0b6cf60942b7a4962aa7c7e2f1173527dfe2f` — `fix(gateway): retry restart completion delivery`
 2. `821b11e631e5f663f2e9f915f77a353d1c528cbc` — `test(hindsight): complete synchronous recall coverage`
@@ -43,142 +39,100 @@ The nine carried checkout commits, newest first, are part of the exact local com
 8. `fcb1f9da2bb5f38f6270137fce13d051449cbcc5` — `fix: move shutdown_memory_provider before _session_messages clear`
 9. `2b1d2bafc3e4f13ed8b961b6c81effccd7c066bd` — `fix(agent): call shutdown_memory_provider() in AIAgent.close() (#46082)`
 
-The carried synchronous-recall work proves a useful comparison point, but it does not add the
-profile SQLite admission/outbox and destination-safe replay required by this project.
+The carried synchronous-recall work is useful comparison evidence, but it is not required by the
+product and does not provide Better Hindsight's profile outbox or destination-matched replay.
 
-## Hermes loader and lifecycle contract
+## Hermes loader and lifecycle boundary
 
 The released specialized loader is `plugins/memory/__init__.py`. The canonical plugin bundle is
 `plugins/memory/<name>/{__init__.py,plugin.yaml,README.md}`; the released user-plugin scan resolves
-`$HERMES_HOME/plugins/<name>/`. Better's later managed installer must place only a marked,
-owned shim at the path actually used by the tested Hermes revision. It must never shadow bundled
-`hindsight`.
+`$HERMES_HOME/plugins/<name>/`. A later managed installer will place only a marker-owned shim at the
+tested user path and will never shadow bundled `hindsight`.
 
 The plugin imports `MemoryProvider` from `agent/memory_provider.py`; its `register(ctx)` entry point
-calls `ctx.register_memory_provider(...)`. The public lifecycle used by Better is:
+calls `ctx.register_memory_provider(...)`. The released lifecycle used by Better is:
 
-- `is_available()` during discovery; it must be network-free and must not install anything;
-- `initialize()` once for the active session/profile contract;
+- `is_available()` during discovery; it stays local and network-free;
+- `initialize()` for the active profile/session configuration;
 - `prefetch()` before each model API call;
-- `queue_prefetch()` after a completed turn under legacy scheduling;
-- `sync_turn()` after a completed turn;
-- bounded session hooks and `shutdown()` for lifecycle cleanup.
+- `queue_prefetch()` after a completed turn under legacy scheduling, though Better keeps it inert;
+- `sync_turn()` after a completed turn; and
+- bounded session hooks plus `shutdown()` for cleanup.
 
-Released documentation says **`sync_turn()` MUST be non-blocking**. Better therefore cannot simply
-make legacy `sync_turn()` perform an inline SQLite commit. A separate, backward-compatible generic
-Hermes core prerequisite must add an opt-in inline-local durable-admission capability while leaving
-legacy providers on their existing non-blocking scheduling. That prerequisite also owns structured
-turn origin and stale/untrusted historical-memory framing.
+At the pinned release, `MemoryManager.sync_all()` labels the turn completed, strips skill scaffolding,
+and submits each provider `sync_turn()` to a serialized background executor. `MemoryProvider`'s
+`sync_turn()` contract is documented as non-blocking. `MemoryManager.shutdown_all()` gives that
+executor a bounded drain, but it can cancel queued work or leave an active callback detached after
+the deadline. Hermes may fail before Better Hindsight receives the callback, and the process can
+exit before queued callback execution begins.
+
+Automatic retention therefore uses released `sync_turn()` best-effort semantics. Once callback
+execution begins, Better performs only bounded local construction and one SQLite admission. Local
+durability starts only after provider admission commits. There is no direct-user provenance claim and
+no pre-return or no-loss guarantee; no text heuristic can close the missing host signal.
+
+The pinned `codex_app_server` path sends the plain user message through a separate bridge and does not
+run normal provider memory context/retention behavior. It is an explicit unsupported runtime, not a
+reason to patch or emulate Hermes core.
 
 ## Public Hindsight 0.8.5 API boundary
 
-The adapter may use only public `hindsight-client==0.8.5` APIs needed by the contract:
+The adapter uses only the audited public `hindsight-client==0.8.5` APIs needed by this product:
 
-- `arecall()` for bounded current-query recall and documented relevance controls;
-- `aretain_batch()` for one immutable admitted segment, with its persisted document ID,
-  `update_mode="replace"`, and `retain_async=False`;
+- `arecall()` for bounded current-query recall and optional relevance controls;
+- `aretain_batch()` for one persisted stable document ID with `update_mode="replace"` and
+  `retain_async=False`;
 - `banks.get_bank_profile()`, `banks.get_bank_config()`, and
-  `banks.update_bank_config()` with `BankConfigUpdate` for post-first-turn diagnostics and an
-  explicit operator-only apply path;
-- `acreate_bank()` and `banks.delete_bank()` only in guarded disposable setup/cleanup;
+  `banks.update_bank_config()` with `BankConfigUpdate` for explicit diagnostics and future
+  confirmation-gated mission apply;
+- `acreate_bank()` and `banks.delete_bank()` only in guarded disposable setup/cleanup; and
 - `aclose()` on the runtime's owning event loop.
 
-Normal runtime does not create, reset, delete, migrate, deduplicate, or rewrite a bank. It does not
-inspect private client attributes or dynamically install/upgrade the SDK.
+The exact synchronous retain success predicate is `success is True`, the returned `bank_id` equals
+the configured bank, `items_count == 1`, and `var_async is False`. A malformed response, transport
+failure, or commit-then-timeout remains retryable with the same stable document ID. This is
+replace-safe replay, not exactly-once transport.
 
-## `run_conversation()` caller inventory
+Hindsight OSS 0.8.5 uses a shared write-capable API key rather than operation-scoped read/write
+credentials. Environment-only key loading and missing model tools are accident reduction, not a
+server-enforced capability boundary.
 
-This is the run_conversation() caller inventory used by the origin prerequisite.
+## Compatibility matrix
 
-Line references below are path-relative to the effective checkout at
-`41e0b6cf60942b7a4962aa7c7e2f1173527dfe2f`. A source path is evidence, not authorization: the
-separate core prerequisite must carry an explicit typed origin from the real producer through
-queues and result owners. Better automatic admission accepts only an eligible direct-user origin,
-an authorized `primary` handle, and an authoritatively completed visible turn. Synthetic/automation
-and `unknown` origin are ineligible.
+| Capability | First-prerelease status |
+| --- | --- |
+| Unmodified released Hermes normal conversation loop | Supported and tested |
+| Bounded current-query recall | Supported; enabled by default |
+| Best-effort automatic retention | Supported when explicitly enabled |
+| Local durability | Begins after successful SQLite admission only |
+| `codex_app_server` memory behavior | Unsupported on the pinned release |
+| Hindsight server/client 0.8.5 | Exact supported target |
+| External/self-hosted deployment | Supported target |
+| Cloud/embedded Hindsight management | Unsupported |
+| POSIX sender ownership | Initial supported platform boundary |
+| Windows sender ownership | Deferred |
+| Model-facing memory tools | None in the first prerelease |
 
-### Supported direct-user producers
+## Development isolation and production canary
 
-| Source evidence | Classification | Admission rule |
-| --- | --- | --- |
-| `cli.py:12086` | direct-user interactive CLI submit | Eligible only when the interactive input owner explicitly marks direct-user origin |
-| `gateway/run.py:21026` | direct-user messaging-gateway inbound turn | Eligible only for a real user message; restart, completion, cron, and other injected envelopes remain synthetic/automation |
-| `tui_gateway/server.py:10090` | direct-user TUI/Desktop foreground submit | Eligible only when the foreground RPC producer supplies direct-user origin |
-| `gateway/platforms/api_server.py:4680` and `gateway/platforms/api_server.py:4979` | direct-user API run surfaces | Eligible only when the authenticated request boundary explicitly identifies the message as a direct user turn |
-| `acp_adapter/server.py:1513` | direct-user ACP prompt | Eligible only when the ACP request boundary supplies direct-user origin |
+Development writes require an isolated Hindsight instance and Hermes profile, separate datastore,
+separate API key, and generated disposable bank. Fake-service tests precede any explicitly enabled
+live proof, and production Hindsight credentials must be absent from that process.
 
-### Synthetic, automation, mixed, and disabled producers
-
-| Source evidence | Classification | Admission rule |
-| --- | --- | --- |
-| `cli.py:15522` | synthetic/automation Kanban goal-loop continuation | Ineligible |
-| `gateway/run.py:14821` | synthetic/automation gateway background task | Ineligible |
-| `tui_gateway/server.py:11117` and `tui_gateway/server.py:11229` | synthetic/automation background prompt and preview-restart agents | Ineligible |
-| `hermes_cli/cli_commands_mixin.py:1698` | synthetic/automation CLI background task | Ineligible |
-| `batch_runner.py:349` | synthetic/automation batch trajectory producer | Ineligible (and currently constructs the agent with memory skipped) |
-| `tools/delegate_tool.py:2005` | synthetic/automation delegated subagent | Ineligible |
-| `agent/curator.py:1955` and `agent/background_review.py:851` | synthetic/automation review agents | Ineligible |
-| `tui_gateway/compute_host.py:315` and `scripts/tool_search_livetest.py:397` | synthetic test/spike producers | Ineligible |
-| `cli.py:15979` and `hermes_cli/oneshot.py:442` | mixed non-interactive CLI surfaces used by humans, cron, SSH, subprocess, and workers | `unknown` and ineligible unless a future explicit producer contract distinguishes a direct user; Kanban/automation remains ineligible |
-| `run_agent.py:6469` and `run_agent.py:6654` | generic convenience/example entry points with no proven ingress owner | `unknown` and ineligible |
-| `plugins/platforms/feishu/feishu_comment.py:1089` | comment-triggered plugin-local agent | Automatic memory is explicitly disabled there; any future enablement needs its own reviewed origin proof |
-
-Any unlisted caller, legacy raw string, lost queue envelope, or absent origin decodes to `unknown` and
-is ineligible. Text markers, platform names, `agent_context`, and the mere fact that a call reaches a
-foreground path must never be used to guess human origin.
-
-## Lifecycle and preservation invariants
-
-1. Current-query recall is the only remote or potentially long-running memory work before the first
-   model call. It is bounded and fail-open.
-2. After successful generation, the only inline memory work is short local SQLite admission. Every
-   redacted immutable segment is committed before Hermes reports the turn complete; this path makes
-   no network call.
-3. One profile-wide POSIX advisory lock elects the sole remote sender across processes. All eligible
-   processes may admit rows, but only the lock holder may recover, claim, retain, or complete them.
-4. Every row carries a credential-free destination fingerprint over normalized URL, bank ID, and
-   payload schema. A sender claims only matching rows; mismatches remain durable and blocked.
-5. Replay reuses the stable document ID with `update_mode="replace"` until typed synchronous success.
-   Append mode is not used, and disposable proof must establish idempotence before production writes.
-6. Source documents are the preserved record. Facts, observations, embeddings, summaries, and other
-   indexes are derived and may be rebuilt without deleting source documents.
-7. There is no production auto-install, provider selection, service restart, or production bank
-   mutation. Every production write requires separate authorization after the gates below.
-
-The implementation order is **recall-first → separate generic core prerequisite → durable retain**.
-Recall work must not claim retention; durable retention must not ship by violating the released
-non-blocking provider contract.
-
-## Production preservation checklist
-
-Document and rehearse this sequence against a disposable clone; do not automate it:
-
-- [ ] **Storage snapshot:** take the deployment's storage/VM/database snapshot and record the
-      restore point.
-- [ ] **Logical bank export:** export bank configuration plus the complete document-transfer
-      artifact, including observations, and record its checksum.
-- [ ] **Baseline counts and hashes:** record document/raw-unit/observation/operation counts,
-      stable document IDs with source-content hashes, policy hashes, and export checksum.
-- [ ] **Disposable restore proof:** restore/import into a disposable or cloned bank and reconcile
-      counts, IDs, content hashes, and checksums before any Better write/replay test.
-- [ ] **Replay and cutover proof:** on the clone, prove stable replace/replay, owner takeover,
-      destination-mismatch blocking, and configuration-only rollback to bundled `hindsight`.
-- [ ] **Rollback before any production write:** write and verify the exact provider/config/package
-      rollback, require zero unreconciled old-destination rows, and obtain separate production-write
-      authorization.
-
-No step rebuilds, deduplicates, reconsolidates, deletes, or rewrites the existing production bank.
+Production rollout uses a separate canary instance and bank and preserves the old deployment. The
+existing provider configuration, Hindsight service, bank, and data stay running and untouched as the
+rollback path. No initial migration, export/import, deduplication, reconstruction, or deletion is a
+prerelease acceptance requirement.
 
 ## Go/no-go decision
 
-**GO — continue**, as of 2026-07-26. Released Hermes `v2026.7.20` plus bundled-provider
-configuration still cannot satisfy the complete current-query relevance and durable replay contract.
-The effective local fork adds synchronous current-query recall, but not inline durable SQLite
-admission or destination-safe replay.
+**GO — continue** with the plugin-only best-effort design. Released Hermes and public Hindsight 0.8.5
+expose enough stable behavior for useful current-query recall, short callback-local admission, and
+replace-safe background retry. The product deliberately does not require stronger origin or
+pre-return guarantees that these released interfaces do not provide.
 
-Hermes PRs [#61263](https://github.com/NousResearch/hermes-agent/pull/61263) (client 0.8.5),
-[#64914](https://github.com/NousResearch/hermes-agent/pull/64914) (recall controls), and
-[#70278](https://github.com/NousResearch/hermes-agent/pull/70278) (current-query recall) are still
-open. They supply no durable SQLite admission/replay. Recheck released Hermes, current upstream,
-and these PRs before each later gate; stop or delete redundant work if a released upstream contract
-becomes equivalent.
+Hermes PRs [#61263](https://github.com/NousResearch/hermes-agent/pull/61263),
+[#64914](https://github.com/NousResearch/hermes-agent/pull/64914), and
+[#70278](https://github.com/NousResearch/hermes-agent/pull/70278) were observed during the frozen
+audit. They are historical upstream context, not release prerequisites. Future generic host
+improvements may be evaluated separately without coupling this package to a core SHA.

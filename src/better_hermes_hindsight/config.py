@@ -24,25 +24,35 @@ PAYLOAD_SCHEMA_VERSION = "better-hindsight-turn-v1"
 DEFAULT_RECALL_TIMEOUT_SECONDS = 3.5
 DEFAULT_RECALL_INPUT_MAX_CHARS = 4096
 DEFAULT_RECALL_CONTEXT_MAX_BYTES = 8192
+DEFAULT_RETAIN_TIMEOUT_SECONDS = 60.0
 DEFAULT_RETAIN_SEGMENT_MAX_BYTES = 65536
+DEFAULT_OUTBOX_MAX_PENDING_ROWS = 2_000
+DEFAULT_OUTBOX_MAX_PENDING_BYTES = 134_217_728
 DEFAULT_OUTBOX_BUSY_TIMEOUT_SECONDS = 1.0
+DEFAULT_OUTBOX_POLL_INTERVAL_SECONDS = 2.0
+DEFAULT_OUTBOX_RETRY_INITIAL_SECONDS = 2.0
+DEFAULT_OUTBOX_RETRY_MAX_SECONDS = 300.0
 
 MAX_RECALL_TIMEOUT_SECONDS = 30.0
 MAX_RECALL_INPUT_CHARS = 65536
 MAX_RECALL_CONTEXT_BYTES = 1_048_576
 MAX_RECALL_TOKENS = 1_048_576
+MAX_RETAIN_TIMEOUT_SECONDS = 300.0
 MAX_RETAIN_SEGMENT_BYTES = 16_777_216
+MAX_OUTBOX_PENDING_ROWS = 100_000
+MAX_OUTBOX_PENDING_BYTES = 1_073_741_824
 MAX_OUTBOX_BUSY_TIMEOUT_SECONDS = 5.0
+MIN_OUTBOX_POLL_INTERVAL_SECONDS = 0.1
+MAX_OUTBOX_POLL_INTERVAL_SECONDS = 60.0
+MAX_OUTBOX_RETRY_SECONDS = 3_600.0
 MAX_TAG_COUNT = 64
 MAX_TAG_CHARS = 256
 
 IdentifierKind: TypeAlias = Literal["user_id", "user_id_alt"]
-IntegrationMode: TypeAlias = Literal["hybrid", "context"]
 QueryProjection: TypeAlias = Literal["head_tail"]
 RecallBudget: TypeAlias = Literal["low", "mid", "high"]
 RecallType: TypeAlias = Literal["world", "experience", "observation"]
 RecallTagMode: TypeAlias = Literal["any", "all", "any_strict", "all_strict", "exact"]
-MissionPolicy: TypeAlias = Literal["off", "check"]
 ObservationScopes: TypeAlias = Literal["combined"] | tuple[tuple[str, ...], ...] | None
 
 _ROOT_KEYS = {
@@ -51,7 +61,6 @@ _ROOT_KEYS = {
     "bank_id",
     "single_principal",
     "allowed_principals",
-    "integration_mode",
     "recall",
     "retain",
     "missions",
@@ -75,12 +84,21 @@ _RECALL_KEYS = {
 }
 _RETAIN_KEYS = {
     "enabled",
+    "timeout_seconds",
     "segment_max_bytes",
     "observation_scopes",
     "tags",
 }
-_MISSION_KEYS = {"policy", "retain_mission", "observations_mission"}
-_OUTBOX_KEYS = {"path", "busy_timeout_seconds"}
+_MISSION_KEYS = {"retain_mission", "observations_mission"}
+_OUTBOX_KEYS = {
+    "path",
+    "max_pending_rows",
+    "max_pending_bytes",
+    "busy_timeout_seconds",
+    "poll_interval_seconds",
+    "retry_initial_seconds",
+    "retry_max_seconds",
+}
 _PRINCIPAL_KEYS = {"platform", "identifier_kind", "identifier"}
 _SCORE_KEYS = {"semantic", "keyword", "reranker", "final"}
 
@@ -165,7 +183,8 @@ class RecallConfig:
 class RetainConfig:
     """Typed retain inputs; this module performs no retention work."""
 
-    enabled: bool = True
+    enabled: bool = False
+    timeout_seconds: float = DEFAULT_RETAIN_TIMEOUT_SECONDS
     segment_max_bytes: int = DEFAULT_RETAIN_SEGMENT_MAX_BYTES
     observation_scopes: ObservationScopes = None
     tags: tuple[str, ...] = ()
@@ -173,20 +192,24 @@ class RetainConfig:
 
 @dataclass(frozen=True, slots=True)
 class MissionConfig:
-    """Distinct retain/observation mission text and background check policy."""
+    """Distinct mission text for explicit future operator check/apply commands."""
 
-    policy: MissionPolicy = "check"
     retain_mission: str | None = field(default=None, repr=False)
     observations_mission: str | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
 class OutboxConfig:
-    """Profile-scoped outbox identity and SQLite wait bound."""
+    """Profile-scoped outbox identity, logical caps, and bounded worker timing."""
 
     path: Path = field(repr=False)
     payload_schema: str = field(default=PAYLOAD_SCHEMA_VERSION, init=False)
+    max_pending_rows: int = DEFAULT_OUTBOX_MAX_PENDING_ROWS
+    max_pending_bytes: int = DEFAULT_OUTBOX_MAX_PENDING_BYTES
     busy_timeout_seconds: float = DEFAULT_OUTBOX_BUSY_TIMEOUT_SECONDS
+    poll_interval_seconds: float = DEFAULT_OUTBOX_POLL_INTERVAL_SECONDS
+    retry_initial_seconds: float = DEFAULT_OUTBOX_RETRY_INITIAL_SECONDS
+    retry_max_seconds: float = DEFAULT_OUTBOX_RETRY_MAX_SECONDS
 
     @property
     def busy_timeout_ms(self) -> int:
@@ -219,7 +242,6 @@ class BetterHindsightConfig:
     bank_id: str = field(default=DEFAULT_BANK_ID, repr=False)
     single_principal: bool = False
     allowed_principals: tuple[AllowedPrincipal, ...] = field(default=(), repr=False)
-    integration_mode: IntegrationMode = "hybrid"
     recall: RecallConfig = field(default_factory=RecallConfig)
     retain: RetainConfig = field(default_factory=RetainConfig)
     missions: MissionConfig = field(default_factory=MissionConfig)
@@ -299,14 +321,6 @@ def load_config(
     api_key = _parse_api_key(merged.get("api_key"))
     bank_id = _parse_bank_id(merged.get("bank_id", DEFAULT_BANK_ID))
     single_principal = _parse_bool(merged.get("single_principal", False), "single_principal")
-    integration_mode = cast(
-        IntegrationMode,
-        _parse_literal(
-            merged.get("integration_mode", "hybrid"),
-            "integration_mode",
-            ("hybrid", "context"),
-        ),
-    )
     principals = _parse_principals(merged.get("allowed_principals", ()))
     recall = _parse_recall(merged.get("recall", {}))
     retain = _parse_retain(merged.get("retain", {}))
@@ -315,6 +329,10 @@ def load_config(
 
     if retain.observation_scopes == ((),) and not single_principal:
         raise _error("retain.observation_scopes='shared' requires explicit single_principal=true")
+    if retain.segment_max_bytes > outbox.max_pending_bytes:
+        raise _error("retain.segment_max_bytes must not exceed outbox.max_pending_bytes")
+    if outbox.retry_initial_seconds > outbox.retry_max_seconds:
+        raise _error("outbox.retry_initial_seconds must not exceed outbox.retry_max_seconds")
 
     return BetterHindsightConfig(
         hermes_home=home,
@@ -323,7 +341,6 @@ def load_config(
         bank_id=bank_id,
         single_principal=single_principal,
         allowed_principals=principals,
-        integration_mode=integration_mode,
         recall=recall,
         retain=retain,
         missions=missions,
@@ -608,6 +625,21 @@ def _parse_bounded_float(
     return parsed
 
 
+def _parse_closed_bounded_float(
+    value: object, field_name: str, *, minimum: float, maximum: float
+) -> float:
+    message = f"{field_name} must be a number from {minimum} through {maximum}"
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise _error(message)
+    try:
+        parsed = float(value)
+    except (OverflowError, ValueError):
+        raise _error(message) from None
+    if not math.isfinite(parsed) or parsed < minimum or parsed > maximum:
+        raise _error(message)
+    return parsed
+
+
 def _parse_optional_positive_int(value: object, field_name: str) -> int | None:
     if value is None:
         return None
@@ -761,7 +793,13 @@ def _parse_retain(value: object) -> RetainConfig:
     values = _expect_mapping(value, "retain")
     _check_unknown_keys(values, _RETAIN_KEYS, "retain")
     return RetainConfig(
-        enabled=_parse_bool(values.get("enabled", True), "retain.enabled"),
+        enabled=_parse_bool(values.get("enabled", False), "retain.enabled"),
+        timeout_seconds=_parse_bounded_float(
+            values.get("timeout_seconds", DEFAULT_RETAIN_TIMEOUT_SECONDS),
+            "retain.timeout_seconds",
+            minimum=0.0,
+            maximum=MAX_RETAIN_TIMEOUT_SECONDS,
+        ),
         segment_max_bytes=_parse_positive_int(
             values.get("segment_max_bytes", DEFAULT_RETAIN_SEGMENT_MAX_BYTES),
             "retain.segment_max_bytes",
@@ -798,16 +836,7 @@ def _parse_observation_scopes(value: object) -> ObservationScopes:
 def _parse_missions(value: object) -> MissionConfig:
     values = _expect_mapping(value, "missions")
     _check_unknown_keys(values, _MISSION_KEYS, "missions")
-    policy = cast(
-        MissionPolicy,
-        _parse_literal(
-            values.get("policy", "check"),
-            "missions.policy",
-            ("off", "check"),
-        ),
-    )
     return MissionConfig(
-        policy=policy,
         retain_mission=_parse_optional_text(
             values.get("retain_mission"), "missions.retain_mission"
         ),
@@ -823,11 +852,39 @@ def _parse_outbox(home: Path, value: object) -> OutboxConfig:
     path = _parse_outbox_path(home, values.get("path", "better_hindsight/outbox.sqlite3"))
     return OutboxConfig(
         path=path,
+        max_pending_rows=_parse_positive_int(
+            values.get("max_pending_rows", DEFAULT_OUTBOX_MAX_PENDING_ROWS),
+            "outbox.max_pending_rows",
+            maximum=MAX_OUTBOX_PENDING_ROWS,
+        ),
+        max_pending_bytes=_parse_positive_int(
+            values.get("max_pending_bytes", DEFAULT_OUTBOX_MAX_PENDING_BYTES),
+            "outbox.max_pending_bytes",
+            maximum=MAX_OUTBOX_PENDING_BYTES,
+        ),
         busy_timeout_seconds=_parse_bounded_float(
             values.get("busy_timeout_seconds", DEFAULT_OUTBOX_BUSY_TIMEOUT_SECONDS),
             "outbox.busy_timeout_seconds",
             minimum=0.0,
             maximum=MAX_OUTBOX_BUSY_TIMEOUT_SECONDS,
+        ),
+        poll_interval_seconds=_parse_closed_bounded_float(
+            values.get("poll_interval_seconds", DEFAULT_OUTBOX_POLL_INTERVAL_SECONDS),
+            "outbox.poll_interval_seconds",
+            minimum=MIN_OUTBOX_POLL_INTERVAL_SECONDS,
+            maximum=MAX_OUTBOX_POLL_INTERVAL_SECONDS,
+        ),
+        retry_initial_seconds=_parse_bounded_float(
+            values.get("retry_initial_seconds", DEFAULT_OUTBOX_RETRY_INITIAL_SECONDS),
+            "outbox.retry_initial_seconds",
+            minimum=0.0,
+            maximum=MAX_OUTBOX_RETRY_SECONDS,
+        ),
+        retry_max_seconds=_parse_bounded_float(
+            values.get("retry_max_seconds", DEFAULT_OUTBOX_RETRY_MAX_SECONDS),
+            "outbox.retry_max_seconds",
+            minimum=0.0,
+            maximum=MAX_OUTBOX_RETRY_SECONDS,
         ),
     )
 
@@ -887,18 +944,22 @@ __all__ = [
     "BetterHindsightConfig",
     "ConfigError",
     "IdentifierKind",
-    "IntegrationMode",
     "DEFAULT_API_URL",
     "DEFAULT_BANK_ID",
     "DEFAULT_OUTBOX_BUSY_TIMEOUT_SECONDS",
+    "DEFAULT_OUTBOX_MAX_PENDING_BYTES",
+    "DEFAULT_OUTBOX_MAX_PENDING_ROWS",
+    "DEFAULT_OUTBOX_POLL_INTERVAL_SECONDS",
+    "DEFAULT_OUTBOX_RETRY_INITIAL_SECONDS",
+    "DEFAULT_OUTBOX_RETRY_MAX_SECONDS",
     "PAYLOAD_SCHEMA_VERSION",
     "DEFAULT_RECALL_CONTEXT_MAX_BYTES",
     "DEFAULT_RECALL_INPUT_MAX_CHARS",
     "DEFAULT_RECALL_TIMEOUT_SECONDS",
     "DEFAULT_RETAIN_SEGMENT_MAX_BYTES",
+    "DEFAULT_RETAIN_TIMEOUT_SECONDS",
     "MemoryAuthorization",
     "MissionConfig",
-    "MissionPolicy",
     "ObservationScopes",
     "OutboxConfig",
     "QueryProjection",

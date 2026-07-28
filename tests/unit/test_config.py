@@ -88,6 +88,22 @@ def test_environment_beats_profile_and_profile_beats_defaults(tmp_path: Path) ->
     assert defaults.api_key is None
 
 
+def test_defaults_follow_the_best_effort_product_contract(tmp_path: Path) -> None:
+    config = load_config(hermes_home=tmp_path, environ={})
+
+    assert not hasattr(config, "integration_mode")
+    assert config.recall.enabled is True
+    assert config.retain.enabled is False
+    assert config.retain.timeout_seconds == 60.0
+    assert config.outbox.max_pending_rows == 2_000
+    assert config.outbox.max_pending_bytes == 134_217_728
+    assert config.outbox.busy_timeout_seconds == 1.0
+    assert config.outbox.poll_interval_seconds == 2.0
+    assert config.outbox.retry_initial_seconds == 2.0
+    assert config.outbox.retry_max_seconds == 300.0
+    assert not hasattr(config.missions, "policy")
+
+
 def test_hermes_home_must_be_explicit_valid_and_absolute(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="absolute"):
         load_config(hermes_home=Path("relative/profile"), environ={})
@@ -203,12 +219,16 @@ def test_unbounded_json_integer_is_a_sanitized_config_error(tmp_path: Path) -> N
     [
         ({"unexpected": True}, "unexpected"),
         ({"batch_size": 10}, "batch_size"),
+        ({"integration_mode": "hybrid"}, "integration_mode"),
         ({"recall": {"unexpected": True}}, "recall.unexpected"),
         ({"retain": {"unexpected": True}}, "retain.unexpected"),
         ({"retain": {"extraction_mode": "custom"}}, "retain.extraction_mode"),
         ({"missions": {"unexpected": True}}, "missions.unexpected"),
+        ({"missions": {"policy": "check"}}, "missions.policy"),
         ({"missions": {"reflect_mission": "not supported"}}, "missions.reflect_mission"),
         ({"outbox": {"unexpected": True}}, "outbox.unexpected"),
+        ({"outbox": {"retry_multiplier": 2.0}}, "outbox.retry_multiplier"),
+        ({"outbox": {"shutdown_join_seconds": 2.0}}, "outbox.shutdown_join_seconds"),
         ({"authorized_principals": []}, "authorized_principals"),
         ({"recall": {"tags_match": "all"}}, "recall.tags_match"),
         ({"retain": {"tags_mode": "append"}}, "retain.tags_mode"),
@@ -272,7 +292,6 @@ def test_complete_typed_configuration_round_trips(tmp_path: Path) -> None:
                     "identifier": "sample-alternate-id",
                 },
             ],
-            "integration_mode": "context",
             "recall": {
                 "enabled": False,
                 "query_projection": "head_tail",
@@ -291,25 +310,30 @@ def test_complete_typed_configuration_round_trips(tmp_path: Path) -> None:
             },
             "retain": {
                 "enabled": False,
+                "timeout_seconds": 45.0,
                 "segment_max_bytes": 70000,
                 "observation_scopes": "shared",
                 "tags": ["source:sample"],
             },
             "missions": {
-                "policy": "check",
                 "retain_mission": "Retain durable user preferences.",
                 "observations_mission": "Consolidate stable observations.",
             },
             "outbox": {
                 "path": "better_hindsight/custom-outbox.sqlite3",
+                "max_pending_rows": 1234,
+                "max_pending_bytes": 100_000_000,
                 "busy_timeout_seconds": 0.5,
+                "poll_interval_seconds": 0.25,
+                "retry_initial_seconds": 3.0,
+                "retry_max_seconds": 30.0,
             },
         },
     )
 
     config = load_config(hermes_home=tmp_path, environ={})
 
-    assert config.integration_mode == "context"
+    assert not hasattr(config, "integration_mode")
     assert config.recall.enabled is False
     assert config.recall.query_projection == "head_tail"
     assert config.recall.timeout_seconds == 2.25
@@ -327,16 +351,22 @@ def test_complete_typed_configuration_round_trips(tmp_path: Path) -> None:
     assert config.recall.include_source_facts is True
     assert config.recall.max_source_facts_tokens == 222
     assert config.retain.enabled is False
+    assert config.retain.timeout_seconds == 45.0
     assert config.retain.segment_max_bytes == 70000
     assert config.retain.observation_scopes == ((),)
     assert config.retain.tags == ("source:sample",)
-    assert config.missions.policy == "check"
+    assert not hasattr(config.missions, "policy")
     assert config.missions.retain_mission == "Retain durable user preferences."
     assert config.missions.observations_mission == "Consolidate stable observations."
     assert config.outbox.path == tmp_path.resolve() / "better_hindsight/custom-outbox.sqlite3"
     assert config.outbox.payload_schema == PAYLOAD_SCHEMA_VERSION
+    assert config.outbox.max_pending_rows == 1234
+    assert config.outbox.max_pending_bytes == 100_000_000
     assert config.outbox.busy_timeout_seconds == 0.5
     assert config.outbox.busy_timeout_ms == 500
+    assert config.outbox.poll_interval_seconds == 0.25
+    assert config.outbox.retry_initial_seconds == 3.0
+    assert config.outbox.retry_max_seconds == 30.0
     tiny_timeout = load_config(
         hermes_home=tmp_path / "tiny-timeout",
         environ={},
@@ -373,26 +403,35 @@ def test_omitted_hindsight_recall_controls_remain_none(tmp_path: Path) -> None:
     assert config.recall.include_source_facts is None
     assert config.recall.max_source_facts_tokens is None
     assert config.retain.observation_scopes is None
+    assert config.retain.enabled is False
+    assert config.retain.timeout_seconds == 60.0
     assert config.retain.segment_max_bytes == 65536
     assert config.outbox.payload_schema == PAYLOAD_SCHEMA_VERSION
+    assert config.outbox.max_pending_rows == 2_000
+    assert config.outbox.max_pending_bytes == 134_217_728
 
 
-def test_mission_apply_is_an_operator_command_not_a_config_value(
-    tmp_path: Path,
-) -> None:
-    _write_config(tmp_path, {"missions": {"policy": "apply"}})
-
-    with pytest.raises(ConfigError, match="off, check"):
-        load_config(hermes_home=tmp_path, environ={})
-
-    config_path = tmp_path / "better_hindsight" / "config.json"
-    config_path.unlink()
-    with pytest.raises(ConfigError, match="off, check"):
+def test_mission_policy_is_removed_but_distinct_mission_texts_remain(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match=r"unknown key\(s\): missions\.policy"):
         load_config(
             hermes_home=tmp_path,
             environ={},
-            injected={"missions": {"policy": "apply"}},
+            injected={"missions": {"policy": "check"}},
         )
+
+    config = load_config(
+        hermes_home=tmp_path,
+        environ={},
+        injected={
+            "missions": {
+                "retain_mission": "Retain durable preferences.",
+                "observations_mission": "Consolidate stable observations.",
+            }
+        },
+    )
+    assert config.missions.retain_mission == "Retain durable preferences."
+    assert config.missions.observations_mission == "Consolidate stable observations."
+    assert not hasattr(config.missions, "policy")
 
 
 @pytest.mark.parametrize(
@@ -453,12 +492,24 @@ def test_bare_empty_observation_scope_is_rejected(tmp_path: Path) -> None:
         {"recall": {"min_scores": {"semantic": 10**1000}}},
         {"recall": {"max_source_facts_tokens": 0}},
         {"retain": {"segment_max_bytes": 0}},
+        {"retain": {"timeout_seconds": 0}},
+        {"retain": {"timeout_seconds": 301}},
         {"retain": {"tags": [f"tag-{index}" for index in range(65)]}},
         {"missions": {"policy": "startup-apply"}},
+        {"outbox": {"max_pending_rows": 0}},
+        {"outbox": {"max_pending_rows": 100_001}},
+        {"outbox": {"max_pending_bytes": 0}},
+        {"outbox": {"max_pending_bytes": 1_073_741_825}},
         {"outbox": {"busy_timeout_seconds": 0}},
         {"outbox": {"busy_timeout_seconds": 10**1000}},
         {"outbox": {"path": "invalid\0path.sqlite3"}},
         {"outbox": {"busy_timeout_seconds": 6}},
+        {"outbox": {"poll_interval_seconds": 0.09}},
+        {"outbox": {"poll_interval_seconds": 61}},
+        {"outbox": {"retry_initial_seconds": 0}},
+        {"outbox": {"retry_initial_seconds": 3_601}},
+        {"outbox": {"retry_max_seconds": 0}},
+        {"outbox": {"retry_max_seconds": 3_601}},
         {"outbox": {"path": "../outside.sqlite3"}},
     ],
 )
@@ -472,6 +523,85 @@ def test_invalid_values_fail_with_sanitized_actionable_errors(
     assert message.startswith("Better Hindsight configuration error:")
     assert "password" not in message
     assert "token=value" not in message
+
+
+def test_cross_field_queue_bounds_are_enforced(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="segment_max_bytes.*max_pending_bytes"):
+        load_config(
+            hermes_home=tmp_path,
+            environ={},
+            injected={
+                "retain": {"segment_max_bytes": 1024},
+                "outbox": {"max_pending_bytes": 1023},
+            },
+        )
+
+    with pytest.raises(ConfigError, match="retry_initial_seconds.*retry_max_seconds"):
+        load_config(
+            hermes_home=tmp_path,
+            environ={},
+            injected={
+                "outbox": {
+                    "retry_initial_seconds": 3.0,
+                    "retry_max_seconds": 2.0,
+                }
+            },
+        )
+
+
+@pytest.mark.parametrize("poll_interval", [0.1, 60.0])
+def test_poll_interval_inclusive_bounds_are_accepted(tmp_path: Path, poll_interval: float) -> None:
+    config = load_config(
+        hermes_home=tmp_path,
+        environ={},
+        injected={"outbox": {"poll_interval_seconds": poll_interval}},
+    )
+
+    assert config.outbox.poll_interval_seconds == poll_interval
+
+
+def test_configurable_ceiling_values_are_accepted(tmp_path: Path) -> None:
+    config = load_config(
+        hermes_home=tmp_path,
+        environ={},
+        injected={
+            "retain": {"timeout_seconds": 300.0},
+            "outbox": {
+                "max_pending_rows": 100_000,
+                "max_pending_bytes": 1_073_741_824,
+                "retry_initial_seconds": 3_600.0,
+                "retry_max_seconds": 3_600.0,
+            },
+        },
+    )
+
+    assert config.retain.timeout_seconds == 300.0
+    assert config.outbox.max_pending_rows == 100_000
+    assert config.outbox.max_pending_bytes == 1_073_741_824
+    assert config.outbox.retry_initial_seconds == 3_600.0
+    assert config.outbox.retry_max_seconds == 3_600.0
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"retain": {"timeout_seconds": float("nan")}},
+        {"outbox": {"busy_timeout_seconds": float("nan")}},
+        {"outbox": {"poll_interval_seconds": float("nan")}},
+        {"outbox": {"retry_initial_seconds": float("nan")}},
+        {"outbox": {"retry_max_seconds": float("nan")}},
+    ],
+)
+def test_new_float_fields_reject_nan(tmp_path: Path, payload: Mapping[str, object]) -> None:
+    with pytest.raises(ConfigError):
+        load_config(hermes_home=tmp_path, environ={}, injected=payload)
+
+
+def test_profile_json_rejects_non_finite_outbox_timing(tmp_path: Path) -> None:
+    _write_config(tmp_path, {"outbox": {"poll_interval_seconds": float("nan")}})
+
+    with pytest.raises(ConfigError, match="outbox.poll_interval_seconds"):
+        load_config(hermes_home=tmp_path, environ={})
 
 
 def test_malformed_url_does_not_leak_parser_values_through_exception_chaining(
@@ -559,6 +689,7 @@ def test_gateway_authorization_uses_exact_platform_and_identifier_kind(
         environ={},
         injected={
             "single_principal": True,
+            "retain": {"enabled": True},
             "allowed_principals": [
                 {
                     "platform": "sample-gateway",
@@ -614,6 +745,7 @@ def test_agent_context_is_only_a_separate_write_gate(tmp_path: Path) -> None:
         environ={},
         injected={
             "single_principal": True,
+            "retain": {"enabled": True},
             "allowed_principals": [
                 {
                     "platform": "sample-gateway",

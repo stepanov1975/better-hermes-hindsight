@@ -1,201 +1,178 @@
 # Design and proof contract
 
-> **Implementation precedence notice:** This document contains the pre-rescope design baseline and
-> has not yet received the complete active-plan Task 0 rewrite. It is not implementation authority
-> for a Hermes-core prerequisite, structured-origin gate, inline pre-return admission, or any other
-> conflicting requirement. Read tracked [IMPLEMENTATION.md](IMPLEMENTATION.md) and only the
-> canonical active plan it names. The two older plans are retired.
+## Status and authority
 
-## Status
+Better Hermes Hindsight is a pre-alpha external/self-hosted-only provider. The tracked
+[IMPLEMENTATION.md](IMPLEMENTATION.md) router names the only active implementation plan. Two earlier
+plans are retired historical records and cannot supply active requirements.
 
-Pre-alpha repository scaffold, created 2026-07-25. The repository is private during the proof and
-becomes public only after the release checklist passes. The compatibility snapshot and go/no-go
-record are in [docs/compatibility.md](docs/compatibility.md).
+The repository remains private during proof work and becomes public only after the release checklist
+passes. This design describes the implementable best-effort plugin, not an ideal host API.
 
 ## Primary goal
 
-Provide a reliable Hermes memory-provider boundary for an external/self-hosted Hindsight service
-without requiring Hindsight-specific patches to be reapplied after every Hermes update.
+Provide useful current-query recall and opt-in automatic retention on unmodified released Hermes,
+with bounded local work, retryable Hindsight delivery, isolated rollout, and easy rollback. The
+project should reduce recurring integration maintenance without recreating every cloud, embedded,
+installer, or control-plane feature of the bundled provider.
 
-The implementation should reduce recurring integration maintenance, not recreate every feature of
-the bundled Hindsight provider. Better is narrower and is not universally better than official
-Hermes or Hindsight.
+Recall is enabled by default. Automatic retention is disabled by default. No model-facing memory
+tools in the first prerelease are exposed.
 
-## Architecture boundary
+## Product boundary
 
 The project owns:
 
-- provider-specific configuration and validation;
-- the `hindsight-client==0.8.5` adapter for Hindsight server 0.8.5;
-- bounded current-query recall and compact historical-evidence formatting;
-- redacted immutable retain-job construction;
-- profile-scoped SQLite admission, destination ownership, remote write ordering, and recovery;
-- provider tools and truthful operation status; and
-- compatibility tests against supported public Hermes and Hindsight contracts.
+- pure profile-scoped configuration and exact principal authorization;
+- the public `hindsight-client==0.8.5` adapter for Hindsight server 0.8.5;
+- bounded current-query recall and compact untrusted-evidence formatting;
+- deterministic redaction, segmentation, and stable retain document identity;
+- atomic profile-local SQLite admission with logical row/payload caps;
+- destination-matched replace-mode retry and one POSIX sender owner;
+- explicit future mission check/apply commands; and
+- compatibility, fake-service, isolated-development, and rollback proofs.
 
-Hermes core continues to own turn classification, external-memory trust framing, provider lifecycle
-invocation, and the one-active-provider policy. Generic fixes in those areas require a separate,
-focused upstream-compatible patch and review; this package must not monkey-patch or vendor private
-Hermes core code.
+Released Hermes owns whether and when a provider callback is invoked. Hindsight owns remote commit
+and derived indexing. Better Hindsight narrows its claims at those boundaries rather than patching
+private host code or promising remote transport outcomes it cannot observe.
 
-## Stable identities and scope
+Stable identities are:
 
-- Repository/distribution: `better-hermes-hindsight`
-- Python package: `better_hermes_hindsight`
-- Hermes provider ID: `better_hindsight`
-- Initial deployment: external/self-hosted only
+- repository/distribution: `better-hermes-hindsight`;
+- Python package: `better_hermes_hindsight`;
+- Hermes provider ID: `better_hindsight`; and
+- initial deployment: external/self-hosted only.
 
-The provider ID intentionally differs from bundled `hindsight`, allowing configuration-only
-rollback. It also avoids relying on same-name user-plugin override behavior, which differs between
-Hermes releases and documentation revisions.
+Bundled `hindsight` remains selectable and untouched.
 
-There is no production auto-install, provider selection, or service restart. There is no
-production bank mutation. The package does not implement cloud account setup or manage an embedded
-Hindsight daemon.
+## Released lifecycle
 
-## Implementation order
+1. **Local discovery.** Imports, `is_available()`, configuration loading, and initialization perform
+   no network call, package installation, bank mutation, or service restart.
+2. **Current-query recall.** `prefetch()` recalls against the current projected user query before a
+   model call. It is the only remote or potentially long-running memory operation on that path and
+   fails open within a configured deadline. `queue_prefetch()` remains inert for this provider.
+3. **Best-effort callback.** Released Hermes labels a turn complete and submits provider
+   `sync_turn()` to its serialized background memory executor. Better accepts non-empty
+   user/final-assistant text from that callback on an authorized primary handle. It does not infer
+   human versus synthetic origin.
+4. **Short local admission.** After the callback starts, Better redacts, segments, derives stable
+   IDs, and attempts one bounded atomic SQLite transaction. The callback performs no Hindsight
+   request and does not wait for remote delivery.
+5. **Background delivery.** A profile-wide POSIX advisory lock elects one sender. The lock owner uses
+   bounded SQLite polling to observe cross-process admissions, claims only rows matching the current
+   credential-free destination fingerprint and payload schema, and retries with bounded backoff.
+6. **Replace-safe replay.** Every retry reuses the same stable document ID and
+   `update_mode="replace"` with synchronous Hindsight response validation. Ambiguous completion
+   remains retryable; this is idempotent source replacement, not exactly-once transport.
+7. **Bounded shutdown.** Shutdown stops new local work, joins the sender only for a bounded interval,
+   closes owned resources where possible, and leaves unconfirmed admitted rows recoverable.
 
-Implementation is deliberately split into three ownership boundaries:
+## Durability and failure contract
 
-1. **Recall-first.** Build the typed configuration, public Hindsight 0.8.5 adapter, fake-server
-   contract, and read-only current-query provider. This stage has no automatic-retain placeholder
-   and makes no retention claim.
-2. **Separate generic core prerequisite.** In a separately authorized Hermes branch, add generic,
-   backward-compatible opt-ins for stale/untrusted historical-memory framing, typed turn origin,
-   inline local durable admission, current-query prefetch scheduling, and bounded local session
-   hooks. Legacy providers keep today's scheduling and `sync_turn()` behavior.
-3. **Durable retain.** Only against the exact independently reviewed core prerequisite, add inline
-   SQLite admission, the profile-wide sender election/outbox, stable destination-matched replay,
-   and retention tooling.
+Local durability starts only after provider admission commits all segments of the redacted callback
+to SQLite. Work can still be absent because Hermes never invoked the callback, abandoned queued work
+during shutdown, exited before callback execution, or because admission rejected the turn. There is
+no direct-user provenance claim and no pre-return or no-loss guarantee.
 
-In short: **recall-first → separate generic core prerequisite → durable retain**. This order prevents
-provider code from silently violating released Hermes's requirement that legacy `sync_turn()` remain
-non-blocking.
+Admission can reject invalid or empty content, redaction failure, path or destination mismatch,
+queue saturation, lock contention, local I/O failure, collision, or shutdown. It emits only fixed
+sanitized status and does not change the generated assistant response.
 
-## Simplified lifecycle
+Queue limits account for logical pending rows and retained payload bytes plus documented allowance;
+SQLite pages, indexes, and WAL files can consume more physical disk. Retry does not promise global
+FIFO or exactly-once transport. Repeated byte-identical content in one session may coalesce under the
+stable source identity, which is accepted for the first prerelease.
 
-1. Discovery and initialization are local. `is_available()` is network-free; initialization does
-   not install packages, create banks, read mission configuration, or mutate remote state.
-2. Before the first and every later model call, `prefetch()` recalls against the current projected
-   query. Current-query recall is the only remote or potentially long-running memory work before the
-   first model call. It is bounded and fail-open; failure returns no memory rather than blocking the
-   turn. Better does not queue a redundant previous-query prefetch after the turn.
-3. Automatic retention is eligible only for an authorized `primary` handle, explicit direct-user
-   origin, completed visible user/final-assistant text, and an authoritative successful result
-   owner. Synthetic/automation and `unknown` origin remain ineligible without text heuristics.
-4. After successful generation, inline local SQLite admission redacts, deterministically segments,
-   fingerprints, and atomically commits the immutable job before Hermes reports the turn complete.
-   It performs no network call. A failed commit is reported as not admitted without changing the
-   generated response.
-5. SQLite is the durable FIFO shared by processes in one profile. A profile-wide POSIX advisory lock
-   elects exactly one remote retention sender; other processes remain admission-only.
-6. Each row has a credential-free destination fingerprint over normalized API URL, bank ID, and
-   payload schema. The sender claims only matching rows. Mismatched rows remain durable and blocked
-   until an operator restores or explicitly reconciles the matching destination.
-7. The sender uses the persisted stable document ID with `update_mode="replace"` and synchronous
-   Hindsight confirmation. Timeout, response loss, process death, or status-update failure leaves
-   the same row replayable; append mode is absent.
-8. Source documents are the preserved record. Facts, observations, embeddings, summaries, and other
-   Hindsight indexes are derived and may be rebuilt without deleting source documents.
-9. Shutdown stops new remote work, releases ownership, closes the client on its owning loop where
-   possible, and leaves all unconfirmed rows for takeover or restart. It never drains remote work on
-   the user-facing response path.
+## Trust and authorization
 
-## Core-prerequisite boundary
+Recalled material is potentially stale, untrusted historical evidence, never executable instruction.
+High-confidence credential patterns are redacted before model formatting and before retention
+admission. Redaction is intentionally bounded and does not claim universal secret detection.
 
-Released Hermes invokes `prefetch()` before model calls, `queue_prefetch()` after turns, and
-`sync_turn()` after completed turns, while documenting `sync_turn()` as non-blocking. Durable inline
-admission therefore needs explicit provider timing capabilities in core rather than an overloaded
-legacy hook.
+The first prerelease has one static Hindsight bank for one explicitly asserted principal. Gateway
+identity requires an exact configured `(platform, identifier_kind, identifier)` tuple;
+`single_principal=true` is required, and only `agent_context="primary"` may retain. A secondary
+context may recall when its exact identity is authorized.
 
-The separate prerequisite owns exactly these generic changes:
+Hindsight OSS 0.8.5 uses a shared write-capable API key. Environment-only key loading, absent model
+memory tools, and confirmation-gated operator commands reduce accidents but are not a server-enforced
+read/write boundary against a process with terminal access and the key.
 
-- stale/untrusted historical-evidence framing instead of authoritative-instruction framing;
-- an optional typed origin propagated from real `AIAgent.run_conversation()` producers through
-  queues, normal finalization, and the Codex result owner, with legacy raw strings decoded as
-  `unknown`;
-- an opt-in inline-local admission capability after successful generation and before result return;
-- an opt-in skip for obsolete after-turn prefetch when the provider recalls the current query; and
-- opt-in bounded local/no-op session-boundary handling without a host executor.
+## Missions
 
-Direct-user CLI, messaging gateway, TUI/Desktop, API, and ACP producers require explicit eligible
-origin. Cron, batch, Kanban, delegated subagents, background/process completions, curator/review
-agents, and other synthetic producers are ineligible. The frozen source inventory and exact line
-references are in [docs/compatibility.md](docs/compatibility.md).
+Retain and observation mission text are distinct optional configuration fields. Provider
+initialization neither reads nor applies remote mission policy. A future explicit operator command
+will check the allowlisted fields and apply only confirmed changes with readback; that Task 4
+behavior is outside the current configuration slice.
+
+## Supported and unsupported runtime paths
+
+The supported host path is the normal conversation loop in released Hermes `v2026.7.20` / package
+0.19.0. `codex_app_server` is unsupported on the pinned release because it bypasses normal provider
+context and does not expose this provider's lifecycle behavior. Windows sender election, cloud
+Hindsight, embedded-daemon management, and multi-user routing are also outside the first prerelease.
+
+## Isolation, canary, and rollback
+
+Development writes require an isolated Hindsight instance and Hermes profile, separate datastore,
+separate API key, and generated disposable bank. Fake HTTP proof always precedes explicitly enabled
+live proof. The active Hermes configuration, gateway, existing Hindsight deployment, and existing
+bank remain outside development tests.
+
+Production rollout uses a separate canary instance and bank and preserves the old deployment. The
+old provider configuration, instance, and bank remain intact as the rollback source. Prerelease proof
+does not migrate, copy, rebuild, deduplicate, reconsolidate, prune, or delete existing data.
+
+Rollback selects bundled `hindsight`, restarts through ordinary operator procedure, and preserves the
+Better outbox plus both banks for diagnosis or later replay.
 
 ## Proof acceptance gates
 
-Promotion from `spike/local-external-provider` requires all of the following:
+Before prerelease, prove all of the following against one stable candidate:
 
-- A fresh temporary `HERMES_HOME` discovers and selects only `better_hindsight`.
-- The exact released Hermes, effective local revision, current upstream observation, and Hindsight
-  0.8.5 baseline remain documented and rechecked.
-- The first turn recalls against the current query, not a previous query.
-- Recall is the sole potentially long-running pre-LLM memory operation and fails open within a
-  documented bounded deadline.
-- Automatic context is compact, bounded, provenance-aware historical evidence and never an
-  instruction source.
-- Explicit origin reaches normal and Codex result paths from real direct-user and synthetic
-  producers; `unknown`, synthetic, incomplete, failed, and interrupted turns are not admitted.
-- Inline local admission commits every eligible redacted segment before turn completion and makes no
-  network call.
-- Concurrent processes may admit, while only the profile advisory-lock owner sends or recovers rows.
-- Destination mismatch blocks rather than misroutes; replay keeps the same document ID and replace
-  mode until typed success.
-- Disposable Hindsight 0.8.5 proof shows repeated/crash replay leaves one source document and no
-  extra active derived units.
-- `shared` is present in retain requests only after single-principal/exclusive-bank proof.
-- Retain, reflect, and observation missions reach distinct API fields under read-only-by-default
-  policy.
-- Score floors affect automatic and explicit recall consistently.
-- Session switches and reused session IDs cannot claim or append stale automatic memory; unsupported
-  same-ID rewind fails closed and requires `/new`.
-- Existing bank/document formats need no migration for read compatibility, and source documents are
-  never automatically rebuilt, deduplicated, deleted, or rewritten.
-- Switching back to bundled `hindsight` requires only package/configuration rollback and preserves
-  bank/outbox data.
-- Package, lint, typing, unit, integration, disposable, fresh-install, security, and independent
-  review gates pass.
-- Public-facing files contain no private paths, endpoints, bank names, principal identifiers, memory
-  content, transcripts, databases, or logs.
+- temporary-profile discovery and selection of only `better_hindsight`;
+- no Hermes core patch or patched SHA requirement;
+- bounded fail-open current-query recall before the first model request;
+- untrusted, compact, redacted context and no model-facing memory tools;
+- retention disabled by default and enabled only on an authorized primary handle;
+- released `sync_turn()` best-effort callback behavior without origin inference;
+- all-or-none local admission after callback execution, with no network request in the callback;
+- profile path confinement, logical queue bounds, collision rejection, and fixed sanitized errors;
+- one sender across process-shaped contenders and bounded cross-process polling;
+- destination mismatch blocking and stable replace-mode retries until exact typed success;
+- fake-service restart, timeout, response-loss, and shutdown recovery;
+- explicit mission check/apply behavior without initialization-time mutation;
+- isolated development proof with zero production credentials or resources;
+- separate production canary and configuration rollback while the old deployment stays untouched;
+- Python 3.11-3.13 tests, lint, formatting, typing, lock, build, package, security, and independent
+  review gates; and
+- no private endpoint, credential, bank name, principal identifier, memory, transcript, database, or
+  log in public artifacts.
 
-## Preservation and production-write gate
+## Deferred ideal and upstream improvements
 
-No production write is part of this proof. Before separate authorization, operators must complete
-the storage snapshot, full logical bank export, baseline counts/hashes, disposable restore and
-reconciliation, stable replace/replay, destination-mismatch, and configuration rollback checklist in
-[docs/compatibility.md](docs/compatibility.md). The project must not rebuild, deduplicate,
-reconsolidate, delete, or rewrite a legacy bank to make the proof pass.
+These may be useful platform improvements, but they are not prerelease defects or prerequisites:
 
-## Stop and retirement conditions
+- authoritative typed direct-human versus synthetic origin across every Hermes ingress;
+- inline admission before turn return or replay of callbacks the host never delivered;
+- stale/untrusted framing owned generically by Hermes core;
+- exactly-once transport or global FIFO;
+- operation-scoped Hindsight credentials or a proxy/control plane;
+- `codex_app_server` memory support;
+- model-facing recall, retain, or mission tools;
+- Windows/non-POSIX sender election;
+- multi-user/per-user bank routing;
+- cloud or embedded Hindsight supervision;
+- automatic reflection or consolidation scheduling; and
+- automatic legacy-bank migration, rebuilding, pruning, deduplication, or reconsolidation.
 
-Stop the custom-provider approach if:
-
-- released bundled Hermes plus configuration satisfies the complete current-query relevance and
-  durable replay contract;
-- the proof starts reproducing most cloud, embedded, installer, setup-wizard, or bank-control
-  surfaces of the bundled provider; or
-- the pinned public API cannot prove destination-matched stable replace/replay without source loss.
-
-At that point, upstream only the generic core fixes or reduce this project to a thin compatibility
-shell. The current decision is to continue; the dated rationale and still-open named Hermes PRs are
-recorded in [docs/compatibility.md](docs/compatibility.md).
-
-## Runtime isolation
-
-Proof work uses disposable resources:
-
-- a temporary virtual environment;
-- a temporary `HERMES_HOME` and profile;
-- a deterministic fake Hindsight HTTP service; and
-- a separately named disposable live test bank only after fake-server tests pass.
-
-The active Hermes configuration, gateway, bundled provider, live Hindsight service, and production
-bank are outside this repository's proof workflow.
+Revisit a deferred item only after observed use shows that its absence materially harms the primary
+product goal.
 
 ## Publication policy
 
-No automated release workflow is present during the proof. Before publication, complete
-[docs/public-release-checklist.md](docs/public-release-checklist.md), select a supported version
-matrix, add verified install instructions, complete preservation rehearsal, and cut an explicit
-pre-release rather than publishing from every main-branch commit.
+No automated release workflow is present during proof work. Before publication, complete
+[docs/public-release-checklist.md](docs/public-release-checklist.md), verify the supported version
+matrix and artifacts in fresh environments, and cut an explicit prerelease rather than publishing
+from every main-branch commit.
