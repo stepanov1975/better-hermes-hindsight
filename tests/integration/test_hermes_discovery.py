@@ -15,6 +15,7 @@ RELEASE_COMMIT = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
 RELEASE_VERSION = "0.19.0"
 
 _DISCOVERY_SCRIPT = r"""
+import inspect
 import json
 import sys
 from importlib import metadata
@@ -50,7 +51,19 @@ assert provider.is_available() is True
 assert provider.get_tool_schemas() == []
 assert registrations == ["better_hindsight"]
 
+from agent.codex_runtime import run_codex_app_server_turn
+from agent.turn_context import build_turn_context
+
+# Compatibility oracle only: the pinned codex_app_server path receives the plain user_message
+# directly and skips the normal API-content sidecar. Better Hindsight does not patch or emulate
+# support for this explicitly excluded runtime, and this proof performs no remote recall there.
+codex_source = inspect.getsource(run_codex_app_server_turn)
+turn_context_source = inspect.getsource(build_turn_context)
+assert "run_turn(user_input=user_message)" in codex_source
+assert 'api_mode", None) != "codex_app_server"' in turn_context_source
+
 print(json.dumps({
+    "codex_app_server_memory_supported": False,
     "commit": direct_url["vcs_info"]["commit_id"],
     "discovered": names.count("better_hindsight"),
     "loaded": provider.name,
@@ -120,6 +133,7 @@ def test_exact_released_loader_discovers_loads_and_registers_one_provider(
     assert completed.returncode == 0, completed.stderr[-4000:]
     payload = json.loads(completed.stdout.splitlines()[-1])
     assert payload == {
+        "codex_app_server_memory_supported": False,
         "commit": RELEASE_COMMIT,
         "discovered": 1,
         "loaded": "better_hindsight",

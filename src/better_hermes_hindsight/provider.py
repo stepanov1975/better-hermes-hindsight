@@ -11,7 +11,11 @@ from agent.memory_provider import MemoryProvider  # type: ignore[import-untyped]
 from better_hermes_hindsight import PROVIDER_ID
 from better_hermes_hindsight.client import is_available as is_hindsight_available
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
-from better_hermes_hindsight.formatting import format_recall_context, project_query
+from better_hermes_hindsight.formatting import (
+    SYSTEM_PROMPT_BLOCK,
+    format_recall_context,
+    project_query,
+)
 from better_hermes_hindsight.runtime import (
     ProcessRuntimeHandle,
     RuntimeConfigurationConflict,
@@ -29,7 +33,7 @@ RECALL_FAILED_DIAGNOSTIC = "Better Hindsight recall failed open."
 
 
 class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
-    """A lightweight authorized handle over the one Task 2 process runtime."""
+    """A lightweight authorized handle over the shared process runtime."""
 
     __slots__ = ("_active", "_config", "_runtime")
 
@@ -48,6 +52,11 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         """Check only the exact local SDK dependency; never read config or contact a service."""
 
         return is_hindsight_available()
+
+    def system_prompt_block(self) -> str:
+        """Return the byte-stable policy governing the exact Better recall envelope."""
+
+        return SYSTEM_PROMPT_BLOCK
 
     def initialize(self, session_id: str, **kwargs: object) -> None:
         """Authorize one handle, then acquire the shared local process runtime.
@@ -126,7 +135,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             return ""
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
-        """Remain inert: Task 4 never warms a stale previous-turn query."""
+        """Remain inert so recall always uses the current query."""
 
         return None
 
@@ -138,12 +147,12 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         session_id: str = "",
         messages: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Perform no writes in the recall-only Task 4 checkpoint."""
+        """Perform no writes in the recall-only Task 1 checkpoint."""
 
         return None
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
-        """Expose no tools in the recall-only checkpoint."""
+        """Expose no model-facing memory tools in the first prerelease."""
 
         return []
 

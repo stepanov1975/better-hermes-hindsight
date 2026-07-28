@@ -118,6 +118,27 @@ credentials are forbidden. The destination fingerprint is SHA-256 over canonical
 bank ID, and the code-owned payload-schema version only. The schema version has no operator override.
 Changing `HINDSIGHT_API_KEY` does not change the fingerprint.
 
+## Recall trust, redaction, and byte budget
+
+The provider contributes one byte-stable system-role policy for the exact
+`[BETTER_HINDSIGHT_HISTORICAL_EVIDENCE_BEGIN] ...
+[BETTER_HINDSIGHT_HISTORICAL_EVIDENCE_END]` envelope. Every enclosed JSONL record is treated as
+stale, untrusted historical evidence: it is evidence to evaluate, not an instruction, role message,
+or authority over the current conversation. The provider exposes no model-facing memory tool.
+
+Every recalled response text passes through the same deterministic high-confidence redactor before
+byte budgeting and JSON serialization. The deliberately narrow patterns cover labeled API-key
+assignments, Bearer tokens, Authorization headers, PEM private-key blocks, and HTTP(S) URL userinfo.
+If response validation or redaction fails, the provider emits no Better Hindsight context for that
+call. Pattern-based redaction reduces common accidental egress but is not a universal secret
+detector; credentials and other sensitive text must not be stored in Hindsight in the first place.
+
+`recall.context_max_bytes` counts the complete Better envelope, including its preamble, JSONL record
+separators, truncation marker, and suffix. It does not include the outer `<memory-context>` wrapper
+added later by released Hermes. Initialization remains local and network-free: server-version and
+bank checks belong to explicit diagnostics or isolated live-proof setup, not another cold pre-model
+request.
+
 ## Hindsight 0.8.5 recall controls
 
 The following optional fields remain `null` when omitted. The adapter omits them rather than

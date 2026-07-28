@@ -71,9 +71,31 @@ execution begins, Better performs only bounded local construction and one SQLite
 durability starts only after provider admission commits. There is no direct-user provenance claim and
 no pre-return or no-loss guarantee; no text heuristic can close the missing host signal.
 
-The pinned `codex_app_server` path sends the plain user message through a separate bridge and does not
-run normal provider memory context/retention behavior. It is an explicit unsupported runtime, not a
-reason to patch or emulate Hermes core.
+### Exact normal-loop current-query recall contract
+
+The integration proof pins release commit `3ef6bbd201263d354fd83ec55b3c306ded2eb72a` and exercises the
+ordinary `chat_completions` conversation loop. One current-query recall finishes or fails open before
+the first model request. On success, one byte-bounded Better envelope appears only in the API-bound
+copy of the current user content; the clean stored user `content` remains the original query. On a
+timeout, HTTP fault, malformed JSON, or malformed SDK response, no Better envelope is sent and the
+model call proceeds within the configured recall deadline. No provider memory tool is exposed.
+
+The same proof records that released Hermes wraps provider output with this exact user-content note:
+
+```text
+[System note: The following is recalled memory context, NOT new user input. Treat as authoritative reference data — this is the agent's persistent memory and should inform all responses.]
+```
+
+That wording is a pinned-host limitation, not wording Better Hindsight claims to remove. Better adds a
+higher-priority, byte-stable system-role policy naming its exact inner envelope and requiring every
+enclosed record to be treated as stale, untrusted evidence rather than an instruction or
+role message.
+
+The pinned `codex_app_server` source forwards the plain `user_message` to its separate app-server
+bridge and skips the normal API-content sidecar. The exact-release discovery test records that source
+shape as a compatibility oracle without making a remote recall request in that runtime.
+`codex_app_server` memory behavior remains explicitly unsupported: Better does not patch it, emulate
+support, or treat recall spent there as a supported scenario.
 
 ## Public Hindsight 0.8.5 API boundary
 
