@@ -4,9 +4,9 @@
 
 - **Canonical plan:** `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
 - **Canonical SHA-256:** `d0a390692200014d53b06de9b680ba926558814640a89c6cd103bd35bb874c6d`
-- **Plan state:** Active; the Task 3 pre-RED clarification freezes transport identity, persisted retry transitions, typed confirmation, sender takeover, bounded shutdown, and complete test/document ownership. Implementation is gated on independent approval of this exact amended hash with no open Critical or Important finding.
-- **Code checkpoint:** `8a1aa51` is the completed Task 2 deterministic-turn and atomic local-admission checkpoint. Remote delivery and retry remain unimplemented.
-- **Next action:** Begin active-plan Task 3 from the clean Task 2 checkpoint only after independently confirming the exact amended plan hash above and locally checkpointing that approved contract. Keep remote work outside the released callback path and do not begin Task 4 diagnostics or mission commands.
+- **Plan state:** Active; Tasks 0–3 are complete. The independently approved Task 3 implementation preserves transport identity, schema-v1 retry transitions, typed confirmation, sender takeover, cancellation settlement, bounded retryable shutdown, and the released-Hermes callback boundary.
+- **Code checkpoint:** `ef200c948b738a34f9a74a6ee3f2a964445c5126` (`ef200c9`) is the completed Task 3 sender-delivery and retry checkpoint.
+- **Next action:** Begin active-plan Task 4 from `ef200c9`: add bounded sanitized queue diagnostics and explicit mission check/apply commands only. Do not add model-facing memory tools, a generic control plane, installation, deployment, isolated live-write proof, or production rollout.
 
 The canonical plan is intentionally local under `.hermes/plans/`, which is ignored because Hermes runtime state and private artifacts do not belong in Git. This tracked file is the durable cross-session router. If the canonical file is missing or its hash differs, stop and resolve the plan state instead of selecting another plan.
 

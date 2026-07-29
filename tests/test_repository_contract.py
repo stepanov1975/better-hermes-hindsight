@@ -96,15 +96,19 @@ def test_best_effort_provider_scope_and_lifecycle_are_explicit() -> None:
 
 
 def test_task3_delivery_checkpoint_is_documented_without_task4_or_rollout_claims() -> None:
-    public_contract = "\n".join(
-        _read(path) for path in ("README.md", "docs/configuration.md", "docs/operations.md")
+    readme = _read("README.md")
+    _assert_terms(
+        readme,
+        "sender delivery is implemented",
+        "completed sender-delivery checkpoint",
+        "retention remains disabled by default",
+        "managed installation",
+        "isolated live-write proof remain incomplete",
     )
 
+    delivery_contract = _read("docs/configuration.md") + _read("docs/operations.md")
     _assert_terms(
-        public_contract,
-        "sender delivery is implemented",
-        "retention remains disabled by default",
-        "managed installation and isolated live-write proof remain incomplete",
+        delivery_contract,
         "profile-wide POSIX advisory lock",
         "bounded cross-process polling",
         "typed confirmation",
@@ -195,7 +199,7 @@ def test_callback_boundary_and_retired_plan_precedence_are_explicit() -> None:
         "2026-07-25_194157-better-hermes-hindsight-implementation.md",
         "2026-07-27_055353-plugin-only-rescope.md",
         "must never drive implementation",
-        "active-plan Task 3",
+        "active-plan Task 4",
     )
 
 
@@ -330,6 +334,19 @@ def test_task3_sender_contract_is_frozen_before_red_tests() -> None:
 
 def test_local_plan_files_match_the_tracked_router_when_present() -> None:
     router = _read("IMPLEMENTATION.md")
+    _assert_terms(
+        router,
+        "ef200c948b738a34f9a74a6ee3f2a964445c5126",
+        "active-plan Task 4",
+    )
+    normalized_router = _normalized(router)
+    for premature_completion in (
+        "Task 4 is complete",
+        "Tasks 0–4 are complete",
+        "completed Task 4",
+    ):
+        assert premature_completion.casefold() not in normalized_router
+
     local_plan_pair = _read_local_plan_pair()
     if local_plan_pair is None:
         return
@@ -342,7 +359,7 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
     assert index_hash_match is not None
     assert active_match.group(1).endswith("2026-07-27_071437-best-effort-plugin.md")
     assert hash_match.group(1) == index_hash_match.group(1)
-    _assert_terms(plan_index, "8a1aa51", "active-plan Task 3")
+    _assert_terms(plan_index, "ef200c9", "active-plan Task 4")
 
     active_path = ROOT / active_match.group(1)
     assert active_path == LOCAL_PLAN_PATH

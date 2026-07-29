@@ -81,10 +81,10 @@ activation, publication, and any production mutation remain separately authorize
 ## Repository and implementation authority
 
 The tracked [implementation router](IMPLEMENTATION.md) identifies the canonical local plan, its hash,
-the completed local-admission checkpoint, the active sender-delivery stage, and two explicitly retired
-plans. Never infer implementation requirements from a retired plan or from stale proof wording. The
-separate Hermes-core worktree is frozen research and must not be imported, installed, committed, or
-treated as a prerequisite.
+the completed sender-delivery checkpoint, the active diagnostics/mission-command stage, and two
+explicitly retired plans. Never infer implementation requirements from a retired plan or from stale
+proof wording. The separate Hermes-core worktree is frozen research and must not be imported,
+installed, committed, or treated as a prerequisite.
 
 The exact version/source observations are in [docs/compatibility.md](docs/compatibility.md). Sender
 recovery, retry, and shutdown semantics are in [docs/operations.md](docs/operations.md). Sanitized
