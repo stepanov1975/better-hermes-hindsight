@@ -77,7 +77,7 @@ TASK4_FROZEN_AUTHORITY_PATHS = (
 )
 
 _TASK4_FROZEN_AUTHORITY_SHA256 = {
-    "IMPLEMENTATION.md": "08af9c74f5baff3f37796c3053fc8ffe94c8e3284ff0911253e83d47ceaca96b",
+    "IMPLEMENTATION.md": "dc68f9887f581c5034175004aa91192104b9d4ed4ec4c0fcdfb50e61e9bd5c2a",
     "README.md": "45217602de050da35375026c4c5e5bf631a13443dbaeca5afc9e2055bec5986c",
     "DESIGN.md": "cab348c60b052efbbbd6753a411bed96afcac5d54069c29f69f48a158487db61",
     "docs/audit-findings.md": "af1134c0772062eacb7185018a0b2585260cd79955974a5acbf145c2fc63fba2",
@@ -413,7 +413,7 @@ def test_callback_boundary_and_retired_plan_precedence_are_explicit() -> None:
         "2026-07-25_194157-better-hermes-hindsight-implementation.md",
         "2026-07-27_055353-plugin-only-rescope.md",
         "must never drive implementation",
-        "active-plan Task 4",
+        "active-plan Task 5",
     )
 
 
@@ -551,14 +551,14 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
     router = _read("IMPLEMENTATION.md")
     _assert_terms(
         router,
-        "ef200c948b738a34f9a74a6ee3f2a964445c5126",
-        "active-plan Task 4",
+        "9843a9b802ce54b5483a2adb7e95aff989d1df0f",
+        "active-plan Task 5",
     )
     normalized_router = _normalized(router)
     for premature_completion in (
-        "Task 4 is complete",
-        "Tasks 0–4 are complete",
-        "completed Task 4",
+        "Task 5 is complete",
+        "Tasks 0–5 are complete",
+        "completed Task 5",
     ):
         assert premature_completion.casefold() not in normalized_router
 
@@ -576,7 +576,7 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
     assert index_hash_match is not None
     assert active_match.group(1).endswith("2026-07-27_071437-best-effort-plugin.md")
     assert hash_match.group(1) == index_hash_match.group(1)
-    _assert_terms(plan_index, "ef200c9", "active-plan Task 4")
+    _assert_terms(plan_index, "9843a9b", "active-plan Task 5")
 
     active_path = ROOT / active_match.group(1)
     assert active_path == LOCAL_PLAN_PATH
@@ -725,20 +725,23 @@ def test_task4_status_document_oracle_rejects_structural_and_authority_drift() -
                 _assert_task4_frozen_authority_hashes(changed, expected_hashes)
 
 
-def test_task4_approved_contract_and_active_implementation_route_are_frozen() -> None:
+def test_task4_completed_implementation_and_task5_route_are_frozen() -> None:
     router = _read("IMPLEMENTATION.md")
     _assert_terms(
         router,
         "f4d71a33f327510f70e64a1e3d0533281fd8a22862c42e5fbe54d54c08fb6562",
-        "both active-plan Task 4 contract gates are complete",
+        "Tasks 0–4 are complete",
         "0bc681cf6ab066bce6a9793c9d72157886aae2e4",
-        "Task 4 implementation and verification are active",
-        "no retry/drain command",
+        "9843a9b802ce54b5483a2adb7e95aff989d1df0f",
+        "Active-plan Task 5 is next",
+        "Do not install into a live Hermes home",
     )
 
+
+def test_local_task4_plan_contract_matches_completed_implementation_when_present() -> None:
     local_plan_pair = _read_local_plan_pair()
     if local_plan_pair is None:
-        return
+        pytest.skip("ignored local planning aids are absent from this clean checkout")
     plan_bytes, plan_index_bytes = local_plan_pair
     plan = plan_bytes.decode("utf-8", errors="strict")
     plan_index = plan_index_bytes.decode("utf-8", errors="strict")
@@ -836,7 +839,9 @@ def test_task4_approved_contract_and_active_implementation_route_are_frozen() ->
     _assert_terms(
         plan_index,
         "f4d71a33f327510f70e64a1e3d0533281fd8a22862c42e5fbe54d54c08fb6562",
-        "requires independent approval before implementation resumes",
+        "Tasks 0–4 are complete",
+        "active-plan Task 5 is next",
+        "9843a9b",
     )
 
 

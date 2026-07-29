@@ -4,9 +4,9 @@
 
 - **Canonical plan:** `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
 - **Canonical SHA-256:** `f4d71a33f327510f70e64a1e3d0533281fd8a22862c42e5fbe54d54c08fb6562`
-- **Plan state:** Active; Tasks 0–3 and both active-plan Task 4 contract gates are complete. The original contract was checkpointed as `9579d8af0098899cdb0ebe3447c2bb57fb4519da`; the SQLite WAL/SHM amendment was independently approved and checkpointed as `0bc681cf6ab066bce6a9793c9d72157886aae2e4`. Deterministic RED evidence is preserved, and Task 4 implementation and verification are active.
-- **Code checkpoint:** `ef200c948b738a34f9a74a6ee3f2a964445c5126` (`ef200c9`) is the completed Task 3 sender-delivery and retry checkpoint.
-- **Next action:** Finish and independently approve the Task 4 implementation from amended contract checkpoint `0bc681c`. Add only bounded sanitized queue diagnostics and explicit mission check/apply commands—no retry/drain command, IPC, model-facing memory tools, generic control plane, installation, deployment, isolated live-write proof, or production rollout.
+- **Plan state:** Active; Tasks 0–4 are complete. The Task 4 contract and SQLite WAL/SHM amendment remain checkpointed as `9579d8af0098899cdb0ebe3447c2bb57fb4519da` and `0bc681cf6ab066bce6a9793c9d72157886aae2e4`; the exact implementation passed independent specification and adversarial review before checkpoint. Active-plan Task 5 is next.
+- **Code checkpoint:** `9843a9b802ce54b5483a2adb7e95aff989d1df0f` (`9843a9b`) is the completed Task 4 bounded diagnostics and explicit mission-management checkpoint.
+- **Next action:** Begin active-plan Task 5 by freezing the managed wheel-plus-shim ownership, health-check, and rollback contract, then write deterministic transactional RED tests. Do not install into a live Hermes home, select the provider, restart Hermes, touch profile configuration/outboxes, contact Hindsight, deploy, or roll out production while implementing it.
 
 The canonical plan is intentionally local under `.hermes/plans/`, which is ignored because Hermes runtime state and private artifacts do not belong in Git. This tracked file is the durable cross-session router. If the canonical file is missing or its hash differs, stop and resolve the plan state instead of selecting another plan.
 
