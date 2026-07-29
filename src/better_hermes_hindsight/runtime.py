@@ -8,15 +8,17 @@ import concurrent.futures
 import contextlib
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Generic, TypeVar
+from typing import Generic, Protocol, TypeVar
 
 from better_hermes_hindsight.client import (
     HindsightClientProtocol,
     create_hindsight_client,
 )
 from better_hermes_hindsight.config import BetterHindsightConfig
+from better_hermes_hindsight.outbox import AdmissionResult, AdmissionStatus, SQLiteOutbox
+from better_hermes_hindsight.retention import RetainedSegment, build_retained_segments
 
 ASYNC_CANCELLATION_DRAIN_SECONDS = 0.05
 
@@ -220,8 +222,25 @@ class AsyncRunner:
         state.done.wait(timeout=ASYNC_CANCELLATION_DRAIN_SECONDS)
 
 
+class OutboxProtocol(Protocol):
+    """The local admission and close surface owned by one process runtime."""
+
+    def admit(self, segments: Sequence[RetainedSegment]) -> AdmissionResult:
+        """Atomically admit one complete retained turn."""
+        ...
+
+    def close(self) -> None:
+        """Close the sole process-owned outbox connection."""
+        ...
+
+
 ClientFactory = Callable[[BetterHindsightConfig], HindsightClientProtocol]
+OutboxFactory = Callable[[BetterHindsightConfig], OutboxProtocol]
 _RuntimeOperation = Callable[[HindsightClientProtocol], Awaitable[_T]]
+
+
+def _open_outbox(config: BetterHindsightConfig) -> OutboxProtocol:
+    return SQLiteOutbox.open(config)
 
 
 async def _construct_client(
@@ -240,6 +259,9 @@ class ProcessRuntime:
         "_client",
         "_finalized",
         "_lifecycle",
+        "_outbox",
+        "_retain_segment_max_bytes",
+        "_retain_tags",
         "_runner",
     )
 
@@ -248,19 +270,43 @@ class ProcessRuntime:
         config: BetterHindsightConfig,
         *,
         client_factory: ClientFactory = create_hindsight_client,
+        outbox_factory: OutboxFactory = _open_outbox,
     ) -> None:
         self._runner = AsyncRunner()
         self._lifecycle = threading.Condition()
         self._active_calls = 0
         self._finalized = False
+        self._outbox: OutboxProtocol | None = None
+        self._retain_segment_max_bytes = config.retain.segment_max_bytes
+        self._retain_tags = config.retain.tags
+        client: HindsightClientProtocol | None = None
         try:
-            self._client = self._runner.run(lambda: _construct_client(client_factory, config))
+            client = self._runner.run(lambda: _construct_client(client_factory, config))
+            self._client = client
+            if config.retain.enabled:
+                self._outbox = outbox_factory(config)
         except BaseException:
-            self._runner.shutdown()
+            if client is not None:
+                with contextlib.suppress(BaseException):
+                    self._runner.run(client.close)
+            with contextlib.suppress(BaseException):
+                self._runner.shutdown()
             raise
 
     def __repr__(self) -> str:
         return "ProcessRuntime()"
+
+    def _begin_operation(self) -> None:
+        with self._lifecycle:
+            if self._finalized:
+                raise RuntimeFinalizedError("Better Hindsight process runtime is finalized.")
+            self._active_calls += 1
+
+    def _finish_operation(self) -> None:
+        with self._lifecycle:
+            self._active_calls -= 1
+            if self._active_calls == 0:
+                self._lifecycle.notify_all()
 
     def call(
         self,
@@ -270,17 +316,36 @@ class ProcessRuntime:
     ) -> _T:
         """Run an operation against the shared client on its owning loop."""
 
-        with self._lifecycle:
-            if self._finalized:
-                raise RuntimeFinalizedError("Better Hindsight process runtime is finalized.")
-            self._active_calls += 1
+        self._begin_operation()
         try:
             return self._runner.run(lambda: operation(self._client), timeout=timeout)
         finally:
-            with self._lifecycle:
-                self._active_calls -= 1
-                if self._active_calls == 0:
-                    self._lifecycle.notify_all()
+            self._finish_operation()
+
+    def admit_turn(
+        self,
+        *,
+        session_id: str,
+        user_content: str,
+        assistant_content: str,
+    ) -> AdmissionResult:
+        """Construct and atomically admit one turn without client or network work."""
+
+        self._begin_operation()
+        try:
+            outbox = self._outbox
+            if outbox is None:
+                return AdmissionResult(AdmissionStatus.INVALID)
+            segments = build_retained_segments(
+                session_id=session_id,
+                user_content=user_content,
+                assistant_content=assistant_content,
+                tags=self._retain_tags,
+                segment_max_bytes=self._retain_segment_max_bytes,
+            )
+            return outbox.admit(segments)
+        finally:
+            self._finish_operation()
 
     def recall(self, query: str, *, timeout: float) -> object:
         """Recall through the shared client under the caller's total deadline."""
@@ -288,7 +353,7 @@ class ProcessRuntime:
         return self.call(lambda client: client.recall(query), timeout=timeout)
 
     def finalize(self) -> bool:
-        """Close the client exactly once on its owning loop, then stop that loop."""
+        """Close the outbox then client exactly once before stopping the owning loop."""
 
         if self._runner.in_owning_loop:
             raise AsyncRunnerReentrancyError(
@@ -300,10 +365,26 @@ class ProcessRuntime:
             self._finalized = True
             while self._active_calls:
                 self._lifecycle.wait()
+
+        failure: BaseException | None = None
+        outbox = self._outbox
+        if outbox is not None:
+            try:
+                outbox.close()
+            except BaseException as error:
+                failure = error
         try:
             self._runner.run(self._client.close)
-        finally:
+        except BaseException as error:
+            if failure is None:
+                failure = error
+        try:
             self._runner.shutdown()
+        except BaseException as error:
+            if failure is None:
+                failure = error
+        if failure is not None:
+            raise failure
         return True
 
 
@@ -335,6 +416,21 @@ class ProcessRuntimeHandle:
 
         return self._require_runtime().call(operation, timeout=timeout)
 
+    def admit_turn(
+        self,
+        *,
+        session_id: str,
+        user_content: str,
+        assistant_content: str,
+    ) -> AdmissionResult:
+        """Request one local admission through the shared process runtime."""
+
+        return self._require_runtime().admit_turn(
+            session_id=session_id,
+            user_content=user_content,
+            assistant_content=assistant_content,
+        )
+
     def recall(self, query: str, *, timeout: float) -> object:
         """Recall through the shared process runtime."""
 
@@ -361,6 +457,7 @@ def acquire_process_runtime(
     config: BetterHindsightConfig,
     *,
     client_factory: ClientFactory = create_hindsight_client,
+    outbox_factory: OutboxFactory = _open_outbox,
 ) -> ProcessRuntimeHandle:
     """Acquire a lightweight handle to the one process runtime for an exact configuration."""
 
@@ -375,7 +472,11 @@ def acquire_process_runtime(
                 ) from None
             return ProcessRuntimeHandle(_ACTIVE_RUNTIME)
 
-        runtime = ProcessRuntime(config, client_factory=client_factory)
+        runtime = ProcessRuntime(
+            config,
+            client_factory=client_factory,
+            outbox_factory=outbox_factory,
+        )
         _ACTIVE_CONFIG = config
         _ACTIVE_RUNTIME = runtime
         return ProcessRuntimeHandle(runtime)

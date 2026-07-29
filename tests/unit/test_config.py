@@ -12,6 +12,7 @@ import pytest
 from better_hermes_hindsight.config import (
     DEFAULT_API_URL,
     DEFAULT_BANK_ID,
+    OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES,
     PAYLOAD_SCHEMA_VERSION,
     ConfigError,
     load_config,
@@ -233,6 +234,10 @@ def test_unbounded_json_integer_is_a_sanitized_config_error(tmp_path: Path) -> N
         ({"recall": {"tags_match": "all"}}, "recall.tags_match"),
         ({"retain": {"tags_mode": "append"}}, "retain.tags_mode"),
         ({"outbox": {"payload_schema": "turn-v2"}}, "outbox.payload_schema"),
+        (
+            {"outbox": {"row_accounting_allowance_bytes": 1024}},
+            "outbox.row_accounting_allowance_bytes",
+        ),
         ({"destination_fingerprint": "operator-value"}, "destination_fingerprint"),
         (
             {
@@ -526,13 +531,28 @@ def test_invalid_values_fail_with_sanitized_actionable_errors(
 
 
 def test_cross_field_queue_bounds_are_enforced(tmp_path: Path) -> None:
+    assert OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES == 1024
+
+    accepted = load_config(
+        hermes_home=tmp_path / "accepted",
+        environ={},
+        injected={
+            "retain": {"segment_max_bytes": 2048},
+            "outbox": {"max_pending_bytes": 2048 + OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES},
+        },
+    )
+    assert (
+        accepted.retain.segment_max_bytes + OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES
+        == accepted.outbox.max_pending_bytes
+    )
+
     with pytest.raises(ConfigError, match="segment_max_bytes.*max_pending_bytes"):
         load_config(
-            hermes_home=tmp_path,
+            hermes_home=tmp_path / "one-byte-below",
             environ={},
             injected={
-                "retain": {"segment_max_bytes": 1024},
-                "outbox": {"max_pending_bytes": 1023},
+                "retain": {"segment_max_bytes": 2048},
+                "outbox": {"max_pending_bytes": 2048 + OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES - 1},
             },
         )
 

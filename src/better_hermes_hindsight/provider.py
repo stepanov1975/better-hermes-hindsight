@@ -1,4 +1,4 @@
-"""Recall-only Hermes ``MemoryProvider`` for an external Hindsight 0.8.5 service."""
+"""Hermes ``MemoryProvider`` for bounded recall and local turn admission."""
 
 from __future__ import annotations
 
@@ -30,16 +30,18 @@ RUNTIME_INACTIVE_DIAGNOSTIC = (
     "Better Hindsight is inactive: runtime unavailable; restart may be required."
 )
 RECALL_FAILED_DIAGNOSTIC = "Better Hindsight recall failed open."
+RETENTION_ADMISSION_REJECTED_DIAGNOSTIC = "Better Hindsight local retention admission was rejected."
 
 
 class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
     """A lightweight authorized handle over the shared process runtime."""
 
-    __slots__ = ("_active", "_config", "_runtime")
+    __slots__ = ("_config", "_recall_enabled", "_retain_enabled", "_runtime")
 
     def __init__(self) -> None:
-        self._active = False
         self._config: BetterHindsightConfig | None = None
+        self._recall_enabled = False
+        self._retain_enabled = False
         self._runtime: ProcessRuntimeHandle | None = None
 
     @property
@@ -66,7 +68,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         request is made here.
         """
 
-        del session_id  # Released prefetch does not pass it back; Task 4 has no session cache.
+        del session_id  # Released prefetch does not pass the initialization session back.
         self._deactivate()
 
         hermes_home = kwargs.get("hermes_home")
@@ -90,7 +92,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                 user_id_alt=_optional_string(kwargs.get("user_id_alt")),
                 agent_context=agent_context,
             )
-        if not authorization.recall_enabled:
+        if not authorization.memory_enabled:
             logger.debug(AUTHORIZATION_INACTIVE_DIAGNOSTIC)
             return
 
@@ -104,8 +106,9 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             return
 
         self._config = config
+        self._recall_enabled = authorization.recall_enabled
+        self._retain_enabled = authorization.retain_enabled
         self._runtime = runtime
-        self._active = True
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Recall exactly the current projected query under the configured total deadline."""
@@ -113,7 +116,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         del session_id  # Released Hermes supplies the documented default empty value.
         config = self._config
         runtime = self._runtime
-        if not self._active or config is None or runtime is None:
+        if not self._recall_enabled or config is None or runtime is None:
             return ""
         if not isinstance(query, str) or not query:
             return ""
@@ -147,9 +150,37 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         session_id: str = "",
         messages: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Perform no writes in the recall-only Task 1 checkpoint."""
+        """Attempt short local admission from the released-Hermes background executor.
 
-        return None
+        Local durability begins only after this callback's complete SQLite transaction commits.
+        Callbacks cancelled, never run, or lost before that commit remain outside the guarantee.
+        The raw ``messages`` transcript is deliberately ignored.
+        """
+
+        del messages
+        config = self._config
+        runtime = self._runtime
+        if not self._retain_enabled or config is None or runtime is None:
+            return
+        if (
+            not isinstance(user_content, str)
+            or not user_content.strip()
+            or not isinstance(assistant_content, str)
+            or not assistant_content.strip()
+        ):
+            return
+
+        try:
+            result = runtime.admit_turn(
+                session_id=session_id,
+                user_content=user_content,
+                assistant_content=assistant_content,
+            )
+            if result.accepted:
+                return
+        except Exception:
+            pass
+        logger.warning(RETENTION_ADMISSION_REJECTED_DIAGNOSTIC)
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         """Expose no model-facing memory tools in the first prerelease."""
@@ -163,8 +194,9 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
 
     def _deactivate(self) -> None:
         runtime = self._runtime
-        self._active = False
         self._config = None
+        self._recall_enabled = False
+        self._retain_enabled = False
         self._runtime = None
         if runtime is not None:
             runtime.close()
@@ -184,6 +216,7 @@ __all__ = [
     "AUTHORIZATION_INACTIVE_DIAGNOSTIC",
     "CONFIG_INACTIVE_DIAGNOSTIC",
     "RECALL_FAILED_DIAGNOSTIC",
+    "RETENTION_ADMISSION_REJECTED_DIAGNOSTIC",
     "RUNTIME_INACTIVE_DIAGNOSTIC",
     "BetterHindsightMemoryProvider",
     "create_provider",

@@ -93,7 +93,7 @@ and invalid ranges are errors rather than silent fallbacks.
 | `recall.context_max_bytes` | `8192` | 1 through 1,048,576 bytes |
 | `retain.enabled` | `false` | Boolean; explicit opt-in only |
 | `retain.timeout_seconds` | `60.0` | Greater than zero, at most 300 seconds |
-| `retain.segment_max_bytes` | `65536` | 1 through 16,777,216 bytes and must not exceed `outbox.max_pending_bytes` |
+| `retain.segment_max_bytes` | `65536` | 1 through 16,777,216 bytes; plus the code-owned 1,024-byte row allowance it must not exceed `outbox.max_pending_bytes` |
 | `retain.observation_scopes` | `null` | `null`, `combined`, `shared`, or `[[]]` |
 | `retain.tags` | `[]` | At most 64 unique non-empty tags, each at most 256 characters |
 | mission texts | `null` | Distinct optional non-empty `retain_mission` and `observations_mission` fields |
@@ -106,8 +106,11 @@ and invalid ranges are errors rather than silent fallbacks.
 | `outbox.retry_max_seconds` | `300.0` | Greater than zero, at most 3,600 seconds |
 
 `max_pending_rows` and `max_pending_bytes` are logical admission limits, not an exact cap on the
-SQLite database, indexes, or WAL file. Operators may lower them, but configuration cannot raise them
-above the documented finite ceilings.
+SQLite database, indexes, or WAL file. Every unconfirmed `pending` or `sending` row consumes its exact
+UTF-8 segment-content bytes plus a code-owned, non-configurable 1,024-byte accounting allowance.
+Configuration therefore requires
+`retain.segment_max_bytes + 1024 <= outbox.max_pending_bytes`. Operators may lower the limits, but
+configuration cannot raise them above the documented finite ceilings.
 
 The retain deadline is consumed by the future sender around one remote synchronous retain attempt;
 it is not a user-response deadline. Remote work never runs inside the released `sync_turn()` callback.
@@ -176,11 +179,51 @@ has no per-user bank router.
 Multiple exact tuples may represent the same asserted principal, but configuration cannot route
 different users to different banks.
 
-## Retention and mission behavior
+## Retention construction and local admission
 
 Enabling `retain.enabled` opts into completed-turn callbacks released Hermes actually supplies. It
-does not establish direct-user provenance. Local durability starts only after the future provider
-admission commits; there is no pre-return or no-loss guarantee.
+does not establish direct-user provenance. Released Hermes schedules `sync_turn()` on its background
+executor after a completed turn; the provider does not run local admission inline before returning
+the answer. A callback that is cancelled, never runs, or is lost before its SQLite transaction commits
+remains outside the durability guarantee.
+
+The callback ignores the raw `messages` transcript and uses only its direct non-empty user and
+assistant text arguments. Before hashing, segmentation, or SQLite admission, both role texts and the
+configured low-cardinality tags pass through the same deliberately narrow deterministic redactor
+described above. The canonical source is compact deterministic UTF-8 JSON with payload schema
+`better-hindsight-turn-v1`, SHA-256 of the raw session identifier, explicit `user` and `assistant`
+role records, and sorted configured tags. The raw session identifier is not stored. Segments preserve
+Unicode code-point boundaries and concatenate exactly to that canonical source.
+
+Each segment ID starts with `better-hindsight-turn-v1:` followed by lowercase SHA-256 of its final
+canonical redacted segment record. That record includes the payload schema, digest of the complete
+canonical source, zero-based segment index and total count, and exact segment content. Identical rows
+are admission no-ops; an ID collision or immutable-row mismatch rejects the complete turn.
+
+Admission uses one `BEGIN IMMEDIATE` transaction. Capacity is checked against all existing
+unconfirmed rows plus every new nonduplicate segment before any insertion, so a completed turn is
+inserted in full or not at all. Local durability begins only after that transaction commits. Queue
+saturation, bounded SQLite contention, construction failure, runtime finalization, or another local
+failure fails open for the conversation and emits only the fixed warning
+`Better Hindsight local retention admission was rejected.` The warning contains no turn payload,
+session identifier, endpoint, bank, credential, or path.
+
+The profile-local outbox uses private SQLite schema version 1. A new/version-0 database is initialized
+to v1, reopening v1 is idempotent, and unknown nonzero versions are rejected without an invented
+legacy migration. The configured path is revalidated inside `hermes_home` when opened, including
+symlink escapes. The pre-created database is opened existing-only, and its no-follow device/inode
+identity is checked immediately after connection but before schema writes and again after
+initialization. Newly created outbox directories use mode `0700` on POSIX; the database and reserved
+profile lock file use `0600`. Pre-existing parent-directory modes are not changed, and an existing
+file is permission-corrected only after it passes confinement and private-schema validation; a
+rejected foreign file is left unchanged.
+
+Task 2 stops at local admission: it starts no sender, acquires no sender lock, performs no Hindsight
+retain request, and does not delete confirmed rows. Admitted rows therefore remain local pending data
+until the separately implemented sender phase. Deterministic IDs support idempotent processing but do
+not create an exactly-once or zero-loss guarantee.
+
+## Mission behavior
 
 `retain_mission` and `observations_mission` are independent optional texts. Loading and initialization
 do not check or apply them. Mission check/apply is explicit future Task 4 operator behavior, with

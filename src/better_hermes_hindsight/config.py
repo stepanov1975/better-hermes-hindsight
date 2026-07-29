@@ -32,6 +32,7 @@ DEFAULT_OUTBOX_BUSY_TIMEOUT_SECONDS = 1.0
 DEFAULT_OUTBOX_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_OUTBOX_RETRY_INITIAL_SECONDS = 2.0
 DEFAULT_OUTBOX_RETRY_MAX_SECONDS = 300.0
+OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES = 1024
 
 MAX_RECALL_TIMEOUT_SECONDS = 30.0
 MAX_RECALL_INPUT_CHARS = 65536
@@ -329,8 +330,11 @@ def load_config(
 
     if retain.observation_scopes == ((),) and not single_principal:
         raise _error("retain.observation_scopes='shared' requires explicit single_principal=true")
-    if retain.segment_max_bytes > outbox.max_pending_bytes:
-        raise _error("retain.segment_max_bytes must not exceed outbox.max_pending_bytes")
+    if retain.segment_max_bytes + OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES > outbox.max_pending_bytes:
+        raise _error(
+            "retain.segment_max_bytes plus the code-owned row allowance must not exceed "
+            "outbox.max_pending_bytes"
+        )
     if outbox.retry_initial_seconds > outbox.retry_max_seconds:
         raise _error("outbox.retry_initial_seconds must not exceed outbox.retry_max_seconds")
 
@@ -952,6 +956,7 @@ __all__ = [
     "DEFAULT_OUTBOX_POLL_INTERVAL_SECONDS",
     "DEFAULT_OUTBOX_RETRY_INITIAL_SECONDS",
     "DEFAULT_OUTBOX_RETRY_MAX_SECONDS",
+    "OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES",
     "PAYLOAD_SCHEMA_VERSION",
     "DEFAULT_RECALL_CONTEXT_MAX_BYTES",
     "DEFAULT_RECALL_INPUT_MAX_CHARS",
