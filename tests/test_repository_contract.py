@@ -377,6 +377,64 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
             _assert_terms(retired_header, "RETIRED — DO NOT IMPLEMENT", "HISTORICAL RECORD ONLY")
 
 
+def test_task4_pre_red_contract_is_frozen_when_local_plan_is_present() -> None:
+    router = _read("IMPLEMENTATION.md")
+    _assert_terms(
+        router,
+        "da6610578119ba9b8d0539cebd58372768e3ba63166aff778e3df6344ff7b0f9",
+        "behavior-defining gaps",
+        (
+            "No Task 4 production source may be edited until this exact amendment "
+            "is independently approved"
+        ),
+        "no retry/drain command",
+    )
+
+    local_plan_pair = _read_local_plan_pair()
+    if local_plan_pair is None:
+        return
+    plan, plan_index = local_plan_pair
+    task4 = plan.split("### Task 4:", maxsplit=1)[1].split("### Task 5:", maxsplit=1)[0]
+    _assert_terms(
+        task4,
+        "src/better_hermes_hindsight/hermes_plugin/cli.py",
+        "synchronous `better_hindsight_command(args)`",
+        "mutually exclusive ordered partition",
+        "`1m_to_lt_1h`",
+        "SQLite `mode=ro`",
+        "`PRAGMA query_only=ON`",
+        "`single_principal=true`",
+        "exact pinned SDK `BankConfigResponse`",
+        "write_attempted` immediately before PATCH dispatch",
+        "write_attempted_outcome_unknown",
+        "Exit codes are fixed",
+        "`outbox` is exactly `ready|uninitialized`",
+        "`authorization_required`",
+        "`mission_prewrite_unavailable`",
+        "`runtime_cleanup_failed`",
+        "src/better_hermes_hindsight/config.py",
+        "host-owned stderr may echo arbitrarily long malformed argv",
+        "all-unconfigured failed-GET case",
+        "docs/audit-findings.md",
+        "docs/compatibility.md",
+        "import/help perform no database or lock access",
+        "Do not add IPC, a retry/drain command",
+    )
+    _assert_terms(
+        plan,
+        (
+            "Handler-controlled JSON from mission status/check/apply is bounded and sanitized; "
+            "released host-owned argparse stderr is outside that guarantee"
+        ),
+    )
+    assert "Mission status/check/apply commands are bounded and sanitized" not in plan
+    _assert_terms(
+        plan_index,
+        "da6610578119ba9b8d0539cebd58372768e3ba63166aff778e3df6344ff7b0f9",
+        "requires independent approval before RED implementation work",
+    )
+
+
 def test_changed_markdown_links_resolve_inside_repository() -> None:
     readme = _read("README.md")
     _assert_terms(

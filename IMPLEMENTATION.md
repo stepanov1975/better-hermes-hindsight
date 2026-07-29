@@ -3,10 +3,10 @@
 ## Current status
 
 - **Canonical plan:** `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
-- **Canonical SHA-256:** `d0a390692200014d53b06de9b680ba926558814640a89c6cd103bd35bb874c6d`
-- **Plan state:** Active; Tasks 0–3 are complete. The independently approved Task 3 implementation preserves transport identity, schema-v1 retry transitions, typed confirmation, sender takeover, cancellation settlement, bounded retryable shutdown, and the released-Hermes callback boundary.
+- **Canonical SHA-256:** `da6610578119ba9b8d0539cebd58372768e3ba63166aff778e3df6344ff7b0f9`
+- **Plan state:** Active; Tasks 0–3 are complete. The Task 4 contract was amended after the independent Stage 0 gate found behavior-defining gaps in diagnostics, operator-runtime ownership, mission response predicates, ambiguous writes, released command discovery, and CLI exits. No Task 4 production source may be edited until this exact amendment is independently approved.
 - **Code checkpoint:** `ef200c948b738a34f9a74a6ee3f2a964445c5126` (`ef200c9`) is the completed Task 3 sender-delivery and retry checkpoint.
-- **Next action:** Begin active-plan Task 4 from `ef200c9`: add bounded sanitized queue diagnostics and explicit mission check/apply commands only. Do not add model-facing memory tools, a generic control plane, installation, deployment, isolated live-write proof, or production rollout.
+- **Next action:** Independently approve this exact active-plan Task 4 contract from `ef200c9`, then write its deterministic RED tests. Add only bounded sanitized queue diagnostics and explicit mission check/apply commands—no retry/drain command, IPC, model-facing memory tools, generic control plane, installation, deployment, isolated live-write proof, or production rollout.
 
 The canonical plan is intentionally local under `.hermes/plans/`, which is ignored because Hermes runtime state and private artifacts do not belong in Git. This tracked file is the durable cross-session router. If the canonical file is missing or its hash differs, stop and resolve the plan state instead of selecting another plan.
 
