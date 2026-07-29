@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+LOCAL_PLAN_PATH = ROOT / ".hermes/plans/2026-07-27_071437-best-effort-plugin.md"
+LOCAL_PLAN_INDEX_PATH = ROOT / ".hermes/plans/README.md"
 
 ACTIVE_CONTRACT_PATHS = (
     "README.md",
@@ -32,6 +34,18 @@ def _assert_terms(text: str, *terms: str) -> None:
     normalized = _normalized(text)
     missing = [term for term in terms if term.casefold() not in normalized]
     assert not missing, f"missing repository contract terms: {missing}"
+
+
+def _read_local_plan_pair() -> tuple[str, str] | None:
+    plan_exists = LOCAL_PLAN_PATH.is_file()
+    index_exists = LOCAL_PLAN_INDEX_PATH.is_file()
+    if not plan_exists and not index_exists:
+        return None
+    assert plan_exists and index_exists, "local canonical plan and index must exist together"
+    return (
+        LOCAL_PLAN_PATH.read_text(encoding="utf-8"),
+        LOCAL_PLAN_INDEX_PATH.read_text(encoding="utf-8"),
+    )
 
 
 def test_owned_active_contract_inventory_is_complete() -> None:
@@ -236,18 +250,80 @@ def test_release_gate_requires_isolated_development_and_reversible_canary() -> N
     )
 
 
+def test_task3_sender_contract_is_frozen_before_red_tests() -> None:
+    local_plan_pair = _read_local_plan_pair()
+    if local_plan_pair is None:
+        return
+    plan, _plan_index = local_plan_pair
+    task3 = plan.split("### Task 3:", maxsplit=1)[1].split("### Task 4:", maxsplit=1)[0]
+
+    _assert_terms(
+        task3,
+        "schema version 1 remains unchanged",
+        "canonical redacted and sorted retain tags",
+        "normalized observation scopes",
+        "literal golden document IDs remain byte-for-byte unchanged",
+        "observation scopes bind the destination fingerprint and wire request only",
+        "reset every stale `sending` row",
+        "cap-first saturating retry loop",
+        "`attempt_count=10_000`",
+        "network I/O occurs outside SQLite transactions",
+        "`retain_timeout`, `retain_failed`, or `retain_unconfirmed`",
+        "typed `RetainConfirmation`",
+        "retain-enabled runtime starts exactly one daemon sender before the runtime is published",
+        "passive contender",
+        "non-owner admission remains allowed",
+        "must not close the outbox or client beneath a live sender",
+        "explicit draining/unsettled state",
+        "per-call unsettled token set",
+        "one runner lock/condition",
+        "atomically rechecks completion and publishes",
+        "already-admitted prepublication calls",
+        "two cancellation-resistant calls",
+        "completion/registration race",
+        "`AsyncRunnerUnsettledError`",
+        "no second SDK call",
+        "crossed retain deadline remains `retain_timeout`",
+        "cancellation-resistant retain",
+        "strictly valid late success",
+        "competing process proves the profile lock remains held",
+        "sender has already joined",
+        "second `finalize_process_runtime()`",
+        "outbox/client/runner close counts remain zero",
+        "real pinned `MemoryManager` and real pinned SDK adapter",
+        "secret-shaped retain tags",
+        "boolean/integer lookalikes",
+        "`tests/integration/test_released_hermes_admission.py`",
+        "`tests/unit/test_provider_retention.py`",
+        "`README.md`",
+        "`tests/test_repository_contract.py`",
+        "`docs/operations.md` enters `ACTIVE_CONTRACT_PATHS`",
+        "route to active-plan Task 4",
+        "operator-visible status counts remain Task 4",
+    )
+
+
 def test_local_plan_files_match_the_tracked_router_when_present() -> None:
     router = _read("IMPLEMENTATION.md")
+    local_plan_pair = _read_local_plan_pair()
+    if local_plan_pair is None:
+        return
+    plan, plan_index = local_plan_pair
     active_match = re.search(r"Canonical plan:\*\* `([^`]+)`", router)
     hash_match = re.search(r"Canonical SHA-256:\*\* `([0-9a-f]{64})`", router)
+    index_hash_match = re.search(r"SHA-256: `([0-9a-f]{64})`", plan_index)
     assert active_match is not None
     assert hash_match is not None
+    assert index_hash_match is not None
+    assert active_match.group(1).endswith("2026-07-27_071437-best-effort-plugin.md")
+    assert hash_match.group(1) == index_hash_match.group(1)
+    _assert_terms(plan_index, "8a1aa51", "active-plan Task 3")
 
     active_path = ROOT / active_match.group(1)
-    if active_path.is_file():
-        active_bytes = active_path.read_bytes()
-        assert hashlib.sha256(active_bytes).hexdigest() == hash_match.group(1)
-        assert "ACTIVE — CANONICAL IMPLEMENTATION PLAN" in active_bytes.decode("utf-8")[:1000]
+    assert active_path == LOCAL_PLAN_PATH
+    active_bytes = plan.encode("utf-8")
+    assert hashlib.sha256(active_bytes).hexdigest() == hash_match.group(1)
+    assert "ACTIVE — CANONICAL IMPLEMENTATION PLAN" in plan[:1000]
 
     for retired_name in (
         "2026-07-25_194157-better-hermes-hindsight-implementation.md",
