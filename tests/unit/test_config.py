@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import FrozenInstanceError
@@ -17,6 +18,7 @@ from better_hermes_hindsight.config import (
     ConfigError,
     load_config,
 )
+from better_hermes_hindsight.redaction import REDACTION_MARKER
 
 
 def _write_config(hermes_home: Path, payload: object) -> Path:
@@ -852,3 +854,104 @@ def test_destination_fingerprint_excludes_api_key_and_uses_normalized_destinatio
     assert first.destination_fingerprint == second.destination_fingerprint
     assert first.destination_fingerprint != other_bank.destination_fingerprint
     assert "first-key-value" not in first.destination_fingerprint
+
+
+def test_retain_transport_policy_is_canonical_and_fingerprint_bound(tmp_path: Path) -> None:
+    raw_tag_secret = "SYNTHETIC_TRANSPORT_TAG_SECRET"
+    secret_tag = f"api_key={raw_tag_secret}"
+    common = {
+        "api_url": "https://service.example.test/api",
+        "bank_id": "sample-bank",
+        "single_principal": True,
+        "retain": {
+            "tags": ["zeta", secret_tag, "alpha"],
+            "observation_scopes": "shared",
+        },
+    }
+    first = load_config(
+        hermes_home=tmp_path / "first",
+        environ={"HINDSIGHT_API_KEY": "first-key-value"},
+        injected={
+            **common,
+            "api_url": "HTTPS://SERVICE.EXAMPLE.TEST:443/api/",
+            "outbox": {"poll_interval_seconds": 0.25},
+        },
+    )
+    equivalent = load_config(
+        hermes_home=tmp_path / "equivalent",
+        environ={"HINDSIGHT_API_KEY": "second-key-value"},
+        injected={
+            **common,
+            "api_url": "https://service.example.test/api",
+            "retain": {
+                "tags": [secret_tag, "alpha", "zeta"],
+                "observation_scopes": [[]],
+                "timeout_seconds": 299.0,
+            },
+            "outbox": {
+                "poll_interval_seconds": 59.0,
+                "retry_initial_seconds": 9.0,
+                "retry_max_seconds": 99.0,
+            },
+        },
+    )
+    changed_tags = load_config(
+        hermes_home=tmp_path / "changed-tags",
+        environ={},
+        injected={
+            **common,
+            "retain": {
+                "tags": ["alpha", "different"],
+                "observation_scopes": "shared",
+            },
+        },
+    )
+    changed_scopes = load_config(
+        hermes_home=tmp_path / "changed-scopes",
+        environ={},
+        injected={
+            **common,
+            "retain": {
+                "tags": ["zeta", secret_tag, "alpha"],
+                "observation_scopes": "combined",
+            },
+        },
+    )
+
+    assert first.retain.tags == ("alpha", f"api_key={REDACTION_MARKER}", "zeta")
+    assert first.retain.tags == equivalent.retain.tags
+    assert first.destination_fingerprint == equivalent.destination_fingerprint
+    assert first.destination_fingerprint != changed_tags.destination_fingerprint
+    assert first.destination_fingerprint != changed_scopes.destination_fingerprint
+    assert raw_tag_secret not in repr(first)
+    assert raw_tag_secret not in first.destination_fingerprint
+    assert len(first.destination_fingerprint) == hashlib.sha256().digest_size * 2
+
+
+def test_distinct_retain_tags_colliding_after_redaction_fail_with_fixed_error(
+    tmp_path: Path,
+) -> None:
+    first_secret = "SYNTHETIC_COLLISION_SECRET_ONE"
+    second_secret = "SYNTHETIC_COLLISION_SECRET_TWO"
+
+    with pytest.raises(ConfigError) as caught:
+        load_config(
+            hermes_home=tmp_path,
+            environ={},
+            injected={
+                "retain": {
+                    "tags": [
+                        f"api_key={first_secret}",
+                        f"api_key={second_secret}",
+                    ]
+                }
+            },
+        )
+
+    assert str(caught.value) == (
+        "Better Hindsight configuration error: "
+        "retain.tags contain distinct entries that collide after redaction"
+    )
+    assert first_secret not in str(caught.value)
+    assert second_secret not in str(caught.value)
+    assert caught.value.__cause__ is None

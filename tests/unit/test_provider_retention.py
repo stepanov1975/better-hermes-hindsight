@@ -8,7 +8,7 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import NoReturn, cast
 
@@ -16,9 +16,21 @@ import pytest
 
 import better_hermes_hindsight.provider as provider_module
 import better_hermes_hindsight.runtime as runtime_module
-from better_hermes_hindsight.client import RetainSegment as ClientRetainSegment
+from better_hermes_hindsight.client import (
+    RetainConfirmation,
+)
+from better_hermes_hindsight.client import (
+    RetainSegment as ClientRetainSegment,
+)
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
-from better_hermes_hindsight.outbox import AdmissionResult, AdmissionStatus, SQLiteOutbox
+from better_hermes_hindsight.outbox import (
+    AdmissionResult,
+    AdmissionStatus,
+    OutboxOpenError,
+    OutboxReadError,
+    OutboxRow,
+    SQLiteOutbox,
+)
 from better_hermes_hindsight.provider import (
     RUNTIME_INACTIVE_DIAGNOSTIC,
     BetterHindsightMemoryProvider,
@@ -89,9 +101,9 @@ class _RecordingClient:
         self.operation_calls.append(f"recall:{query}")
         return object()
 
-    async def retain_segment(self, segment: ClientRetainSegment) -> object:
+    async def retain_segment(self, segment: ClientRetainSegment) -> RetainConfirmation:
         self.operation_calls.append(f"retain:{segment.document_id}")
-        return object()
+        return RetainConfirmation(confirmed=True)
 
     async def get_bank_profile(self) -> object:
         self.operation_calls.append("profile")
@@ -138,6 +150,51 @@ class _ClientFactory:
         return client
 
 
+class _CancellationResistantRetainClient(_RecordingClient):
+    def __init__(self, close_order: list[str]) -> None:
+        super().__init__(close_order)
+        self.cancellation_seen = threading.Event()
+        self.release_late_success = threading.Event()
+        self.segments: list[ClientRetainSegment] = []
+
+    async def retain_segment(self, segment: ClientRetainSegment) -> RetainConfirmation:
+        self.operation_calls.append(f"retain:{segment.document_id}")
+        self.segments.append(segment)
+        try:
+            await asyncio.Future()
+            raise AssertionError("synthetic resistant retain unexpectedly resumed")
+        except asyncio.CancelledError:
+            self.cancellation_seen.set()
+            await asyncio.to_thread(self.release_late_success.wait)
+            return RetainConfirmation(confirmed=True)
+
+
+class _CancellationResistantClientFactory:
+    def __init__(self, close_order: list[str]) -> None:
+        self.close_order = close_order
+        self.clients: list[_CancellationResistantRetainClient] = []
+
+    def __call__(self, _config: BetterHindsightConfig) -> _CancellationResistantRetainClient:
+        client = _CancellationResistantRetainClient(self.close_order)
+        self.clients.append(client)
+        return client
+
+
+class _CountingOutbox:
+    def __init__(self, delegate: SQLiteOutbox, close_order: list[str]) -> None:
+        self.delegate = delegate
+        self.close_order = close_order
+        self.close_calls = 0
+
+    def close(self) -> None:
+        self.close_calls += 1
+        self.close_order.append("outbox")
+        self.delegate.close()
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.delegate, name)
+
+
 class _RecordingOutbox:
     def __init__(
         self,
@@ -169,9 +226,67 @@ class _OutboxFactory:
         self.outbox = outbox
         self.configs: list[BetterHindsightConfig] = []
 
-    def __call__(self, config: BetterHindsightConfig) -> _RecordingOutbox:
+    def __call__(self, config: BetterHindsightConfig) -> runtime_module.OutboxProtocol:
         self.configs.append(config)
-        return self.outbox
+        return cast(runtime_module.OutboxProtocol, self.outbox)
+
+
+class _InertSender:
+    def __init__(self) -> None:
+        self.start_calls = 0
+        self.wake_calls = 0
+        self.stop_calls = 0
+        self.join_timeouts: list[float | None] = []
+
+    def start(self) -> None:
+        self.start_calls += 1
+
+    def wake(self) -> None:
+        self.wake_calls += 1
+
+    def request_stop(self) -> None:
+        self.stop_calls += 1
+
+    def join(self, timeout: float | None = None) -> bool:
+        self.join_timeouts.append(timeout)
+        return True
+
+
+class _ControllableSender(_InertSender):
+    def __init__(self, *, initially_stopped: bool) -> None:
+        super().__init__()
+        self.stopped = threading.Event()
+        if initially_stopped:
+            self.stopped.set()
+
+    def join(self, timeout: float | None = None) -> bool:
+        self.join_timeouts.append(timeout)
+        return self.stopped.is_set()
+
+
+class _SenderFactory:
+    def __init__(self, sender: _InertSender) -> None:
+        self.sender = sender
+        self.calls = 0
+
+    def __call__(
+        self,
+        _config: BetterHindsightConfig,
+        _outbox: runtime_module.OutboxProtocol,
+        _client: object,
+        _runner: runtime_module.AsyncRunner,
+    ) -> _InertSender:
+        self.calls += 1
+        return self.sender
+
+
+def _inert_sender_factory(
+    _config: BetterHindsightConfig,
+    _outbox: runtime_module.OutboxProtocol,
+    _client: object,
+    _runner: runtime_module.AsyncRunner,
+) -> _InertSender:
+    return _InertSender()
 
 
 class _BlockingFirstOutbox(_RecordingOutbox):
@@ -246,6 +361,8 @@ def _runtime_config(
     *,
     recall_enabled: bool = False,
     retain_enabled: bool = True,
+    retain_timeout_seconds: float = 0.01,
+    busy_timeout_seconds: float = 0.01,
 ) -> BetterHindsightConfig:
     home.mkdir(parents=True, exist_ok=True)
     return load_config(
@@ -258,10 +375,14 @@ def _runtime_config(
             "recall": {"enabled": recall_enabled},
             "retain": {
                 "enabled": retain_enabled,
+                "timeout_seconds": retain_timeout_seconds,
                 "segment_max_bytes": 128,
                 "tags": ["project:synthetic"],
             },
-            "outbox": {"max_pending_bytes": 1_000_000},
+            "outbox": {
+                "max_pending_bytes": 1_000_000,
+                "busy_timeout_seconds": busy_timeout_seconds,
+            },
         },
     )
 
@@ -536,6 +657,7 @@ def test_outbox_factory_failure_closes_constructed_client_and_runner(tmp_path: P
             config,
             client_factory=client_factory,
             outbox_factory=fail_outbox,
+            sender_factory=_inert_sender_factory,
         )
 
     assert len(client_factory.clients) == 1
@@ -559,6 +681,7 @@ def test_retain_disabled_runtime_never_opens_an_outbox(tmp_path: Path) -> None:
         config,
         client_factory=client_factory,
         outbox_factory=outbox_factory,
+        sender_factory=_inert_sender_factory,
     )
 
     assert len(client_factory.clients) == 1
@@ -581,6 +704,7 @@ def test_equal_configs_share_exactly_one_runtime_client_and_outbox(tmp_path: Pat
         config,
         client_factory=client_factory,
         outbox_factory=outbox_factory,
+        sender_factory=_inert_sender_factory,
     )
     second = acquire_process_runtime(
         equal_config,
@@ -610,6 +734,7 @@ def test_runtime_admission_constructs_locally_without_any_client_operation(tmp_p
         config,
         client_factory=client_factory,
         outbox_factory=_OutboxFactory(outbox),
+        sender_factory=_inert_sender_factory,
     )
 
     result = _admit(handle)
@@ -651,6 +776,7 @@ def test_active_outbox_admission_blocks_finalization_and_cleanup_order_is_exact(
         config,
         client_factory=client_factory,
         outbox_factory=_OutboxFactory(outbox),
+        sender_factory=_inert_sender_factory,
     )
     second = acquire_process_runtime(config)
     admission_results: list[AdmissionResult] = []
@@ -706,6 +832,7 @@ def test_lifecycle_counter_starts_before_deterministic_turn_construction(
         config,
         client_factory=_ClientFactory(),
         outbox_factory=_OutboxFactory(outbox),
+        sender_factory=_inert_sender_factory,
     )
     sibling = acquire_process_runtime(config)
 
@@ -772,6 +899,7 @@ def test_outbox_close_failure_still_closes_client_and_shuts_down_runtime(tmp_pat
         config,
         client_factory=client_factory,
         outbox_factory=_OutboxFactory(outbox),
+        sender_factory=_inert_sender_factory,
     )
 
     with pytest.raises(RuntimeError, match="synthetic outbox close failure"):
@@ -786,7 +914,11 @@ def test_outbox_close_failure_still_closes_client_and_shuts_down_runtime(tmp_pat
 def test_real_sqlite_rows_survive_handle_close_and_runtime_finalization(tmp_path: Path) -> None:
     config = _runtime_config(tmp_path)
     client_factory = _ClientFactory()
-    handle = acquire_process_runtime(config, client_factory=client_factory)
+    handle = acquire_process_runtime(
+        config,
+        client_factory=client_factory,
+        sender_factory=_inert_sender_factory,
+    )
 
     result = _admit(handle, "durable")
     handle.close()
@@ -811,3 +943,369 @@ def test_real_sqlite_rows_survive_handle_close_and_runtime_finalization(tmp_path
 
     assert after_finalize == before_finalize
     assert client_factory.clients[0].close_calls == 1
+
+
+def test_retain_runtime_starts_one_sender_before_publication_and_wakes_duplicate_admission(
+    tmp_path: Path,
+) -> None:
+    config = _runtime_config(tmp_path)
+    client_factory = _ClientFactory()
+    outbox = _RecordingOutbox()
+    outbox_factory = _OutboxFactory(outbox)
+    sender = _InertSender()
+    sender_factory = _SenderFactory(sender)
+
+    first = acquire_process_runtime(
+        config,
+        client_factory=client_factory,
+        outbox_factory=outbox_factory,
+        sender_factory=sender_factory,
+    )
+    second = acquire_process_runtime(config)
+
+    assert sender_factory.calls == 1
+    assert sender.start_calls == 1
+    assert first.runtime is second.runtime
+    assert len(client_factory.clients) == 1
+    assert outbox_factory.configs == [config]
+
+    assert _admit(first, "admitted").status is AdmissionStatus.ADMITTED
+    outbox.result = AdmissionResult(AdmissionStatus.DUPLICATE, duplicate_count=1)
+    assert _admit(second, "duplicate").status is AdmissionStatus.DUPLICATE
+    assert sender.wake_calls == 2
+
+    assert finalize_process_runtime() is True
+    assert sender.stop_calls == 1
+    assert len(sender.join_timeouts) == 1
+
+
+def test_blocked_sender_preserves_runtime_and_zero_closes_until_repeated_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _runtime_config(tmp_path)
+    order: list[str] = []
+    outbox = _RecordingOutbox(close_order=order)
+    client_factory = _ClientFactory(order)
+    sender = _ControllableSender(initially_stopped=False)
+    sender_factory = _SenderFactory(sender)
+    runner_shutdown_calls = 0
+    real_shutdown = runtime_module.AsyncRunner.shutdown
+
+    def shutdown_with_order(runner: runtime_module.AsyncRunner) -> bool:
+        nonlocal runner_shutdown_calls
+        runner_shutdown_calls += 1
+        order.append("runner")
+        return real_shutdown(runner)
+
+    monkeypatch.setattr(runtime_module.AsyncRunner, "shutdown", shutdown_with_order)
+    monkeypatch.setattr(runtime_module, "_monotonic_now", lambda: 100.0)
+    handle = acquire_process_runtime(
+        config,
+        client_factory=client_factory,
+        outbox_factory=_OutboxFactory(outbox),
+        sender_factory=sender_factory,
+    )
+    expected_deadline = (
+        config.retain.timeout_seconds
+        + config.outbox.busy_timeout_seconds
+        + runtime_module.ASYNC_CANCELLATION_DRAIN_SECONDS
+        + 1.0
+    )
+    try:
+        with pytest.raises(runtime_module.SenderStopError) as caught:
+            finalize_process_runtime()
+
+        assert str(caught.value) == (
+            "Better Hindsight sender could not stop before shutdown deadline."
+        )
+        assert caught.value.__cause__ is None
+        assert sender.stop_calls == 1
+        assert sender.join_timeouts == pytest.approx([expected_deadline])
+        assert outbox.close_calls == 0
+        assert client_factory.clients[0].close_calls == 0
+        assert runner_shutdown_calls == 0
+        assert order == []
+        with pytest.raises(RuntimeFinalizedError):
+            _admit(handle, "after-stop-timeout")
+        with pytest.raises(RuntimeFinalizedError):
+            acquire_process_runtime(config)
+        assert len(client_factory.clients) == 1
+
+        sender.stopped.set()
+        assert finalize_process_runtime() is True
+        assert sender.stop_calls == 2
+        assert sender.join_timeouts == pytest.approx([expected_deadline, expected_deadline])
+        assert order == ["outbox", "client", "runner"]
+        assert outbox.close_calls == 1
+        assert client_factory.clients[0].close_calls == 1
+        assert runner_shutdown_calls == 1
+        assert finalize_process_runtime() is False
+    finally:
+        sender.stopped.set()
+        finalize_process_runtime()
+
+
+def test_idle_joined_sender_still_waits_for_unrelated_runner_settlement_before_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _runtime_config(tmp_path)
+    order: list[str] = []
+    outbox = _RecordingOutbox(close_order=order)
+    client_factory = _ClientFactory(order)
+    sender = _ControllableSender(initially_stopped=True)
+    sender_factory = _SenderFactory(sender)
+    runner_shutdown_calls = 0
+    real_shutdown = runtime_module.AsyncRunner.shutdown
+    operation_started = threading.Event()
+    cancellation_seen = threading.Event()
+    release_operation = threading.Event()
+    operation_errors: list[BaseException] = []
+
+    def shutdown_with_order(runner: runtime_module.AsyncRunner) -> bool:
+        nonlocal runner_shutdown_calls
+        runner_shutdown_calls += 1
+        order.append("runner")
+        return real_shutdown(runner)
+
+    monkeypatch.setattr(runtime_module.AsyncRunner, "shutdown", shutdown_with_order)
+    handle = acquire_process_runtime(
+        config,
+        client_factory=client_factory,
+        outbox_factory=_OutboxFactory(outbox),
+        sender_factory=sender_factory,
+    )
+
+    async def cancellation_resistant() -> None:
+        operation_started.set()
+        try:
+            await asyncio.Future()
+            raise AssertionError("synthetic unrelated operation unexpectedly resumed")
+        except asyncio.CancelledError:
+            cancellation_seen.set()
+            await asyncio.to_thread(release_operation.wait)
+
+    def run_operation() -> None:
+        try:
+            handle.call(lambda _client: cancellation_resistant(), timeout=0.01)
+        except BaseException as error:
+            operation_errors.append(error)
+
+    operation_thread = threading.Thread(target=run_operation)
+    expected_deadline = (
+        config.retain.timeout_seconds
+        + config.outbox.busy_timeout_seconds
+        + runtime_module.ASYNC_CANCELLATION_DRAIN_SECONDS
+        + 1.0
+    )
+    clock_values = iter((10.0, 10.0, 10.0 + expected_deadline))
+    last_clock = 10.0 + expected_deadline
+
+    def expiring_clock() -> float:
+        return next(clock_values, last_clock)
+
+    try:
+        operation_thread.start()
+        assert operation_started.wait(timeout=1.0)
+        operation_thread.join(timeout=1.0)
+        assert operation_thread.is_alive() is False
+        assert len(operation_errors) == 1
+        assert isinstance(operation_errors[0], runtime_module.AsyncCallTimeoutError)
+        assert cancellation_seen.is_set()
+        assert handle.runtime._runner.wait_for_settlement(timeout=0.0) is False
+
+        monkeypatch.setattr(runtime_module, "_monotonic_now", expiring_clock)
+        with pytest.raises(runtime_module.SenderStopError):
+            finalize_process_runtime()
+
+        assert sender.join_timeouts == pytest.approx([expected_deadline])
+        assert outbox.close_calls == 0
+        assert client_factory.clients[0].close_calls == 0
+        assert runner_shutdown_calls == 0
+        assert order == []
+        with pytest.raises(RuntimeFinalizedError):
+            acquire_process_runtime(config)
+
+        release_operation.set()
+        assert handle.runtime._runner.wait_for_settlement(timeout=1.0) is True
+        monkeypatch.setattr(runtime_module, "_monotonic_now", lambda: 20.0)
+        assert finalize_process_runtime() is True
+        assert order == ["outbox", "client", "runner"]
+        assert outbox.close_calls == 1
+        assert client_factory.clients[0].close_calls == 1
+        assert runner_shutdown_calls == 1
+    finally:
+        release_operation.set()
+        operation_thread.join(timeout=1.0)
+        sender.stopped.set()
+        finalize_process_runtime()
+
+
+def test_actual_sender_late_success_preserves_runtime_then_replays_after_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_config(
+        tmp_path,
+        environ={},
+        injected={
+            "api_url": "https://service.example.test",
+            "bank_id": "synthetic-bank",
+            "single_principal": True,
+            "recall": {"enabled": False},
+            "retain": {
+                "enabled": True,
+                "timeout_seconds": 0.01,
+                "segment_max_bytes": 4096,
+            },
+            "outbox": {
+                "max_pending_bytes": 1_000_000,
+                "busy_timeout_seconds": 0.01,
+                "poll_interval_seconds": 0.1,
+                "retry_initial_seconds": 0.05,
+                "retry_max_seconds": 0.05,
+            },
+        },
+    )
+    order: list[str] = []
+    client_factory = _CancellationResistantClientFactory(order)
+    outboxes: list[_CountingOutbox] = []
+    runner_shutdown_calls = 0
+    real_shutdown = runtime_module.AsyncRunner.shutdown
+    real_clock = runtime_module._monotonic_now
+
+    def outbox_factory(sender_config: BetterHindsightConfig) -> runtime_module.OutboxProtocol:
+        outbox = _CountingOutbox(SQLiteOutbox.open(sender_config), order)
+        outboxes.append(outbox)
+        return cast(runtime_module.OutboxProtocol, outbox)
+
+    def shutdown_with_order(runner: runtime_module.AsyncRunner) -> bool:
+        nonlocal runner_shutdown_calls
+        runner_shutdown_calls += 1
+        order.append("runner")
+        return real_shutdown(runner)
+
+    def read_rows() -> tuple[OutboxRow, ...]:
+        inspector = SQLiteOutbox.open(config)
+        try:
+            return inspector.read_unconfirmed()
+        finally:
+            inspector.close()
+
+    def wait_for_rows(
+        predicate: Callable[[tuple[OutboxRow, ...]], bool],
+    ) -> tuple[OutboxRow, ...]:
+        deadline = time.monotonic() + 3.0
+        while True:
+            try:
+                rows = read_rows()
+            except (OutboxOpenError, OutboxReadError):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    pytest.fail("durable outbox could not be reopened before the deadline")
+                threading.Event().wait(timeout=min(0.02, remaining))
+                continue
+            if predicate(rows):
+                return rows
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                pytest.fail("durable outbox state did not reach the expected value")
+            threading.Event().wait(timeout=min(0.02, remaining))
+
+    monkeypatch.setattr(runtime_module.AsyncRunner, "shutdown", shutdown_with_order)
+    handle = acquire_process_runtime(
+        config,
+        client_factory=client_factory,
+        outbox_factory=outbox_factory,
+    )
+    first_client = client_factory.clients[0]
+    expected_deadline = (
+        config.retain.timeout_seconds
+        + config.outbox.busy_timeout_seconds
+        + runtime_module.ASYNC_CANCELLATION_DRAIN_SECONDS
+        + 1.0
+    )
+
+    try:
+        result = handle.admit_turn(
+            session_id="late-success-session",
+            user_content="late-success-user",
+            assistant_content="late-success-assistant",
+        )
+        assert result.status is AdmissionStatus.ADMITTED
+        assert first_client.cancellation_seen.wait(timeout=2.0)
+        sending = wait_for_rows(lambda rows: len(rows) == 1 and rows[0].state == "sending")
+        first_identity = (sending[0].document_id, sending[0].content)
+        assert len(first_client.segments) == 1
+        assert (
+            first_client.segments[0].document_id,
+            first_client.segments[0].content,
+        ) == first_identity
+
+        clock_values = iter((100.0, 100.0 + expected_deadline))
+        monkeypatch.setattr(
+            runtime_module,
+            "_monotonic_now",
+            lambda: next(clock_values, 100.0 + expected_deadline),
+        )
+        with pytest.raises(runtime_module.SenderStopError):
+            finalize_process_runtime()
+
+        assert outboxes[0].close_calls == 0
+        assert first_client.close_calls == 0
+        assert runner_shutdown_calls == 0
+        assert order == []
+        with pytest.raises(RuntimeFinalizedError):
+            acquire_process_runtime(config)
+
+        first_client.release_late_success.set()
+        pending = wait_for_rows(
+            lambda rows: (
+                len(rows) == 1
+                and rows[0].state == "pending"
+                and rows[0].last_error_category == "retain_timeout"
+            )
+        )
+        assert (pending[0].document_id, pending[0].content) == first_identity
+
+        monkeypatch.setattr(runtime_module, "_monotonic_now", real_clock)
+        assert finalize_process_runtime() is True
+        assert outboxes[0].close_calls == 1
+        assert first_client.close_calls == 1
+        assert runner_shutdown_calls == 1
+        assert order == ["outbox", "client", "runner"]
+
+        class _ReplayClient(_RecordingClient):
+            def __init__(self) -> None:
+                super().__init__()
+                self.segments: list[ClientRetainSegment] = []
+
+            async def retain_segment(self, segment: ClientRetainSegment) -> RetainConfirmation:
+                self.segments.append(segment)
+                return RetainConfirmation(confirmed=True)
+
+        replay_clients: list[_ReplayClient] = []
+
+        def replay_factory(_config: BetterHindsightConfig) -> _ReplayClient:
+            client = _ReplayClient()
+            replay_clients.append(client)
+            return client
+
+        monkeypatch.setattr(runtime_module.AsyncRunner, "shutdown", real_shutdown)
+        replay_handle = acquire_process_runtime(config, client_factory=replay_factory)
+        assert wait_for_rows(lambda rows: not rows) == ()
+        replay_handle.close()
+        assert finalize_process_runtime() is True
+        assert len(replay_clients) == 1
+        assert len(replay_clients[0].segments) == 1
+        assert (
+            replay_clients[0].segments[0].document_id,
+            replay_clients[0].segments[0].content,
+        ) == first_identity
+    finally:
+        first_client.release_late_success.set()
+        handle.close()
+        monkeypatch.setattr(runtime_module, "_monotonic_now", real_clock)
+        monkeypatch.setattr(runtime_module.AsyncRunner, "shutdown", real_shutdown)
+        finalize_process_runtime()

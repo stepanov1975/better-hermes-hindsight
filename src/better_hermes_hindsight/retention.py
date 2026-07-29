@@ -8,7 +8,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import NoReturn
 
-from better_hermes_hindsight.config import PAYLOAD_SCHEMA_VERSION
+from better_hermes_hindsight.config import PAYLOAD_SCHEMA_VERSION, canonicalize_retain_tags
 from better_hermes_hindsight.redaction import redact_sensitive_text
 
 DOCUMENT_ID_PREFIX = "better-hindsight-turn-v1:"
@@ -108,12 +108,10 @@ def _build_retained_segments(
     if len(set(tags)) != len(tags):
         _reject()
 
+    canonical_tags = canonicalize_retain_tags(tags)
     redacted_user = redact_sensitive_text(user_content)
     redacted_assistant = redact_sensitive_text(assistant_content)
-    redacted_tags = tuple(redact_sensitive_text(tag) for tag in tags)
     if not isinstance(redacted_user, str) or not isinstance(redacted_assistant, str):
-        _reject()
-    if not all(isinstance(tag, str) for tag in redacted_tags):
         _reject()
 
     session_sha256 = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
@@ -125,7 +123,7 @@ def _build_retained_segments(
                 {"role": "assistant", "content": redacted_assistant},
             ],
             "session_sha256": session_sha256,
-            "tags": sorted(redacted_tags),
+            "tags": list(canonical_tags),
         }
     )
     source_bytes = source.encode("utf-8")

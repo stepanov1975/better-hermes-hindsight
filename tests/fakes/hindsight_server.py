@@ -20,6 +20,19 @@ RecallFault: TypeAlias = Literal[
     "http_503",
     "delay",
 ]
+RetainFault: TypeAlias = Literal[
+    "false_success",
+    "wrong_bank",
+    "wrong_count",
+    "asynchronous",
+    "malformed_json",
+    "malformed_schema",
+    "http_503",
+    "success_integer",
+    "items_count_boolean",
+    "async_integer",
+    "delay",
+]
 AuthorizationState: TypeAlias = Literal[
     "absent",
     "valid_bearer",
@@ -70,9 +83,13 @@ class FakeHindsightServer:
         self._records: list[RequestRecord] = []
         self._request_count = 0
         self._next_recall_fault: RecallFault | None = None
+        self._next_retain_fault: RetainFault | None = None
         self._delay_entered = asyncio.Event()
         self._delay_release = asyncio.Event()
         self._delay_finished = asyncio.Event()
+        self._retain_delay_entered = asyncio.Event()
+        self._retain_delay_release = asyncio.Event()
+        self._retain_delay_finished = asyncio.Event()
         self._runner: web.AppRunner | None = None
         self._site: web.SockSite | None = None
         self._socket: socket.socket | None = None
@@ -156,6 +173,7 @@ class FakeHindsightServer:
             return
         self._closed = True
         self.release_delay()
+        self.release_retain_delay()
         runner = self._runner
         sock = self._socket
         try:
@@ -198,6 +216,36 @@ class FakeHindsightServer:
         if not self._delay_entered.is_set():
             return
         await asyncio.wait_for(self._delay_finished.wait(), timeout=1.0)
+
+    def arm_retain_fault(self, fault: RetainFault) -> None:
+        """Apply one bounded fault to the next retain request only."""
+
+        if self._next_retain_fault is not None:
+            raise RuntimeError("Fake Hindsight retain fault is already armed.")
+        if self._retain_delay_entered.is_set() and not self._retain_delay_finished.is_set():
+            raise RuntimeError("Fake Hindsight delayed retain handler is still active.")
+        if fault == "delay":
+            self._retain_delay_entered.clear()
+            self._retain_delay_release.clear()
+            self._retain_delay_finished.clear()
+        self._next_retain_fault = fault
+
+    async def wait_for_retain_delay_entered(self) -> None:
+        """Wait a bounded interval for the one delayed retain handler to start."""
+
+        await asyncio.wait_for(self._retain_delay_entered.wait(), timeout=1.0)
+
+    def release_retain_delay(self) -> None:
+        """Cooperatively release any delayed retain handler."""
+
+        self._retain_delay_release.set()
+
+    async def wait_for_retain_delay_finished(self) -> None:
+        """Wait a bounded interval for delayed retain-handler cleanup."""
+
+        if not self._retain_delay_entered.is_set():
+            return
+        await asyncio.wait_for(self._retain_delay_finished.wait(), timeout=1.0)
 
     def safe_report(self) -> FakeServerReport:
         """Return only bounded route metadata, never bodies or authorization values."""
@@ -334,14 +382,52 @@ class FakeHindsightServer:
 
     async def _retain(self, request: web.Request) -> web.Response:
         await self._record(request)
-        return web.json_response(
-            {
-                "success": True,
-                "bank_id": self._bank_id,
-                "items_count": 1,
-                "async": False,
-            }
-        )
+        fault = self._next_retain_fault
+        self._next_retain_fault = None
+        if fault == "malformed_json":
+            return web.Response(
+                text=f"{self._error_sentinel}{{",
+                content_type="application/json",
+            )
+        if fault == "malformed_schema":
+            return web.json_response(
+                {
+                    "success": True,
+                    "bank_id": self._bank_id,
+                    "items_count": {"raw_error": self._error_sentinel},
+                    "async": False,
+                }
+            )
+        if fault == "http_503":
+            return web.Response(status=503, text=self._error_sentinel)
+        if fault == "delay":
+            self._retain_delay_entered.set()
+            try:
+                await self._retain_delay_release.wait()
+            finally:
+                self._retain_delay_finished.set()
+
+        response: dict[str, object] = {
+            "success": True,
+            "bank_id": self._bank_id,
+            "items_count": 1,
+            "async": False,
+        }
+        if fault == "false_success":
+            response["success"] = False
+        elif fault == "wrong_bank":
+            response["bank_id"] = "different-fixture-bank"
+        elif fault == "wrong_count":
+            response["items_count"] = 2
+        elif fault == "asynchronous":
+            response["async"] = True
+        elif fault == "success_integer":
+            response["success"] = 1
+        elif fault == "items_count_boolean":
+            response["items_count"] = True
+        elif fault == "async_integer":
+            response["async"] = 0
+        return web.json_response(response)
 
     async def _get_config(self, request: web.Request) -> web.Response:
         await self._record(request)
@@ -406,4 +492,5 @@ __all__ = [
     "FakeServerReport",
     "RecallFault",
     "RequestRecord",
+    "RetainFault",
 ]

@@ -204,6 +204,32 @@ def test_shared_redactor_runs_before_hashing_segmentation_or_future_storage() ->
     assert segments[0].source_sha256 == hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
+def test_retain_tags_use_one_sorted_redacted_canonical_tuple() -> None:
+    raw_tag_secret = "SYNTHETIC_RETAIN_TAG_SECRET"
+
+    segments = _build(
+        tags=("zeta", f"api_key={raw_tag_secret}", "alpha"),
+    )
+
+    source = _source(segments)
+    assert json.loads(source)["tags"] == ["alpha", f"api_key={REDACTION_MARKER}", "zeta"]
+    assert raw_tag_secret not in source
+    assert raw_tag_secret not in repr(segments)
+
+
+def test_retain_tag_redaction_collision_rejects_the_complete_turn() -> None:
+    with pytest.raises(RetentionConstructionError) as caught:
+        _build(
+            tags=(
+                "api_key=SYNTHETIC_COLLISION_ONE",
+                "api_key=SYNTHETIC_COLLISION_TWO",
+            )
+        )
+
+    assert str(caught.value) == RETENTION_REJECTED_MESSAGE
+    assert caught.value.__cause__ is None
+
+
 def test_redaction_failure_rejects_the_complete_turn_with_no_sensitive_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

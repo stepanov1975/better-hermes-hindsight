@@ -16,6 +16,7 @@ ACTIVE_CONTRACT_PATHS = (
     "docs/audit-findings.md",
     "docs/compatibility.md",
     "docs/configuration.md",
+    "docs/operations.md",
     "docs/public-release-checklist.md",
 )
 
@@ -55,6 +56,7 @@ def test_owned_active_contract_inventory_is_complete() -> None:
         "docs/audit-findings.md",
         "docs/compatibility.md",
         "docs/configuration.md",
+        "docs/operations.md",
         "docs/public-release-checklist.md",
     )
     for relative_path in ACTIVE_CONTRACT_PATHS:
@@ -90,6 +92,29 @@ def test_best_effort_provider_scope_and_lifecycle_are_explicit() -> None:
         'update_mode="replace"',
         "stable document ID",
         "source documents are the preserved record",
+    )
+
+
+def test_task3_delivery_checkpoint_is_documented_without_task4_or_rollout_claims() -> None:
+    public_contract = "\n".join(
+        _read(path) for path in ("README.md", "docs/configuration.md", "docs/operations.md")
+    )
+
+    _assert_terms(
+        public_contract,
+        "sender delivery is implemented",
+        "retention remains disabled by default",
+        "managed installation and isolated live-write proof remain incomplete",
+        "profile-wide POSIX advisory lock",
+        "bounded cross-process polling",
+        "typed confirmation",
+        "retain_timeout",
+        "retain_failed",
+        "retain_unconfirmed",
+        "stable document ID",
+        "replace mode",
+        "not exactly-once transport",
+        "operator-visible queue counts and management commands remain Task 4",
     )
 
 
@@ -341,12 +366,14 @@ def test_changed_markdown_links_resolve_inside_repository() -> None:
         readme,
         "IMPLEMENTATION.md",
         "docs/compatibility.md",
+        "docs/operations.md",
         "docs/audit-findings.md",
     )
 
     for relative_target in (
         "IMPLEMENTATION.md",
         "docs/compatibility.md",
+        "docs/operations.md",
         "docs/audit-findings.md",
         "DESIGN.md",
     ):

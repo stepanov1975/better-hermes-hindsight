@@ -7,9 +7,10 @@ Better Hermes Hindsight is an unofficial Hermes memory provider for external/sel
 The provider ID is `better_hindsight`, deliberately distinct from bundled `hindsight` so rollback is
 a configuration change rather than a data migration.
 
-> **Status: pre-alpha.** A recall-only development checkpoint exists. Automatic retention, the
-> durable outbox sender, managed installation, and isolated live-write proof are planned but are not
-> implemented yet. Do not install or select this project in a production Hermes profile. Read
+> **Status: pre-alpha.** Sender delivery is implemented for opt-in automatic retention in the tested
+> repository checkpoint, while retention remains disabled by default. Managed installation and
+> isolated live-write proof remain incomplete. Do not install or select this project in a production
+> Hermes profile. Read
 > [IMPLEMENTATION.md](IMPLEMENTATION.md) before changing code; it identifies the only active plan.
 
 ## What it is for
@@ -80,11 +81,13 @@ activation, publication, and any production mutation remain separately authorize
 ## Repository and implementation authority
 
 The tracked [implementation router](IMPLEMENTATION.md) identifies the canonical local plan, its hash,
-the completed recall-only checkpoint, and two explicitly retired plans. Never infer implementation
-requirements from a retired plan or from stale proof wording. The separate Hermes-core worktree is
-frozen research and must not be imported, installed, committed, or treated as a prerequisite.
+the completed local-admission checkpoint, the active sender-delivery stage, and two explicitly retired
+plans. Never infer implementation requirements from a retired plan or from stale proof wording. The
+separate Hermes-core worktree is frozen research and must not be imported, installed, committed, or
+treated as a prerequisite.
 
-The exact version/source observations are in [docs/compatibility.md](docs/compatibility.md). Sanitized
+The exact version/source observations are in [docs/compatibility.md](docs/compatibility.md). Sender
+recovery, retry, and shutdown semantics are in [docs/operations.md](docs/operations.md). Sanitized
 operational aggregates and their limited interpretation are in
 [docs/audit-findings.md](docs/audit-findings.md).
 

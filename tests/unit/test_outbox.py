@@ -820,3 +820,103 @@ def test_content_is_omitted_from_outbox_and_row_reprs(tmp_path: Path) -> None:
 
     assert canary not in rendered
     assert all(row.content not in repr(row) for row in rows)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="sender ownership is POSIX-only")
+def test_profile_lock_identity_is_private_and_elects_one_nonblocking_owner(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    first_outbox = SQLiteOutbox.open(config)
+    second_outbox = SQLiteOutbox.open(config)
+    try:
+        identity = first_outbox.profile_lock_identity
+        status = identity.path.stat(follow_symlinks=False)
+
+        first = first_outbox.try_acquire_profile_lock()
+        second = second_outbox.try_acquire_profile_lock()
+        assert first.status is outbox_module.ProfileLockStatus.ACQUIRED
+        assert first.owner is not None
+        assert second.status is outbox_module.ProfileLockStatus.CONTENDED
+        assert second.owner is None
+        foreign_owner = second_outbox.recover_sending(first.owner, now=1.0)
+        assert foreign_owner.status is outbox_module.OutboxTransitionStatus.LOCAL_FAILURE
+
+        first.owner.release()
+        successor = second_outbox.try_acquire_profile_lock()
+        assert successor.status is outbox_module.ProfileLockStatus.ACQUIRED
+        assert successor.owner is not None
+        successor.owner.release()
+    finally:
+        first_outbox.close()
+        second_outbox.close()
+
+    assert identity.path == first_outbox.profile_lock_path
+    assert (status.st_dev, status.st_ino) == (identity.device, identity.inode)
+    assert stat.S_ISREG(status.st_mode)
+    assert stat.S_IMODE(status.st_mode) == 0o600
+    assert status.st_uid == os.geteuid()
+    assert str(identity.path) not in repr(identity)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="sender ownership is POSIX-only")
+def test_profile_lock_acquisition_is_existing_only(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    outbox = SQLiteOutbox.open(config)
+    identity = outbox.profile_lock_identity
+    displaced = tmp_path / "displaced-missing.lock"
+    identity.path.rename(displaced)
+    try:
+        acquisition = outbox.try_acquire_profile_lock()
+        assert acquisition.status is outbox_module.ProfileLockStatus.LOCAL_FAILURE
+        assert acquisition.owner is None
+        assert not identity.path.exists()
+    finally:
+        displaced.rename(identity.path)
+        outbox.close()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="sender ownership is POSIX-only")
+def test_profile_lock_revalidates_path_identity_after_flock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _config(tmp_path / "profile")
+    outbox = SQLiteOutbox.open(config)
+    identity = outbox.profile_lock_identity
+    displaced = tmp_path / "displaced.lock"
+    outside = tmp_path / "outside.lock"
+    outside.write_bytes(b"synthetic outside lock\n")
+    os.chmod(outside, 0o600)
+    original_bytes = outside.read_bytes()
+    original_mode = stat.S_IMODE(outside.stat().st_mode)
+    real_flock = outbox_module._try_flock_exclusive
+
+    def flock_then_substitute(descriptor: int) -> bool:
+        acquired = real_flock(descriptor)
+        if acquired:
+            identity.path.rename(displaced)
+            identity.path.symlink_to(outside)
+        return acquired
+
+    monkeypatch.setattr(outbox_module, "_try_flock_exclusive", flock_then_substitute)
+    try:
+        failed = outbox.try_acquire_profile_lock()
+        assert failed.status is outbox_module.ProfileLockStatus.LOCAL_FAILURE
+        assert failed.owner is None
+        assert outside.read_bytes() == original_bytes
+        assert stat.S_IMODE(outside.stat().st_mode) == original_mode
+
+        identity.path.unlink()
+        displaced.rename(identity.path)
+        monkeypatch.setattr(outbox_module, "_try_flock_exclusive", real_flock)
+        recovered = outbox.try_acquire_profile_lock()
+        assert recovered.status is outbox_module.ProfileLockStatus.ACQUIRED
+        assert recovered.owner is not None
+        recovered.owner.release()
+    finally:
+        if identity.path.is_symlink():
+            identity.path.unlink()
+        if displaced.exists():
+            displaced.rename(identity.path)
+        outbox.close()

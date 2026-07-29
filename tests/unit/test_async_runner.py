@@ -7,12 +7,13 @@ import gc
 import threading
 import time
 import weakref
-from collections.abc import Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from pathlib import Path
 
 import pytest
 
-from better_hermes_hindsight.client import RetainSegment
+import better_hermes_hindsight.runtime as runtime_module
+from better_hermes_hindsight.client import RetainConfirmation, RetainSegment
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.runtime import (
     AsyncCallTimeoutError,
@@ -39,9 +40,9 @@ class _FakeClient:
         self.calls.append("version")
         return object()
 
-    async def retain_segment(self, segment: RetainSegment) -> object:
+    async def retain_segment(self, segment: RetainSegment) -> RetainConfirmation:
         self.calls.append(f"retain:{segment.document_id}")
-        return {"document_id": segment.document_id}
+        return RetainConfirmation(confirmed=True)
 
     async def get_bank_profile(self) -> object:
         self.calls.append("profile")
@@ -154,26 +155,218 @@ def test_async_runner_timeout_cancels_task_and_next_call_succeeds() -> None:
         runner.shutdown()
 
 
-def test_async_runner_timeout_does_not_wait_unbounded_for_slow_cancellation() -> None:
+def test_async_runner_rejects_new_factory_while_cancellation_resistant_call_is_unsettled() -> None:
     runner = AsyncRunner()
+    operation_started = threading.Event()
+    cancellation_seen = threading.Event()
+    release_operation = threading.Event()
+    operation_finished = threading.Event()
+    rejected_factory_calls = 0
 
-    async def slow_cancellation() -> None:
+    async def cancellation_resistant() -> str:
+        operation_started.set()
         try:
-            await asyncio.Event().wait()
+            await asyncio.Future()
+            raise AssertionError("synthetic resistant operation unexpectedly resumed")
         except asyncio.CancelledError:
-            await asyncio.sleep(0.2)
+            cancellation_seen.set()
+            await asyncio.to_thread(release_operation.wait)
+            return "late-result"
+        finally:
+            operation_finished.set()
+
+    async def unexpected() -> str:
+        return "unexpected"
+
+    def rejected_factory() -> Awaitable[str]:
+        nonlocal rejected_factory_calls
+        rejected_factory_calls += 1
+        return unexpected()
 
     try:
-        started = time.monotonic()
         with pytest.raises(AsyncCallTimeoutError):
-            runner.run(slow_cancellation, timeout=0.01)
-        assert time.monotonic() - started < 0.15
+            runner.run(cancellation_resistant, timeout=0.01)
+        assert operation_started.is_set()
+        assert cancellation_seen.is_set()
+        assert operation_finished.is_set() is False
+        assert runner.wait_for_settlement(timeout=0.0) is False
 
-        async def success() -> str:
-            return "still-responsive"
+        with pytest.raises(
+            runtime_module.AsyncRunnerUnsettledError,
+            match="Better Hindsight async runner is waiting for prior work to settle",
+        ):
+            runner.run(rejected_factory, timeout=1.0)
+        assert rejected_factory_calls == 0
 
-        assert runner.run(success, timeout=0.1) == "still-responsive"
+        release_operation.set()
+        assert runner.wait_for_settlement(timeout=1.0) is True
+        assert operation_finished.wait(timeout=1.0)
+        assert runner.run(rejected_factory, timeout=1.0) == "unexpected"
+        assert rejected_factory_calls == 1
     finally:
+        release_operation.set()
+        runner.wait_for_settlement(timeout=1.0)
+        runner.shutdown()
+
+
+def test_async_runner_shutdown_refuses_to_close_unsettled_work() -> None:
+    runner = AsyncRunner()
+    cancellation_seen = threading.Event()
+    release_operation = threading.Event()
+    shutdown_returned = threading.Event()
+    shutdown_results: list[bool] = []
+    shutdown_errors: list[BaseException] = []
+
+    async def cancellation_resistant() -> None:
+        try:
+            await asyncio.Future()
+            raise AssertionError("synthetic resistant operation unexpectedly resumed")
+        except asyncio.CancelledError:
+            cancellation_seen.set()
+            await asyncio.to_thread(release_operation.wait)
+
+    def shutdown() -> None:
+        try:
+            shutdown_results.append(runner.shutdown())
+        except BaseException as error:
+            shutdown_errors.append(error)
+        finally:
+            shutdown_returned.set()
+
+    shutdown_thread = threading.Thread(target=shutdown)
+    try:
+        with pytest.raises(AsyncCallTimeoutError):
+            runner.run(cancellation_resistant, timeout=0.01)
+        assert cancellation_seen.is_set()
+        assert runner.wait_for_settlement(timeout=0.0) is False
+
+        shutdown_thread.start()
+        assert shutdown_returned.wait(timeout=1.0)
+        assert shutdown_results == []
+        assert len(shutdown_errors) == 1
+        assert isinstance(shutdown_errors[0], runtime_module.AsyncRunnerUnsettledError)
+        assert runner.wait_for_settlement(timeout=0.0) is False
+    finally:
+        release_operation.set()
+        shutdown_thread.join(timeout=2.0)
+        if not shutdown_results:
+            runner.wait_for_settlement(timeout=1.0)
+            runner.shutdown()
+
+
+def test_async_runner_completion_immediately_before_publication_leaves_no_stale_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = AsyncRunner()
+    publication_entered = threading.Event()
+    release_operation = threading.Event()
+    operation_finished = threading.Event()
+    original_publish = runner._publish_unsettled
+
+    def publish_after_completion(state: runtime_module._ScheduledCall[object]) -> None:
+        publication_entered.set()
+        release_operation.set()
+        assert state.done.wait(timeout=1.0)
+        original_publish(state)
+
+    monkeypatch.setattr(runner, "_publish_unsettled", publish_after_completion)
+
+    async def cancellation_resistant() -> str:
+        try:
+            await asyncio.Future()
+            raise AssertionError("synthetic resistant operation unexpectedly resumed")
+        except asyncio.CancelledError:
+            await asyncio.to_thread(release_operation.wait)
+            return "late-result"
+        finally:
+            operation_finished.set()
+
+    async def next_operation() -> str:
+        return "available"
+
+    try:
+        with pytest.raises(AsyncCallTimeoutError):
+            runner.run(cancellation_resistant, timeout=0.01)
+
+        assert publication_entered.is_set()
+        assert operation_finished.wait(timeout=1.0)
+        assert runner.wait_for_settlement(timeout=0.0) is True
+        assert runner.run(next_operation, timeout=1.0) == "available"
+    finally:
+        release_operation.set()
+        runner.wait_for_settlement(timeout=1.0)
+        runner.shutdown()
+
+
+def test_two_preadmitted_resistant_calls_keep_independent_unsettled_tokens() -> None:
+    runner = AsyncRunner()
+    started = (threading.Event(), threading.Event())
+    cancelled = (threading.Event(), threading.Event())
+    releases = (threading.Event(), threading.Event())
+    finished = (threading.Event(), threading.Event())
+    errors: list[BaseException] = []
+    errors_lock = threading.Lock()
+    later_factory_calls = 0
+
+    def operation(index: int) -> Callable[[], Awaitable[None]]:
+        async def resistant() -> None:
+            started[index].set()
+            try:
+                await asyncio.Future()
+                raise AssertionError("synthetic resistant operation unexpectedly resumed")
+            except asyncio.CancelledError:
+                cancelled[index].set()
+                await asyncio.to_thread(releases[index].wait)
+            finally:
+                finished[index].set()
+
+        return resistant
+
+    def run(index: int) -> None:
+        try:
+            runner.run(operation(index), timeout=0.2)
+        except BaseException as error:
+            with errors_lock:
+                errors.append(error)
+
+    async def later() -> str:
+        return "later"
+
+    def later_factory() -> Awaitable[str]:
+        nonlocal later_factory_calls
+        later_factory_calls += 1
+        return later()
+
+    threads = [threading.Thread(target=run, args=(index,)) for index in range(2)]
+    try:
+        for thread in threads:
+            thread.start()
+        assert all(event.wait(timeout=1.0) for event in started)
+        for thread in threads:
+            thread.join(timeout=1.0)
+        assert all(thread.is_alive() is False for thread in threads)
+        assert len(errors) == 2
+        assert all(isinstance(error, AsyncCallTimeoutError) for error in errors)
+        assert all(event.is_set() for event in cancelled)
+        assert runner.wait_for_settlement(timeout=0.0) is False
+
+        releases[0].set()
+        assert finished[0].wait(timeout=1.0)
+        with pytest.raises(runtime_module.AsyncRunnerUnsettledError):
+            runner.run(later_factory, timeout=1.0)
+        assert later_factory_calls == 0
+
+        releases[1].set()
+        assert runner.wait_for_settlement(timeout=1.0) is True
+        assert finished[1].wait(timeout=1.0)
+        assert runner.run(later_factory, timeout=1.0) == "later"
+        assert later_factory_calls == 1
+    finally:
+        for release in releases:
+            release.set()
+        for thread in threads:
+            thread.join(timeout=1.0)
+        runner.wait_for_settlement(timeout=1.0)
         runner.shutdown()
 
 

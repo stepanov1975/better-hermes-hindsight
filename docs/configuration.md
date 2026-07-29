@@ -112,14 +112,15 @@ Configuration therefore requires
 `retain.segment_max_bytes + 1024 <= outbox.max_pending_bytes`. Operators may lower the limits, but
 configuration cannot raise them above the documented finite ceilings.
 
-The retain deadline is consumed by the future sender around one remote synchronous retain attempt;
+The retain deadline is consumed by the sender around one remote synchronous retain attempt;
 it is not a user-response deadline. Remote work never runs inside the released `sync_turn()` callback.
 
 The API URL is normalized for deterministic destination identity: scheme and host are lowercased,
 international hostnames use IDNA form, default ports and trailing slashes are removed, and embedded
 credentials are forbidden. The destination fingerprint is SHA-256 over canonical normalized API URL,
-bank ID, and the code-owned payload-schema version only. The schema version has no operator override.
-Changing `HINDSIGHT_API_KEY` does not change the fingerprint.
+bank ID, code-owned payload-schema version, canonical redacted/sorted retain tags, and normalized
+observation scopes. The schema version has no operator override. Credentials and retry/timing settings
+do not participate, so changing `HINDSIGHT_API_KEY` does not change the fingerprint.
 
 ## Recall trust, redaction, and byte budget
 
@@ -218,10 +219,17 @@ profile lock file use `0600`. Pre-existing parent-directory modes are not change
 file is permission-corrected only after it passes confinement and private-schema validation; a
 rejected foreign file is left unchanged.
 
-Task 2 stops at local admission: it starts no sender, acquires no sender lock, performs no Hindsight
-retain request, and does not delete confirmed rows. Admitted rows therefore remain local pending data
-until the separately implemented sender phase. Deterministic IDs support idempotent processing but do
-not create an exactly-once or zero-loss guarantee.
+Sender delivery is implemented after local admission. A retain-enabled process starts one daemon
+sender, and a profile-wide POSIX advisory lock elects the sole process allowed to recover, claim,
+complete, or reschedule rows. Bounded cross-process polling lets that owner discover rows admitted by
+another process. Only rows matching the current destination fingerprint and payload schema are
+claimed; mismatched rows remain durable and unconfirmed.
+
+The sender deletes a row only after strict typed confirmation of synchronous replace-mode retention.
+Timeouts, fixed remote failures, and well-formed non-confirming responses remain retryable as
+`retain_timeout`, `retain_failed`, and `retain_unconfirmed`. Retry uses the stable document ID and
+exact content with deterministic capped exponential backoff. Commit-then-timeout may repeat a remote
+request, so this is replace-safe best effort, not exactly-once transport or a zero-loss guarantee.
 
 ## Mission behavior
 

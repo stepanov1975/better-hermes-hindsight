@@ -27,7 +27,6 @@ from hindsight_client_api.models.bank_config_response import BankConfigResponse
 from hindsight_client_api.models.bank_profile_response import BankProfileResponse
 from hindsight_client_api.models.delete_response import DeleteResponse
 from hindsight_client_api.models.recall_response import RecallResponse
-from hindsight_client_api.models.retain_response import RetainResponse
 from hindsight_client_api.models.version_response import VersionResponse
 from pydantic import ValidationError
 
@@ -36,10 +35,12 @@ from better_hermes_hindsight.client import (
     DisposableBankGuardError,
     HindsightClientAdapter,
     HindsightClientError,
+    RetainConfirmation,
     RetainSegment,
     create_hindsight_client,
 )
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
+from better_hermes_hindsight.redaction import REDACTION_MARKER
 from better_hermes_hindsight.runtime import AsyncCallTimeoutError, ProcessRuntime
 from tests.fakes.hindsight_server import (
     MAX_REQUEST_BYTES,
@@ -47,6 +48,7 @@ from tests.fakes.hindsight_server import (
     FakeHindsightServer,
     RecallFault,
     RequestRecord,
+    RetainFault,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -121,6 +123,11 @@ def _reserved_refusing_loopback() -> Iterator[tuple[socket.socket, str]]:
 async def _release_delay(server: FakeHindsightServer) -> None:
     server.release_delay()
     await server.wait_for_delay_finished()
+
+
+async def _release_retain_delay(server: FakeHindsightServer) -> None:
+    server.release_retain_delay()
+    await server.wait_for_retain_delay_finished()
 
 
 def test_real_adapter_serializes_and_decodes_complete_public_contract(
@@ -203,8 +210,8 @@ def test_real_adapter_serializes_and_decodes_complete_public_contract(
             assert isinstance(version, VersionResponse)
             assert isinstance(profile, BankProfileResponse)
             assert isinstance(recalled, RecallResponse)
-            assert isinstance(retained, RetainResponse)
-            assert isinstance(replayed, RetainResponse)
+            assert retained == RetainConfirmation(confirmed=True)
+            assert replayed == RetainConfirmation(confirmed=True)
             assert isinstance(bank_config, BankConfigResponse)
             assert isinstance(updated_config, BankConfigResponse)
             assert isinstance(created, BankProfileResponse)
@@ -229,12 +236,6 @@ def test_real_adapter_serializes_and_decodes_complete_public_contract(
             assert result.scores.semantic == 0.8
             assert recalled.source_facts is not None
             assert recalled.source_facts["source-fact-1"].text == "fixture source fact"
-
-            for response in (retained, replayed):
-                assert response.success is True
-                assert response.bank_id == FIXTURE_BANK_ID
-                assert response.items_count == 1
-                assert response.var_async is False
 
             assert bank_config.bank_id == FIXTURE_BANK_ID
             assert bank_config.config["retain_mission"] == "retain-old"
@@ -312,7 +313,7 @@ def test_real_adapter_serializes_and_decodes_complete_public_contract(
                         "metadata": None,
                         "document_id": "stable-document-id",
                         "entities": None,
-                        "tags": ["source:fixture", "kind:turn"],
+                        "tags": ["kind:turn", "source:fixture"],
                         "observation_scopes": [[]],
                         "strategy": None,
                         "update_mode": "replace",
@@ -350,6 +351,270 @@ def test_real_adapter_serializes_and_decodes_complete_public_contract(
     assert FIXTURE_API_KEY not in caplog.text
     assert FIXTURE_API_KEY not in captured.out
     assert FIXTURE_API_KEY not in captured.err
+
+
+def test_real_adapter_retain_wire_uses_only_canonical_redacted_tags(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+    runtime_sentinel: str,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def scenario() -> tuple[str, str]:
+        raw_tag_secret = secrets.token_urlsafe(24)
+        server = FakeHindsightServer(
+            bank_id=FIXTURE_BANK_ID,
+            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
+            error_sentinel=runtime_sentinel,
+            expected_api_key=FIXTURE_API_KEY,
+        )
+        await server.start()
+        adapter: HindsightClientAdapter | None = None
+        try:
+            adapter = create_hindsight_client(
+                _config(
+                    tmp_path,
+                    base_url=server.base_url,
+                    api_key=FIXTURE_API_KEY,
+                    retain={
+                        "tags": ["zeta", f"api_key={raw_tag_secret}", "alpha"],
+                    },
+                )
+            )
+            segment = RetainSegment(
+                content="privacy-safe synthetic segment",
+                document_id="stable-private-wire-id",
+            )
+
+            confirmed = await adapter.retain_segment(segment)
+            assert confirmed == RetainConfirmation(confirmed=True)
+
+            server.arm_retain_fault("http_503")
+            failure = await _capture_failure(lambda: adapter.retain_segment(segment))
+            assert type(failure) is HindsightClientError
+            assert isinstance(failure, HindsightClientError)
+            assert failure.category == "retain_failed"
+            assert str(failure) == "Better Hindsight retain failed."
+            assert failure.__cause__ is None
+            assert failure.__suppress_context__ is True
+
+            records = server.records
+            assert len(records) == 2
+            assert records[0].json_body == records[1].json_body
+            for record in records:
+                assert record.authorization == "valid_bearer"
+                assert isinstance(record.json_body, dict)
+                assert record.json_body["async"] is False
+                items = record.json_body["items"]
+                assert isinstance(items, list) and len(items) == 1
+                item = items[0]
+                assert isinstance(item, dict)
+                assert item["tags"] == [
+                    "alpha",
+                    f"api_key={REDACTION_MARKER}",
+                    "zeta",
+                ]
+                assert item["update_mode"] == "replace"
+
+            surfaces = "\n".join(
+                (
+                    repr(records),
+                    repr(server.safe_report()),
+                    repr(failure),
+                    "".join(traceback.format_exception(failure)),
+                )
+            )
+            assert raw_tag_secret not in surfaces
+            assert runtime_sentinel not in surfaces
+            assert FIXTURE_API_KEY not in surfaces
+            return raw_tag_secret, surfaces
+        finally:
+            if adapter is not None:
+                await adapter.close()
+            await server.close()
+
+    raw_tag_secret, surfaces = asyncio.run(scenario())
+    captured = capsys.readouterr()
+    for forbidden in (raw_tag_secret, runtime_sentinel, FIXTURE_API_KEY):
+        assert forbidden not in surfaces
+        assert forbidden not in caplog.text
+        assert forbidden not in captured.out
+        assert forbidden not in captured.err
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "false_success",
+        "wrong_bank",
+        "wrong_count",
+        "asynchronous",
+    ],
+)
+def test_real_adapter_returns_typed_false_for_valid_unconfirmed_retain_responses(
+    tmp_path: Path,
+    runtime_sentinel: str,
+    fault: RetainFault,
+) -> None:
+    async def scenario() -> None:
+        server = FakeHindsightServer(
+            bank_id=FIXTURE_BANK_ID,
+            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
+            error_sentinel=runtime_sentinel,
+            expected_api_key=None,
+        )
+        await server.start()
+        adapter: HindsightClientAdapter | None = None
+        try:
+            adapter = create_hindsight_client(
+                _config(tmp_path, base_url=server.base_url, api_key=None)
+            )
+            segment = RetainSegment(content="stable segment", document_id="stable-document-id")
+
+            server.arm_retain_fault(fault)
+            unconfirmed = await adapter.retain_segment(segment)
+            recovered = await adapter.retain_segment(segment)
+
+            assert unconfirmed == RetainConfirmation(confirmed=False)
+            assert recovered == RetainConfirmation(confirmed=True)
+            assert len(server.records) == 2
+            assert server.records[0].json_body == server.records[1].json_body
+            assert runtime_sentinel not in repr(server.records)
+            assert runtime_sentinel not in repr(server.safe_report())
+        finally:
+            if adapter is not None:
+                await adapter.close()
+            await server.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "malformed_json",
+        "malformed_schema",
+        "http_503",
+        "success_integer",
+        "items_count_boolean",
+        "async_integer",
+    ],
+)
+def test_real_adapter_maps_invalid_retain_wire_responses_to_fixed_error_then_recovers(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    runtime_sentinel: str,
+    fault: RetainFault,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def scenario() -> tuple[str, str, str]:
+        server = FakeHindsightServer(
+            bank_id=FIXTURE_BANK_ID,
+            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
+            error_sentinel=runtime_sentinel,
+            expected_api_key=None,
+        )
+        await server.start()
+        adapter: HindsightClientAdapter | None = None
+        try:
+            adapter = create_hindsight_client(
+                _config(tmp_path, base_url=server.base_url, api_key=None)
+            )
+            segment = RetainSegment(content="stable segment", document_id="stable-document-id")
+
+            server.arm_retain_fault(fault)
+            failure = await _capture_failure(lambda: adapter.retain_segment(segment))
+            assert type(failure) is HindsightClientError
+            assert isinstance(failure, HindsightClientError)
+            assert failure.category == "retain_failed"
+            assert str(failure) == "Better Hindsight retain failed."
+            assert failure.__cause__ is None
+            assert failure.__suppress_context__ is True
+
+            recovered = await adapter.retain_segment(segment)
+            assert recovered == RetainConfirmation(confirmed=True)
+            assert len(server.records) == 2
+            assert server.records[0].json_body == server.records[1].json_body
+            return (
+                repr(failure),
+                "".join(traceback.format_exception(failure)),
+                repr(server.safe_report()),
+            )
+        finally:
+            if adapter is not None:
+                await adapter.close()
+            await server.close()
+
+    error_repr, error_traceback, safe_report = asyncio.run(scenario())
+    for surface in (error_repr, error_traceback, safe_report, caplog.text):
+        assert runtime_sentinel not in surface
+
+
+def test_real_sdk_adapter_retain_delay_is_one_shot_recorded_and_deterministic(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    runtime_sentinel: str,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def scenario() -> tuple[str, str]:
+        server = FakeHindsightServer(
+            bank_id=FIXTURE_BANK_ID,
+            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
+            error_sentinel=runtime_sentinel,
+            expected_api_key=None,
+        )
+        await server.start()
+        config = _config(tmp_path, base_url=server.base_url, api_key=None)
+        sdk = Hindsight(
+            base_url=server.base_url,
+            timeout=0.05,
+            user_agent=FIXTURE_USER_AGENT,
+        )
+        adapter = HindsightClientAdapter(config=config, sdk_client=sdk)
+        call: asyncio.Task[RetainConfirmation] | None = None
+        try:
+            segment = RetainSegment(content="stable segment", document_id="stable-document-id")
+            server.arm_retain_fault("delay")
+            with pytest.raises(RuntimeError, match="retain fault is already armed"):
+                server.arm_retain_fault("http_503")
+
+            try:
+                call = asyncio.create_task(adapter.retain_segment(segment))
+                await server.wait_for_retain_delay_entered()
+                with pytest.raises(RuntimeError, match="delayed retain handler is still active"):
+                    server.arm_retain_fault("http_503")
+                failure = await call
+                raise AssertionError(f"retain unexpectedly succeeded: {failure!r}")
+            except HindsightClientError as failure:
+                assert failure.category == "retain_failed"
+                assert str(failure) == "Better Hindsight retain failed."
+                assert failure.__cause__ is None
+                assert failure.__suppress_context__ is True
+                error_surface = "\n".join(
+                    (repr(failure), "".join(traceback.format_exception(failure)))
+                )
+            finally:
+                await _release_retain_delay(server)
+                if call is not None and not call.done():
+                    call.cancel()
+                    await asyncio.gather(call, return_exceptions=True)
+
+            recovered = await adapter.retain_segment(segment)
+            assert recovered == RetainConfirmation(confirmed=True)
+            assert len(server.records) == 2
+            assert server.records[0].json_body == server.records[1].json_body
+            report_surface = repr(server.safe_report())
+            return error_surface, report_surface
+        finally:
+            await adapter.close()
+            await server.close()
+
+    error_surface, report_surface = asyncio.run(scenario())
+    for surface in (error_surface, report_surface, caplog.text):
+        assert runtime_sentinel not in surface
 
 
 def test_query_only_recall_freezes_sdk_defaults_nulls_and_absent_auth(

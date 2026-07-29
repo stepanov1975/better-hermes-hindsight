@@ -11,10 +11,13 @@ from dataclasses import FrozenInstanceError
 from importlib import metadata as importlib_metadata
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from hindsight_client_api.models.bank_config_update import BankConfigUpdate
+from hindsight_client_api.models.retain_response import RetainResponse as SdkRetainResponse
 
+import better_hermes_hindsight.client as client_module
 from better_hermes_hindsight import __version__
 from better_hermes_hindsight.client import (
     MISSION_UPDATE_FIELDS,
@@ -27,6 +30,7 @@ from better_hermes_hindsight.client import (
     is_available,
 )
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
+from better_hermes_hindsight.redaction import REDACTION_MARKER
 
 
 class _UnprintableFailure(RuntimeError):
@@ -64,6 +68,7 @@ class _FakeSdkClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.failures: dict[str, BaseException] = {}
+        self.responses: dict[str, object] = {}
         self.banks = _FakeBanksApi(self.failures)
 
     async def arecall(self, **kwargs: object) -> object:
@@ -87,6 +92,10 @@ class _FakeSdkClient:
             raise failure
         copied = dict(kwargs)
         self.calls.append((operation, copied))
+        if operation in self.responses:
+            return self.responses[operation]
+        if operation == "aretain_batch":
+            return _sdk_retain_response(bank_id=str(kwargs["bank_id"]))
         return {"operation": operation}
 
 
@@ -112,6 +121,23 @@ class _RecordingSdkFactory:
             }
         )
         return self.client
+
+
+def _sdk_retain_response(
+    *,
+    success: bool = True,
+    bank_id: str = "sample-bank",
+    items_count: int = 1,
+    var_async: bool = False,
+) -> SdkRetainResponse:
+    return SdkRetainResponse.model_validate(
+        {
+            "success": success,
+            "bank_id": bank_id,
+            "items_count": items_count,
+            "async": var_async,
+        }
+    )
 
 
 def _config(
@@ -307,11 +333,11 @@ def test_retain_sends_one_replace_item_with_stable_item_id_scopes_and_tags(
         "content": "immutable segment text",
         "document_id": "stable-document-id",
         "update_mode": "replace",
-        "tags": ["source:sample", "kind:turn"],
+        "tags": ["kind:turn", "source:sample"],
     }
     if expected_scope is not None:
         expected_item["observation_scopes"] = expected_scope
-    assert result == {"operation": "aretain_batch"}
+    assert result == client_module.RetainConfirmation(confirmed=True)
     assert sdk_client.calls == [
         (
             "aretain_batch",
@@ -324,6 +350,109 @@ def test_retain_sends_one_replace_item_with_stable_item_id_scopes_and_tags(
     ]
     with pytest.raises(FrozenInstanceError):
         segment.__setattr__("content", "replacement")
+    with pytest.raises(FrozenInstanceError):
+        result.__setattr__("confirmed", False)
+
+
+def test_retain_sends_only_canonical_redacted_tags_to_the_sdk(tmp_path: Path) -> None:
+    raw_tag_secret = "SYNTHETIC_WIRE_TAG_SECRET"
+    config = _config(
+        tmp_path,
+        injected={
+            "bank_id": "sample-bank",
+            "retain": {
+                "tags": ["zeta", f"api_key={raw_tag_secret}", "alpha"],
+            },
+        },
+    )
+    sdk_client = _FakeSdkClient()
+    adapter = HindsightClientAdapter(config=config, sdk_client=sdk_client)
+
+    result = asyncio.run(
+        adapter.retain_segment(RetainSegment(content="segment", document_id="document-id"))
+    )
+
+    assert result == client_module.RetainConfirmation(confirmed=True)
+    _operation, kwargs = sdk_client.calls[0]
+    items = kwargs["items"]
+    assert isinstance(items, list)
+    item = items[0]
+    assert isinstance(item, dict)
+    assert item["tags"] == ["alpha", f"api_key={REDACTION_MARKER}", "zeta"]
+    assert raw_tag_secret not in repr(sdk_client.calls)
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        _sdk_retain_response(success=False),
+        _sdk_retain_response(bank_id="other-bank"),
+        _sdk_retain_response(items_count=2),
+        _sdk_retain_response(var_async=True),
+    ],
+)
+def test_well_formed_nonconfirming_retain_responses_return_typed_false(
+    tmp_path: Path,
+    response: SdkRetainResponse,
+) -> None:
+    config = _config(tmp_path, injected={"bank_id": "sample-bank"})
+    sdk_client = _FakeSdkClient()
+    sdk_client.responses["aretain_batch"] = response
+    adapter = HindsightClientAdapter(config=config, sdk_client=sdk_client)
+
+    result = asyncio.run(
+        adapter.retain_segment(RetainSegment(content="segment", document_id="document-id"))
+    )
+
+    assert result == client_module.RetainConfirmation(confirmed=False)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"success": 1},
+        {"bank_id": SimpleNamespace(__eq__=lambda _self, _other: True)},
+        {"items_count": True},
+        {"var_async": 0},
+    ],
+)
+def test_direct_response_type_lookalikes_do_not_confirm(
+    tmp_path: Path,
+    overrides: Mapping[str, object],
+) -> None:
+    fields: dict[str, object] = {
+        "success": True,
+        "bank_id": "sample-bank",
+        "items_count": 1,
+        "var_async": False,
+    }
+    fields.update(overrides)
+    config = _config(tmp_path, injected={"bank_id": "sample-bank"})
+    sdk_client = _FakeSdkClient()
+    sdk_client.responses["aretain_batch"] = SimpleNamespace(**fields)
+    adapter = HindsightClientAdapter(config=config, sdk_client=sdk_client)
+
+    result = asyncio.run(
+        adapter.retain_segment(RetainSegment(content="segment", document_id="document-id"))
+    )
+
+    assert result == client_module.RetainConfirmation(confirmed=False)
+
+
+def test_malformed_direct_retain_response_maps_to_fixed_client_error(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    sdk_client = _FakeSdkClient()
+    sdk_client.responses["aretain_batch"] = object()
+    adapter = HindsightClientAdapter(config=config, sdk_client=sdk_client)
+
+    with pytest.raises(HindsightClientError) as caught:
+        asyncio.run(
+            adapter.retain_segment(RetainSegment(content="segment", document_id="document-id"))
+        )
+
+    assert caught.value.category == "retain_failed"
+    assert str(caught.value) == "Better Hindsight retain failed."
+    assert caught.value.__cause__ is None
 
 
 def test_bank_reads_and_allowlisted_mission_update_use_public_banks_api(

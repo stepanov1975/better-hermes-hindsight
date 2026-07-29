@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Literal, TypeAlias, cast
 from urllib.parse import urlsplit, urlunsplit
 
+from better_hermes_hindsight.redaction import redact_sensitive_text
+
 DEFAULT_API_URL = "http://localhost:8888"
 DEFAULT_BANK_ID = "hermes"
 PAYLOAD_SCHEMA_VERSION = "better-hindsight-turn-v1"
@@ -55,6 +57,11 @@ RecallBudget: TypeAlias = Literal["low", "mid", "high"]
 RecallType: TypeAlias = Literal["world", "experience", "observation"]
 RecallTagMode: TypeAlias = Literal["any", "all", "any_strict", "all_strict", "exact"]
 ObservationScopes: TypeAlias = Literal["combined"] | tuple[tuple[str, ...], ...] | None
+
+
+class _CanonicalRetainTags(tuple[str, ...]):
+    """Marker type for the one validated, redacted, sorted retain-tag tuple."""
+
 
 _ROOT_KEYS = {
     "api_url",
@@ -253,7 +260,12 @@ class BetterHindsightConfig:
     @property
     def destination_fingerprint(self) -> str:
         """Return the code-derived, credential-free destination identity."""
-        return derive_destination_fingerprint(api_url=self.api_url, bank_id=self.bank_id)
+        return derive_destination_fingerprint(
+            api_url=self.api_url,
+            bank_id=self.bank_id,
+            retain_tags=self.retain.tags,
+            observation_scopes=self.retain.observation_scopes,
+        )
 
     def authorize_gateway(
         self,
@@ -394,15 +406,25 @@ def normalize_api_url(value: object) -> str:
     return urlunsplit((scheme, netloc, path, "", ""))
 
 
-def derive_destination_fingerprint(*, api_url: object, bank_id: object) -> str:
-    """Hash only normalized non-secret destination identity."""
+def derive_destination_fingerprint(
+    *,
+    api_url: object,
+    bank_id: object,
+    retain_tags: object = (),
+    observation_scopes: object = None,
+) -> str:
+    """Hash normalized destination and retain transport policy without credentials or timing."""
     normalized_url = normalize_api_url(api_url)
     normalized_bank = _parse_bank_id(bank_id)
+    canonical_tags = canonicalize_retain_tags(retain_tags)
+    normalized_scopes = _parse_observation_scopes(observation_scopes)
     payload = json.dumps(
         {
             "api_url": normalized_url,
             "bank_id": normalized_bank,
+            "observation_scopes": normalized_scopes,
             "payload_schema": PAYLOAD_SCHEMA_VERSION,
+            "retain_tags": canonical_tags,
         },
         ensure_ascii=True,
         separators=(",", ":"),
@@ -755,6 +777,26 @@ def _parse_tags(value: object, field_name: str) -> tuple[str, ...]:
     return tuple(items)
 
 
+def canonicalize_retain_tags(value: object) -> tuple[str, ...]:
+    """Return the sole validated, redacted, sorted retain-tag representation."""
+    if isinstance(value, _CanonicalRetainTags):
+        return value
+
+    items = _parse_tags(value, "retain.tags")
+    try:
+        redacted = tuple(redact_sensitive_text(item) for item in items)
+    except Exception:
+        raise _error("retain.tags could not be safely canonicalized") from None
+    if any(
+        not item or item.strip() != item or _contains_control(item) or len(item) > MAX_TAG_CHARS
+        for item in redacted
+    ):
+        raise _error("retain.tags could not be safely canonicalized")
+    if len(set(redacted)) != len(redacted):
+        raise _error("retain.tags contain distinct entries that collide after redaction")
+    return _CanonicalRetainTags(sorted(redacted))
+
+
 def _parse_string_sequence(value: object, field_name: str, *, allow_empty: bool) -> list[str]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         raise _error(f"{field_name} must be a list of strings")
@@ -810,7 +852,7 @@ def _parse_retain(value: object) -> RetainConfig:
             maximum=MAX_RETAIN_SEGMENT_BYTES,
         ),
         observation_scopes=_parse_observation_scopes(values.get("observation_scopes")),
-        tags=_parse_tags(values.get("tags", ()), "retain.tags"),
+        tags=canonicalize_retain_tags(values.get("tags", ())),
     )
 
 
@@ -974,6 +1016,7 @@ __all__ = [
     "RecallTagMode",
     "RecallType",
     "RetainConfig",
+    "canonicalize_retain_tags",
     "derive_destination_fingerprint",
     "load_config",
     "normalize_api_url",

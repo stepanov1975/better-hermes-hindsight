@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import hashlib
+import math
 import os
 import re
 import sqlite3
@@ -86,6 +88,10 @@ class _InvalidSchemaError(RuntimeError):
     pass
 
 
+class _GuardedTransitionError(RuntimeError):
+    pass
+
+
 class AdmissionStatus(StrEnum):
     """Fixed local admission outcomes safe for diagnostics."""
 
@@ -96,6 +102,37 @@ class AdmissionStatus(StrEnum):
     CONTENDED = "contended"
     LOCAL_FAILURE = "local_failure"
     INVALID = "invalid"
+
+
+class ProfileLockStatus(StrEnum):
+    """Fixed, sanitized outcomes for nonblocking profile-lock acquisition."""
+
+    ACQUIRED = "acquired"
+    CONTENDED = "contended"
+    LOCAL_FAILURE = "local_failure"
+
+
+class OutboxClaimStatus(StrEnum):
+    """Fixed, sanitized outcomes for one deterministic due-row claim."""
+
+    CLAIMED = "claimed"
+    EMPTY = "empty"
+    LOCAL_FAILURE = "local_failure"
+
+
+class OutboxTransitionStatus(StrEnum):
+    """Fixed, sanitized outcomes for a short persisted-state transition."""
+
+    APPLIED = "applied"
+    LOCAL_FAILURE = "local_failure"
+
+
+class OutboxFailureCategory(StrEnum):
+    """The complete code-owned set of categories that may be persisted after retain failure."""
+
+    RETAIN_TIMEOUT = "retain_timeout"
+    RETAIN_FAILED = "retain_failed"
+    RETAIN_UNCONFIRMED = "retain_unconfirmed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,6 +170,102 @@ class OutboxRow:
     updated_at: float = 0.0
 
 
+@dataclass(frozen=True, slots=True)
+class ProfileLockIdentity:
+    """The reserved private lock pathname and captured regular-file identity."""
+
+    path: Path = field(repr=False)
+    device: int
+    inode: int
+
+
+class ProfileLockOwner:
+    """A live exclusive profile-lock descriptor passed to owner-only data transitions."""
+
+    __slots__ = ("_descriptor", "_identity", "_token")
+
+    def __init__(
+        self,
+        *,
+        descriptor: int,
+        identity: ProfileLockIdentity,
+        token: object,
+    ) -> None:
+        self._descriptor = descriptor
+        self._identity = identity
+        self._token = token
+
+    def __repr__(self) -> str:
+        return "ProfileLockOwner()"
+
+    @property
+    def identity(self) -> ProfileLockIdentity:
+        """Return the identity whose descriptor remains locked by this owner."""
+
+        return self._identity
+
+    def release(self) -> None:
+        """Release and close this owner idempotently."""
+
+        descriptor = self._descriptor
+        if descriptor < 0:
+            return
+        self._descriptor = -1
+        _release_profile_lock_descriptor(descriptor)
+
+    def __enter__(self) -> ProfileLockOwner:
+        return self
+
+    def __exit__(
+        self,
+        exception_type: object,
+        exception: object,
+        traceback: object,
+    ) -> None:
+        self.release()
+
+    def _descriptor_for(self, token: object) -> int | None:
+        if self._token is not token or self._descriptor < 0:
+            return None
+        return self._descriptor
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileLockAcquisitionResult:
+    """One nonblocking ownership attempt without exposing local exception text."""
+
+    status: ProfileLockStatus
+    owner: ProfileLockOwner | None = field(default=None, repr=False)
+
+    @property
+    def acquired(self) -> bool:
+        return self.status is ProfileLockStatus.ACQUIRED and self.owner is not None
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxClaimResult:
+    """One exact due-row claim or a fixed empty/local-failure outcome."""
+
+    status: OutboxClaimStatus
+    row: OutboxRow | None = field(default=None, repr=False)
+
+    @property
+    def claimed(self) -> bool:
+        return self.status is OutboxClaimStatus.CLAIMED and self.row is not None
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxTransitionResult:
+    """One short recovery/completion/retry transition result."""
+
+    status: OutboxTransitionStatus
+    affected_count: int = 0
+
+    @property
+    def applied(self) -> bool:
+        return self.status is OutboxTransitionStatus.APPLIED
+
+
 class SQLiteOutbox:
     """One connection owner for a profile-local private outbox."""
 
@@ -140,10 +273,15 @@ class SQLiteOutbox:
         "_closed",
         "_connection",
         "_destination_fingerprint",
+        "_hermes_home",
+        "_lock_token",
         "_max_pending_bytes",
         "_max_pending_rows",
         "_mutex",
-        "_profile_lock_path",
+        "_payload_schema",
+        "_profile_lock_identity",
+        "_retry_initial_seconds",
+        "_retry_max_seconds",
         "_segment_max_bytes",
     )
 
@@ -152,13 +290,19 @@ class SQLiteOutbox:
         *,
         config: BetterHindsightConfig,
         connection: sqlite3.Connection,
-        profile_lock_path: Path,
+        hermes_home: Path,
+        profile_lock_identity: ProfileLockIdentity,
     ) -> None:
         self._connection = connection
-        self._profile_lock_path = profile_lock_path
+        self._hermes_home = hermes_home
+        self._profile_lock_identity = profile_lock_identity
+        self._lock_token = object()
         self._destination_fingerprint = config.destination_fingerprint
+        self._payload_schema = config.outbox.payload_schema
         self._max_pending_rows = config.outbox.max_pending_rows
         self._max_pending_bytes = config.outbox.max_pending_bytes
+        self._retry_initial_seconds = config.outbox.retry_initial_seconds
+        self._retry_max_seconds = config.outbox.retry_max_seconds
         self._segment_max_bytes = config.retain.segment_max_bytes
         self._mutex = threading.Lock()
         self._closed = False
@@ -169,7 +313,13 @@ class SQLiteOutbox:
 
         connection: sqlite3.Connection | None = None
         try:
-            database_path, profile_lock_path, database_identity = _prepare_private_paths(config)
+            (
+                hermes_home,
+                database_path,
+                profile_lock_path,
+                database_identity,
+                profile_lock_identity_values,
+            ) = _prepare_private_paths(config)
             connection = _connect_existing_database(database_path, config)
             _revalidate_database_identity(
                 config.hermes_home,
@@ -183,9 +333,20 @@ class SQLiteOutbox:
                 database_path,
                 profile_lock_path,
                 database_identity,
+                profile_lock_identity_values,
             )
             _set_private_file_mode(database_path)
             _set_private_file_mode(profile_lock_path)
+            _revalidate_profile_lock_identity(
+                hermes_home,
+                ProfileLockIdentity(
+                    path=profile_lock_path,
+                    device=profile_lock_identity_values[0],
+                    inode=profile_lock_identity_values[1],
+                ),
+                descriptor=None,
+                require_private_mode=True,
+            )
         except _UnsupportedSchemaError:
             if connection is not None:
                 with contextlib.suppress(Exception):
@@ -199,7 +360,12 @@ class SQLiteOutbox:
         return cls(
             config=config,
             connection=connection,
-            profile_lock_path=profile_lock_path,
+            hermes_home=hermes_home,
+            profile_lock_identity=ProfileLockIdentity(
+                path=profile_lock_path,
+                device=profile_lock_identity_values[0],
+                inode=profile_lock_identity_values[1],
+            ),
         )
 
     def __repr__(self) -> str:
@@ -209,7 +375,317 @@ class SQLiteOutbox:
     def profile_lock_path(self) -> Path:
         """Return the private lock file Task 3 will acquire for sender ownership."""
 
-        return self._profile_lock_path
+        return self._profile_lock_identity.path
+
+    @property
+    def profile_lock_identity(self) -> ProfileLockIdentity:
+        """Return the captured reserved lock identity for sender ownership."""
+
+        return self._profile_lock_identity
+
+    def try_acquire_profile_lock(self) -> ProfileLockAcquisitionResult:
+        """Open the reserved file existing-only and try one nonblocking exclusive POSIX lock."""
+
+        if os.name != "posix":
+            return ProfileLockAcquisitionResult(ProfileLockStatus.LOCAL_FAILURE)
+
+        descriptor: int | None = None
+        acquired = False
+        with self._mutex:
+            if self._closed:
+                return ProfileLockAcquisitionResult(ProfileLockStatus.LOCAL_FAILURE)
+            try:
+                flags = os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+                descriptor = os.open(self._profile_lock_identity.path, flags)
+                _revalidate_profile_lock_identity(
+                    self._hermes_home,
+                    self._profile_lock_identity,
+                    descriptor=descriptor,
+                    require_private_mode=True,
+                )
+                acquired = _try_flock_exclusive(descriptor)
+                if not acquired:
+                    return ProfileLockAcquisitionResult(ProfileLockStatus.CONTENDED)
+                _revalidate_profile_lock_identity(
+                    self._hermes_home,
+                    self._profile_lock_identity,
+                    descriptor=descriptor,
+                    require_private_mode=True,
+                )
+                owner = ProfileLockOwner(
+                    descriptor=descriptor,
+                    identity=self._profile_lock_identity,
+                    token=self._lock_token,
+                )
+                descriptor = None
+                return ProfileLockAcquisitionResult(ProfileLockStatus.ACQUIRED, owner)
+            except Exception:
+                return ProfileLockAcquisitionResult(ProfileLockStatus.LOCAL_FAILURE)
+            finally:
+                if descriptor is not None:
+                    if acquired:
+                        _release_profile_lock_descriptor(descriptor)
+                    else:
+                        with contextlib.suppress(OSError):
+                            os.close(descriptor)
+
+    def recover_sending(
+        self,
+        owner: ProfileLockOwner,
+        *,
+        now: float,
+    ) -> OutboxTransitionResult:
+        """Reset every stale sending row after exclusive ownership has been acquired."""
+
+        normalized_now = _valid_wall_time(now)
+        if normalized_now is None:
+            return OutboxTransitionResult(OutboxTransitionStatus.LOCAL_FAILURE)
+        with self._mutex:
+            if self._closed or self._owner_descriptor(owner) is None:
+                return OutboxTransitionResult(OutboxTransitionStatus.LOCAL_FAILURE)
+            try:
+                self._connection.execute("BEGIN IMMEDIATE")
+                cursor = self._connection.execute(
+                    """
+                    UPDATE outbox
+                    SET state='pending', next_attempt_at=?, updated_at=?
+                    WHERE state='sending'
+                    """,
+                    (normalized_now, normalized_now),
+                )
+                affected_count = cursor.rowcount
+                if affected_count < 0 or self._owner_descriptor(owner) is None:
+                    raise _GuardedTransitionError
+                self._connection.commit()
+                return OutboxTransitionResult(
+                    OutboxTransitionStatus.APPLIED,
+                    affected_count=affected_count,
+                )
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    self._connection.rollback()
+                return OutboxTransitionResult(OutboxTransitionStatus.LOCAL_FAILURE)
+
+    def claim_due(self, owner: ProfileLockOwner, *, now: float) -> OutboxClaimResult:
+        """Atomically claim exactly one due matching row and increment its attempt before I/O."""
+
+        normalized_now = _valid_wall_time(now)
+        if normalized_now is None:
+            return OutboxClaimResult(OutboxClaimStatus.LOCAL_FAILURE)
+        with self._mutex:
+            if self._closed or self._owner_descriptor(owner) is None:
+                return OutboxClaimResult(OutboxClaimStatus.LOCAL_FAILURE)
+            try:
+                self._connection.execute("BEGIN IMMEDIATE")
+                record = self._connection.execute(
+                    """
+                    SELECT
+                        document_id,
+                        payload_hash,
+                        payload_schema,
+                        source_sha256,
+                        segment_index,
+                        segment_count,
+                        content,
+                        destination_fingerprint,
+                        state,
+                        attempt_count,
+                        next_attempt_at,
+                        last_error_category,
+                        created_at,
+                        updated_at
+                    FROM outbox
+                    WHERE state='pending'
+                      AND next_attempt_at <= ?
+                      AND destination_fingerprint = ?
+                      AND payload_schema = ?
+                    ORDER BY
+                        next_attempt_at,
+                        created_at,
+                        source_sha256,
+                        segment_index,
+                        document_id
+                    LIMIT 1
+                    """,
+                    (normalized_now, self._destination_fingerprint, self._payload_schema),
+                ).fetchone()
+                if record is None:
+                    self._connection.rollback()
+                    return OutboxClaimResult(OutboxClaimStatus.EMPTY)
+
+                prior_attempt_count = int(cast(int, record[9]))
+                cursor = self._connection.execute(
+                    """
+                    UPDATE outbox
+                    SET state='sending', attempt_count=attempt_count + 1, updated_at=?
+                    WHERE document_id=?
+                      AND state='pending'
+                      AND attempt_count=?
+                      AND next_attempt_at <= ?
+                      AND destination_fingerprint=?
+                      AND payload_schema=?
+                    """,
+                    (
+                        normalized_now,
+                        str(record[0]),
+                        prior_attempt_count,
+                        normalized_now,
+                        self._destination_fingerprint,
+                        self._payload_schema,
+                    ),
+                )
+                if cursor.rowcount != 1 or self._owner_descriptor(owner) is None:
+                    raise _GuardedTransitionError
+                self._connection.commit()
+
+                claimed_record = list(record)
+                claimed_record[8] = "sending"
+                claimed_record[9] = prior_attempt_count + 1
+                claimed_record[13] = normalized_now
+                return OutboxClaimResult(
+                    OutboxClaimStatus.CLAIMED,
+                    _row_from_record(tuple(claimed_record)),
+                )
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    self._connection.rollback()
+                return OutboxClaimResult(OutboxClaimStatus.LOCAL_FAILURE)
+
+    def complete_claim(
+        self,
+        owner: ProfileLockOwner,
+        *,
+        document_id: str,
+        attempt_count: int,
+    ) -> OutboxTransitionResult:
+        """Delete only the exact currently sending attempt after confirmed remote completion."""
+
+        if not _valid_claim_guard(document_id, attempt_count):
+            return OutboxTransitionResult(OutboxTransitionStatus.LOCAL_FAILURE)
+        with self._mutex:
+            if self._closed or self._owner_descriptor(owner) is None:
+                return OutboxTransitionResult(OutboxTransitionStatus.LOCAL_FAILURE)
+            try:
+                self._connection.execute("BEGIN IMMEDIATE")
+                cursor = self._connection.execute(
+                    """
+                    DELETE FROM outbox
+                    WHERE document_id=? AND state='sending' AND attempt_count=?
+                    """,
+                    (document_id, attempt_count),
+                )
+                if cursor.rowcount != 1 or self._owner_descriptor(owner) is None:
+                    raise _GuardedTransitionError
+                self._connection.commit()
+                return OutboxTransitionResult(
+                    OutboxTransitionStatus.APPLIED,
+                    affected_count=1,
+                )
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    self._connection.rollback()
+                return OutboxTransitionResult(OutboxTransitionStatus.LOCAL_FAILURE)
+
+    def reschedule_claim(
+        self,
+        owner: ProfileLockOwner,
+        *,
+        document_id: str,
+        attempt_count: int,
+        category: OutboxFailureCategory,
+        completed_at: float,
+    ) -> OutboxTransitionResult:
+        """Guardedly return one failed attempt to pending with capped deterministic delay."""
+
+        normalized_completed_at = _valid_wall_time(completed_at)
+        if (
+            not _valid_claim_guard(document_id, attempt_count)
+            or type(category) is not OutboxFailureCategory
+            or normalized_completed_at is None
+        ):
+            return OutboxTransitionResult(OutboxTransitionStatus.LOCAL_FAILURE)
+        delay = _retry_delay_seconds(
+            attempt_count=attempt_count,
+            initial=self._retry_initial_seconds,
+            maximum=self._retry_max_seconds,
+        )
+        next_attempt_at = normalized_completed_at + delay
+        if not math.isfinite(next_attempt_at):
+            return OutboxTransitionResult(OutboxTransitionStatus.LOCAL_FAILURE)
+
+        with self._mutex:
+            if self._closed or self._owner_descriptor(owner) is None:
+                return OutboxTransitionResult(OutboxTransitionStatus.LOCAL_FAILURE)
+            try:
+                self._connection.execute("BEGIN IMMEDIATE")
+                cursor = self._connection.execute(
+                    """
+                    UPDATE outbox
+                    SET state='pending', next_attempt_at=?, last_error_category=?, updated_at=?
+                    WHERE document_id=? AND state='sending' AND attempt_count=?
+                    """,
+                    (
+                        next_attempt_at,
+                        category.value,
+                        normalized_completed_at,
+                        document_id,
+                        attempt_count,
+                    ),
+                )
+                if cursor.rowcount != 1 or self._owner_descriptor(owner) is None:
+                    raise _GuardedTransitionError
+                self._connection.commit()
+                return OutboxTransitionResult(
+                    OutboxTransitionStatus.APPLIED,
+                    affected_count=1,
+                )
+            except Exception:
+                with contextlib.suppress(sqlite3.Error):
+                    self._connection.rollback()
+                return OutboxTransitionResult(OutboxTransitionStatus.LOCAL_FAILURE)
+
+    def next_matching_retry_deadline(self) -> float | None:
+        """Inspect the earliest pending retry deadline for this destination and payload schema."""
+
+        with self._mutex:
+            if self._closed:
+                raise OutboxReadError(OUTBOX_READ_FAILED_MESSAGE) from None
+            try:
+                record = self._connection.execute(
+                    """
+                    SELECT MIN(next_attempt_at)
+                    FROM outbox
+                    WHERE state='pending'
+                      AND destination_fingerprint=?
+                      AND payload_schema=?
+                    """,
+                    (self._destination_fingerprint, self._payload_schema),
+                ).fetchone()
+                if record is None or record[0] is None:
+                    return None
+                deadline = float(cast(float, record[0]))
+                if not math.isfinite(deadline):
+                    raise sqlite3.DatabaseError
+                return deadline
+            except Exception:
+                raise OutboxReadError(OUTBOX_READ_FAILED_MESSAGE) from None
+
+    def _owner_descriptor(self, owner: ProfileLockOwner) -> int | None:
+        if not isinstance(owner, ProfileLockOwner):
+            return None
+        descriptor = owner._descriptor_for(self._lock_token)
+        if descriptor is None:
+            return None
+        try:
+            _revalidate_profile_lock_identity(
+                self._hermes_home,
+                self._profile_lock_identity,
+                descriptor=descriptor,
+                require_private_mode=True,
+            )
+        except Exception:
+            return None
+        return descriptor
 
     def admit(self, segments: Sequence[RetainedSegment]) -> AdmissionResult:
         """Atomically admit all new nonduplicate segments or none.
@@ -467,7 +943,7 @@ class SQLiteOutbox:
 
 def _prepare_private_paths(
     config: BetterHindsightConfig,
-) -> tuple[Path, Path, tuple[int, int]]:
+) -> tuple[Path, Path, Path, tuple[int, int], tuple[int, int]]:
     home = config.hermes_home.resolve(strict=True)
     configured_path = config.outbox.path
     initially_resolved = configured_path.resolve(strict=False)
@@ -494,8 +970,8 @@ def _prepare_private_paths(
     profile_lock_path = Path(f"{database_path}.lock")
     _require_inside(home, profile_lock_path)
     database_identity = _ensure_private_regular_file(database_path)
-    _ensure_private_regular_file(profile_lock_path)
-    return database_path, profile_lock_path, database_identity
+    profile_lock_identity = _ensure_private_regular_file(profile_lock_path)
+    return home, database_path, profile_lock_path, database_identity, profile_lock_identity
 
 
 def _ensure_private_regular_file(path: Path) -> tuple[int, int]:
@@ -553,13 +1029,109 @@ def _revalidate_open_paths(
     database_path: Path,
     profile_lock_path: Path,
     expected_database_identity: tuple[int, int],
+    expected_profile_lock_identity: tuple[int, int],
 ) -> None:
     _revalidate_database_identity(home, database_path, expected_database_identity)
+    _revalidate_profile_lock_identity(
+        home,
+        ProfileLockIdentity(
+            path=profile_lock_path,
+            device=expected_profile_lock_identity[0],
+            inode=expected_profile_lock_identity[1],
+        ),
+        descriptor=None,
+        require_private_mode=False,
+    )
+
+
+def _revalidate_profile_lock_identity(
+    home: Path,
+    identity: ProfileLockIdentity,
+    *,
+    descriptor: int | None,
+    require_private_mode: bool,
+) -> None:
     resolved_home = home.resolve(strict=True)
-    resolved_lock = profile_lock_path.resolve(strict=True)
+    resolved_lock = identity.path.resolve(strict=True)
     _require_inside(resolved_home, resolved_lock)
-    if not resolved_lock.is_file():
+    path_status = identity.path.stat(follow_symlinks=False)
+    _validate_profile_lock_status(path_status, identity, require_private_mode=require_private_mode)
+    if descriptor is not None:
+        descriptor_status = os.fstat(descriptor)
+        _validate_profile_lock_status(
+            descriptor_status,
+            identity,
+            require_private_mode=require_private_mode,
+        )
+
+
+def _validate_profile_lock_status(
+    status: os.stat_result,
+    identity: ProfileLockIdentity,
+    *,
+    require_private_mode: bool,
+) -> None:
+    if not stat.S_ISREG(status.st_mode) or (status.st_dev, status.st_ino) != (
+        identity.device,
+        identity.inode,
+    ):
         raise OSError
+    if os.name != "posix":
+        return
+    if status.st_uid != os.geteuid():
+        raise OSError
+    if require_private_mode and stat.S_IMODE(status.st_mode) != 0o600:
+        raise OSError
+
+
+def _try_flock_exclusive(descriptor: int) -> bool:
+    import fcntl
+
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as error:
+        if error.errno in {errno.EACCES, errno.EAGAIN}:
+            return False
+        raise
+    return True
+
+
+def _release_profile_lock_descriptor(descriptor: int) -> None:
+    import fcntl
+
+    with contextlib.suppress(OSError):
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+    with contextlib.suppress(OSError):
+        os.close(descriptor)
+
+
+def _valid_wall_time(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    normalized = float(value)
+    if normalized < 0.0 or not math.isfinite(normalized):
+        return None
+    return normalized
+
+
+def _valid_claim_guard(document_id: object, attempt_count: object) -> bool:
+    return (
+        isinstance(document_id, str)
+        and bool(document_id)
+        and type(attempt_count) is int
+        and attempt_count > 0
+    )
+
+
+def _retry_delay_seconds(*, attempt_count: int, initial: float, maximum: float) -> float:
+    delay = initial
+    remaining = attempt_count - 1
+    if delay <= 0.0 or delay >= maximum:
+        return delay
+    while remaining > 0 and delay < maximum:
+        delay = min(delay * 2.0, maximum)
+        remaining -= 1
+    return delay
 
 
 def _require_inside(home: Path, candidate: Path) -> None:
@@ -690,8 +1262,17 @@ __all__ = [
     "OUTBOX_SCHEMA_VERSION",
     "AdmissionResult",
     "AdmissionStatus",
+    "OutboxClaimResult",
+    "OutboxClaimStatus",
+    "OutboxFailureCategory",
     "OutboxOpenError",
     "OutboxReadError",
     "OutboxRow",
+    "OutboxTransitionResult",
+    "OutboxTransitionStatus",
+    "ProfileLockAcquisitionResult",
+    "ProfileLockIdentity",
+    "ProfileLockOwner",
+    "ProfileLockStatus",
     "SQLiteOutbox",
 ]

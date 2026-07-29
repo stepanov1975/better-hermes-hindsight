@@ -20,7 +20,7 @@ from hindsight_client_api.models.recall_scores import RecallScores
 
 import better_hermes_hindsight.hermes_plugin as hermes_plugin
 import better_hermes_hindsight.provider as provider_module
-from better_hermes_hindsight.client import HindsightClientError, RetainSegment
+from better_hermes_hindsight.client import HindsightClientError, RetainConfirmation, RetainSegment
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.formatting import CONTEXT_PREAMBLE
 from better_hermes_hindsight.provider import (
@@ -98,7 +98,7 @@ class _RuntimeFakeClient:
         self.calls.append(f"recall:{query}")
         return _recall_response()
 
-    async def retain_segment(self, segment: RetainSegment) -> object:
+    async def retain_segment(self, segment: RetainSegment) -> RetainConfirmation:
         raise AssertionError(f"recall-only provider must not retain {segment.document_id}")
 
     async def get_bank_profile(self) -> object:

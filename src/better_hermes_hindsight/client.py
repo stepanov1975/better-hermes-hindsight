@@ -45,6 +45,13 @@ class RetainSegment:
     document_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class RetainConfirmation:
+    """Sanitized typed result of exact synchronous retain-response validation."""
+
+    confirmed: bool
+
+
 class HindsightClientProtocol(Protocol):
     """The complete Hindsight surface used by the shared process runtime."""
 
@@ -54,8 +61,9 @@ class HindsightClientProtocol(Protocol):
     async def recall(self, query: str) -> object:
         """Recall against the configured bank."""
 
-    async def retain_segment(self, segment: RetainSegment) -> object:
+    async def retain_segment(self, segment: RetainSegment) -> RetainConfirmation:
         """Synchronously confirm one replace-mode retained segment."""
+        ...
 
     async def get_bank_profile(self) -> object:
         """Read the configured bank profile."""
@@ -244,7 +252,7 @@ class HindsightClientAdapter:
             lambda: self._sdk.arecall(bank_id=self._bank_id, query=query, **kwargs),
         )
 
-    async def retain_segment(self, segment: RetainSegment) -> object:
+    async def retain_segment(self, segment: RetainSegment) -> RetainConfirmation:
         """Retain exactly one stable, replace-mode segment with synchronous confirmation."""
 
         item: dict[str, object] = {
@@ -256,13 +264,18 @@ class HindsightClientAdapter:
         encoded_scopes = _encode_observation_scopes(self._retain_scopes)
         if encoded_scopes is not None:
             item["observation_scopes"] = encoded_scopes
-        return await _mapped_call(
-            "retain",
-            lambda: self._sdk.aretain_batch(
+
+        async def retain() -> RetainConfirmation:
+            response = await self._sdk.aretain_batch(
                 bank_id=self._bank_id,
                 items=[item],
                 retain_async=False,
-            ),
+            )
+            return _retain_confirmation(response, expected_bank_id=self._bank_id)
+
+        return await _mapped_call(
+            "retain",
+            retain,
         )
 
     async def get_bank_profile(self) -> object:
@@ -370,6 +383,28 @@ def _encode_observation_scopes(scopes: ObservationScopes) -> object | None:
     return [list(scope) for scope in scopes]
 
 
+def _retain_confirmation(response: object, *, expected_bank_id: str) -> RetainConfirmation:
+    missing = object()
+    success = getattr(response, "success", missing)
+    bank_id = getattr(response, "bank_id", missing)
+    items_count = getattr(response, "items_count", missing)
+    var_async = getattr(response, "var_async", missing)
+    if any(value is missing for value in (success, bank_id, items_count, var_async)):
+        raise ValueError("malformed retain response")
+    return RetainConfirmation(
+        confirmed=(
+            type(success) is bool
+            and success is True
+            and type(bank_id) is str
+            and bank_id == expected_bank_id
+            and type(items_count) is int
+            and items_count == 1
+            and type(var_async) is bool
+            and var_async is False
+        )
+    )
+
+
 def _require_disposable_confirmation(confirmed: bool) -> None:
     if confirmed is not True:
         raise DisposableBankGuardError("Better Hindsight disposable-bank confirmation required.")
@@ -394,6 +429,7 @@ __all__ = [
     "HindsightClientProtocol",
     "MISSION_UPDATE_FIELDS",
     "MissionUpdateError",
+    "RetainConfirmation",
     "RetainSegment",
     "create_hindsight_client",
     "is_available",

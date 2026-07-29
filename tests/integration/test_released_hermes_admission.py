@@ -14,7 +14,12 @@ from typing import Any, NoReturn
 import pytest
 from agent.memory_manager import MemoryManager  # type: ignore[import-untyped]
 
-from better_hermes_hindsight.client import RetainSegment as ClientRetainSegment
+from better_hermes_hindsight.client import (
+    RetainConfirmation,
+)
+from better_hermes_hindsight.client import (
+    RetainSegment as ClientRetainSegment,
+)
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.outbox import OutboxRow, SQLiteOutbox
 from better_hermes_hindsight.provider import BetterHindsightMemoryProvider
@@ -43,9 +48,9 @@ class _NoNetworkClient:
         self.operation_calls.append(f"recall:{query}")
         return object()
 
-    async def retain_segment(self, segment: ClientRetainSegment) -> object:
+    async def retain_segment(self, segment: ClientRetainSegment) -> RetainConfirmation:
         self.operation_calls.append(f"retain:{segment.document_id}")
-        return object()
+        return RetainConfirmation(confirmed=True)
 
     async def get_bank_profile(self) -> object:
         self.operation_calls.append("profile")
@@ -84,6 +89,30 @@ class _NoNetworkClientFactory:
         client = _NoNetworkClient()
         self.clients.append(client)
         return client
+
+
+class _InertSender:
+    def start(self) -> None:
+        return None
+
+    def wake(self) -> None:
+        return None
+
+    def request_stop(self) -> None:
+        return None
+
+    def join(self, timeout: float | None = None) -> bool:
+        del timeout
+        return True
+
+
+def _inert_sender_factory(
+    _config: BetterHindsightConfig,
+    _outbox: object,
+    _client: object,
+    _runner: object,
+) -> _InertSender:
+    return _InertSender()
 
 
 def _write_retain_only_profile(hermes_home: Path) -> BetterHindsightConfig:
@@ -146,7 +175,11 @@ def test_released_memory_manager_runs_callback_asynchronously_before_local_durab
     hermes_home = tmp_path / "hermes-home"
     config = _write_retain_only_profile(hermes_home)
     client_factory = _NoNetworkClientFactory()
-    bootstrap = acquire_process_runtime(config, client_factory=client_factory)
+    bootstrap = acquire_process_runtime(
+        config,
+        client_factory=client_factory,
+        sender_factory=_inert_sender_factory,
+    )
     monkeypatch.setattr(socket.socket, "connect", _forbid_network)
 
     callback_started = threading.Event()
