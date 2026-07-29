@@ -112,8 +112,25 @@ Configuration therefore requires
 `retain.segment_max_bytes + 1024 <= outbox.max_pending_bytes`. Operators may lower the limits, but
 configuration cannot raise them above the documented finite ceilings.
 
-The retain deadline is consumed by the sender around one remote synchronous retain attempt;
-it is not a user-response deadline. Remote work never runs inside the released `sync_turn()` callback.
+## Mission operator configuration
+
+`missions.retain_mission` and `missions.observations_mission` are independent optional desired text.
+They do nothing during provider initialization, recall, admission, or sender delivery. The explicit
+`better_hindsight missions check` command compares each configured value byte-for-byte with the typed
+remote bank configuration. `better_hindsight missions apply --confirm` updates only configured fields
+that are drifted or remotely missing, sends at most one PATCH, preserves an unconfigured allowlisted
+field exactly, and requires fresh exact readback.
+
+Mission commands require `single_principal=true` regardless of recall or retention enablement and use
+`retain.timeout_seconds` as one total remote-operation deadline. Mission values, endpoint, bank,
+credential, profile path, and raw SDK errors never appear in command JSON. Omitting both mission
+values makes apply a fixed no-write error; it does not infer or install default policy.
+
+For automatic retention, this deadline is consumed by the sender around one remote synchronous retain
+attempt; it is not a user-response deadline. Remote work never runs inside the released `sync_turn()`
+callback.
+
+## Destination identity
 
 The API URL is normalized for deterministic destination identity: scheme and host are lowercased,
 international hostnames use IDNA form, default ports and trailing slashes are removed, and embedded
@@ -234,8 +251,10 @@ request, so this is replace-safe best effort, not exactly-once transport or a ze
 ## Mission behavior
 
 `retain_mission` and `observations_mission` are independent optional texts. Loading and initialization
-do not check or apply them. Mission check/apply is explicit future Task 4 operator behavior, with
-confirmation required for apply. No model-facing memory tools in the first prerelease can invoke it.
+do not check or apply them. Operators can compare configured and remote values with
+`hermes better_hindsight missions check`; applying drift requires the explicit
+`hermes better_hindsight missions apply --confirm` command. No model-facing memory tools in the
+first prerelease can invoke either operation.
 
 Development writes require an isolated Hindsight instance and Hermes profile. Production uses a
 separate canary instance and bank while the old deployment remains untouched for rollback.

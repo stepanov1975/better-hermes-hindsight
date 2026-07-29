@@ -565,7 +565,7 @@ def _remaining_until(deadline: float) -> float:
 
 
 class ProcessRuntime:
-    """The sole active Better Hindsight client and event loop in this process."""
+    """One owned Better Hindsight client and event loop with an explicit lifetime."""
 
     __slots__ = (
         "__weakref__",
@@ -589,6 +589,7 @@ class ProcessRuntime:
         client_factory: ClientFactory = create_hindsight_client,
         outbox_factory: OutboxFactory = _open_outbox,
         sender_factory: SenderFactory = _create_sender,
+        sender_enabled: bool = True,
     ) -> None:
         self._runner = AsyncRunner()
         self._lifecycle = threading.Condition()
@@ -609,7 +610,7 @@ class ProcessRuntime:
         try:
             client = self._runner.run(lambda: _construct_client(client_factory, config))
             self._client = client
-            if config.retain.enabled:
+            if sender_enabled and config.retain.enabled:
                 self._outbox = outbox_factory(config)
                 self._sender = sender_factory(config, self._outbox, client, self._runner)
                 self._sender.start()
@@ -873,6 +874,24 @@ def acquire_process_runtime(
         return ProcessRuntimeHandle(runtime)
 
 
+def create_operator_runtime(
+    config: BetterHindsightConfig,
+    *,
+    client_factory: ClientFactory = create_hindsight_client,
+) -> ProcessRuntime:
+    """Create one client-only runtime owned by a synchronous management command.
+
+    Operator commands deliberately bypass the provider singleton and cannot open an outbox or
+    start a sender, even when retention is enabled in the selected profile.
+    """
+
+    return ProcessRuntime(
+        config,
+        client_factory=client_factory,
+        sender_enabled=False,
+    )
+
+
 def finalize_process_runtime() -> bool:
     """Explicitly close and clear the process runtime; repeated calls are inert."""
 
@@ -936,6 +955,7 @@ __all__ = [
     "RuntimeHandleClosedError",
     "SenderStopError",
     "acquire_process_runtime",
+    "create_operator_runtime",
     "finalize_process_runtime",
     "reset_process_runtime_for_tests",
 ]

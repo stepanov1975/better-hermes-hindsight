@@ -70,6 +70,10 @@ _SCHEMA_COLUMN_INFO = (
     ("created_at", "REAL", 1, None, 0),
     ("updated_at", "REAL", 1, None, 0),
 )
+_STATUS_MINIMUM_SQLITE = (3, 22, 0)
+# SQLite's built-in unix VFS maps WAL-index shared memory in fixed 32 KiB regions.
+_STATUS_SHM_REGION_BYTES = 32_768
+_STATUS_ERROR_CATEGORIES = frozenset({"retain_timeout", "retain_failed", "retain_unconfirmed"})
 
 
 class OutboxOpenError(RuntimeError):
@@ -264,6 +268,38 @@ class OutboxTransitionResult:
     @property
     def applied(self) -> bool:
         return self.status is OutboxTransitionStatus.APPLIED
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxInspection:
+    """One aggregate-only, point-in-time view of an existing profile outbox."""
+
+    outbox: Literal["ready", "uninitialized"]
+    mismatch_count: int = 0
+    pending_count: int = 0
+    retry_count: int = 0
+    sending_count: int = 0
+    logical_queued_bytes: int = 0
+    oldest_created_at: float | None = None
+    last_error_category: OutboxFailureCategory | None = None
+    sender_ownership: Literal["held", "free", "unavailable"] = "free"
+
+
+@dataclass(frozen=True, slots=True)
+class _StatusFile:
+    path: Path = field(repr=False)
+    descriptor: int = field(repr=False)
+    device: int
+    inode: int
+    file_type: int
+    link_count: int
+    mode: int
+    uid: int
+    gid: int
+    size: int
+    mtime_ns: int
+    ctime_ns: int
+    xattrs: tuple[tuple[str, bytes], ...] = field(repr=False)
 
 
 class SQLiteOutbox:
@@ -941,6 +977,367 @@ class SQLiteOutbox:
         )
 
 
+def inspect_outbox(config: BetterHindsightConfig) -> OutboxInspection:
+    """Read one bounded schema-v1 snapshot without initializing sender state."""
+
+    try:
+        return _inspect_outbox(config)
+    except Exception:
+        raise OutboxReadError(OUTBOX_READ_FAILED_MESSAGE) from None
+
+
+def _inspect_outbox(config: BetterHindsightConfig) -> OutboxInspection:
+    home = config.hermes_home.resolve(strict=True)
+    database_path = config.outbox.path
+    _require_inside(home, database_path.resolve(strict=False))
+    if not os.path.lexists(database_path):
+        return OutboxInspection(outbox="uninitialized")
+    if (
+        os.name != "posix"
+        or sqlite3.sqlite_version_info < _STATUS_MINIMUM_SQLITE
+        or not hasattr(os, "O_NOFOLLOW")
+    ):
+        raise OSError
+
+    paths = {
+        "database": database_path,
+        "wal": Path(f"{database_path}-wal"),
+        "shm": Path(f"{database_path}-shm"),
+        "journal": Path(f"{database_path}-journal"),
+    }
+    opened: dict[str, _StatusFile] = {}
+    connection: sqlite3.Connection | None = None
+    try:
+        opened["database"] = _open_status_file(home, paths["database"])
+        for name in ("wal", "shm", "journal"):
+            path = paths[name]
+            _require_inside(home, path.resolve(strict=False))
+            if os.path.lexists(path):
+                opened[name] = _open_status_file(home, path)
+
+        has_wal = "wal" in opened
+        has_shm = "shm" in opened
+        if "journal" in opened or has_wal != has_shm:
+            raise OSError
+        active_wal = has_wal
+        if active_wal and (
+            opened["shm"].size < _STATUS_SHM_REGION_BYTES
+            or opened["shm"].size % _STATUS_SHM_REGION_BYTES != 0
+        ):
+            raise OSError
+        _revalidate_status_topology(home, paths, opened, active_wal=active_wal)
+
+        query = "mode=ro&vfs=unix" if active_wal else "mode=ro&immutable=1&vfs=unix"
+        connection = sqlite3.connect(
+            f"{database_path.as_uri()}?{query}",
+            uri=True,
+            timeout=config.outbox.busy_timeout_seconds,
+            isolation_level=None,
+            check_same_thread=False,
+        )
+        inspection = _read_status_snapshot(connection, config)
+        connection.close()
+        connection = None
+
+        _revalidate_status_topology(home, paths, opened, active_wal=active_wal)
+        ownership = _probe_sender_ownership(home, Path(f"{database_path}.lock"))
+        return OutboxInspection(
+            outbox="ready",
+            mismatch_count=inspection.mismatch_count,
+            pending_count=inspection.pending_count,
+            retry_count=inspection.retry_count,
+            sending_count=inspection.sending_count,
+            logical_queued_bytes=inspection.logical_queued_bytes,
+            oldest_created_at=inspection.oldest_created_at,
+            last_error_category=inspection.last_error_category,
+            sender_ownership=ownership,
+        )
+    finally:
+        if connection is not None:
+            with contextlib.suppress(Exception):
+                connection.close()
+        for item in opened.values():
+            with contextlib.suppress(OSError):
+                os.close(item.descriptor)
+
+
+def _read_status_snapshot(
+    connection: sqlite3.Connection,
+    config: BetterHindsightConfig,
+) -> OutboxInspection:
+    connection.execute("PRAGMA query_only=ON")
+    query_only = connection.execute("PRAGMA query_only").fetchone()
+    if query_only != (1,):
+        raise sqlite3.DatabaseError
+    connection.execute("BEGIN")
+    try:
+        version = connection.execute("PRAGMA user_version").fetchone()
+        if version != (OUTBOX_SCHEMA_VERSION,):
+            raise _UnsupportedSchemaError
+        _validate_schema(connection)
+        record = connection.execute(
+            """
+            SELECT
+                COUNT(*),
+                COALESCE(SUM(CASE
+                    WHEN destination_fingerprint <> :destination
+                      OR payload_schema <> :payload_schema THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE
+                    WHEN destination_fingerprint = :destination
+                     AND payload_schema = :payload_schema
+                     AND state = 'sending' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE
+                    WHEN destination_fingerprint = :destination
+                     AND payload_schema = :payload_schema
+                     AND state = 'pending' AND attempt_count > 0 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE
+                    WHEN destination_fingerprint = :destination
+                     AND payload_schema = :payload_schema
+                     AND state = 'pending' AND attempt_count = 0 THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(LENGTH(CAST(content AS BLOB)) + :allowance), 0),
+                MIN(created_at),
+                (
+                    SELECT last_error_category
+                    FROM outbox
+                    WHERE last_error_category IS NOT NULL
+                    ORDER BY updated_at DESC, created_at DESC, document_id DESC
+                    LIMIT 1
+                ),
+                COALESCE(SUM(CASE WHEN
+                    typeof(document_id) <> 'text'
+                    OR typeof(payload_hash) <> 'text'
+                    OR typeof(payload_schema) <> 'text'
+                    OR typeof(source_sha256) <> 'text'
+                    OR typeof(segment_index) <> 'integer'
+                    OR typeof(segment_count) <> 'integer'
+                    OR segment_index < 0 OR segment_count <= 0 OR segment_index >= segment_count
+                    OR typeof(content) <> 'text'
+                    OR typeof(destination_fingerprint) <> 'text'
+                    OR typeof(state) <> 'text' OR state NOT IN ('pending', 'sending')
+                    OR typeof(attempt_count) <> 'integer' OR attempt_count < 0
+                    OR typeof(next_attempt_at) NOT IN ('integer', 'real') OR next_attempt_at < 0
+                    OR (last_error_category IS NOT NULL AND (
+                        typeof(last_error_category) <> 'text'
+                        OR last_error_category NOT IN (
+                            'retain_timeout', 'retain_failed', 'retain_unconfirmed'
+                        )
+                    ))
+                    OR typeof(created_at) NOT IN ('integer', 'real') OR created_at < 0
+                    OR typeof(updated_at) NOT IN ('integer', 'real') OR updated_at < 0
+                    THEN 1 ELSE 0 END), 0),
+                MAX(ABS(created_at)),
+                MAX(ABS(updated_at)),
+                MAX(ABS(next_attempt_at))
+            FROM outbox
+            """,
+            {
+                "allowance": OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES,
+                "destination": config.destination_fingerprint,
+                "payload_schema": config.outbox.payload_schema,
+            },
+        ).fetchone()
+        if record is None or len(record) != 12:
+            raise sqlite3.DatabaseError
+        connection.execute("COMMIT")
+    except Exception:
+        with contextlib.suppress(sqlite3.Error):
+            connection.execute("ROLLBACK")
+        raise
+
+    integer_values = record[:6] + (record[8],)
+    if any(type(value) is not int or value < 0 for value in integer_values):
+        raise sqlite3.DatabaseError
+    total, mismatch, sending, retry, pending, logical_bytes = cast(
+        tuple[int, int, int, int, int, int], record[:6]
+    )
+    if cast(int, record[8]) != 0 or mismatch + sending + retry + pending != total:
+        raise sqlite3.DatabaseError
+    for maximum in record[9:12]:
+        if maximum is not None and (
+            isinstance(maximum, bool)
+            or not isinstance(maximum, (int, float))
+            or not math.isfinite(float(maximum))
+        ):
+            raise sqlite3.DatabaseError
+
+    oldest_value = record[6]
+    if oldest_value is None:
+        oldest = None
+    elif (
+        isinstance(oldest_value, bool)
+        or not isinstance(oldest_value, (int, float))
+        or not math.isfinite(float(oldest_value))
+        or float(oldest_value) < 0.0
+    ):
+        raise sqlite3.DatabaseError
+    else:
+        oldest = float(oldest_value)
+
+    last_error = record[7]
+    if last_error is not None and (
+        type(last_error) is not str or last_error not in _STATUS_ERROR_CATEGORIES
+    ):
+        raise sqlite3.DatabaseError
+    typed_last_error = None if last_error is None else OutboxFailureCategory(last_error)
+    return OutboxInspection(
+        outbox="ready",
+        mismatch_count=mismatch,
+        pending_count=pending,
+        retry_count=retry,
+        sending_count=sending,
+        logical_queued_bytes=logical_bytes,
+        oldest_created_at=oldest,
+        last_error_category=typed_last_error,
+    )
+
+
+def _open_status_file(home: Path, path: Path, *, writable: bool = False) -> _StatusFile:
+    before_open = path.stat(follow_symlinks=False)
+    if not stat.S_ISREG(before_open.st_mode):
+        raise OSError
+    resolved = path.resolve(strict=True)
+    _require_inside(home, resolved)
+    flags = (os.O_RDWR if writable else os.O_RDONLY) | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    descriptor = os.open(path, flags)
+    try:
+        descriptor_status = os.fstat(descriptor)
+        path_status = path.stat(follow_symlinks=False)
+        if (
+            not stat.S_ISREG(descriptor_status.st_mode)
+            or not stat.S_ISREG(path_status.st_mode)
+            or (before_open.st_dev, before_open.st_ino)
+            != (descriptor_status.st_dev, descriptor_status.st_ino)
+            or (descriptor_status.st_dev, descriptor_status.st_ino)
+            != (path_status.st_dev, path_status.st_ino)
+        ):
+            raise OSError
+        return _StatusFile(
+            path=path,
+            descriptor=descriptor,
+            device=descriptor_status.st_dev,
+            inode=descriptor_status.st_ino,
+            file_type=stat.S_IFMT(descriptor_status.st_mode),
+            link_count=descriptor_status.st_nlink,
+            mode=stat.S_IMODE(descriptor_status.st_mode),
+            uid=descriptor_status.st_uid,
+            gid=descriptor_status.st_gid,
+            size=descriptor_status.st_size,
+            mtime_ns=descriptor_status.st_mtime_ns,
+            ctime_ns=descriptor_status.st_ctime_ns,
+            xattrs=_status_xattrs(path),
+        )
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _status_xattrs(path: Path) -> tuple[tuple[str, bytes], ...]:
+    names = sorted(os.listxattr(path, follow_symlinks=False))
+    return tuple((name, os.getxattr(path, name, follow_symlinks=False)) for name in names)
+
+
+def _revalidate_status_file(
+    home: Path,
+    item: _StatusFile,
+    *,
+    stable_data_metadata: bool,
+) -> None:
+    _require_inside(home, item.path.resolve(strict=True))
+    descriptor_status = os.fstat(item.descriptor)
+    path_status = item.path.stat(follow_symlinks=False)
+    stable = (
+        item.device,
+        item.inode,
+        item.file_type,
+        item.link_count,
+        item.mode,
+        item.uid,
+        item.gid,
+    )
+    for current in (descriptor_status, path_status):
+        if (
+            current.st_dev,
+            current.st_ino,
+            stat.S_IFMT(current.st_mode),
+            current.st_nlink,
+            stat.S_IMODE(current.st_mode),
+            current.st_uid,
+            current.st_gid,
+        ) != stable:
+            raise OSError
+        if stable_data_metadata and (
+            current.st_size,
+            current.st_mtime_ns,
+            current.st_ctime_ns,
+        ) != (item.size, item.mtime_ns, item.ctime_ns):
+            raise OSError
+    if _status_xattrs(item.path) != item.xattrs:
+        raise OSError
+
+
+def _revalidate_status_topology(
+    home: Path,
+    paths: dict[str, Path],
+    opened: dict[str, _StatusFile],
+    *,
+    active_wal: bool,
+) -> None:
+    _revalidate_status_file(
+        home,
+        opened["database"],
+        stable_data_metadata=not active_wal,
+    )
+    expected_present = {"database"}
+    if active_wal:
+        expected_present.update({"wal", "shm"})
+        _revalidate_status_file(home, opened["wal"], stable_data_metadata=False)
+        _revalidate_status_file(home, opened["shm"], stable_data_metadata=False)
+    for name, path in paths.items():
+        if name in expected_present:
+            continue
+        _require_inside(home, path.resolve(strict=False))
+        if os.path.lexists(path):
+            raise OSError
+
+
+def _probe_sender_ownership(
+    home: Path,
+    lock_path: Path,
+) -> Literal["held", "free", "unavailable"]:
+    try:
+        _require_inside(home, lock_path.resolve(strict=False))
+        if not os.path.lexists(lock_path):
+            return "free"
+        item = _open_status_file(home, lock_path, writable=True)
+    except Exception:
+        return "unavailable"
+
+    acquired = False
+    released = False
+    try:
+        acquired = _try_flock_exclusive(item.descriptor)
+        ownership: Literal["held", "free"] = "free" if acquired else "held"
+        if acquired:
+            import fcntl
+
+            fcntl.flock(item.descriptor, fcntl.LOCK_UN)
+            released = True
+        _revalidate_status_file(home, item, stable_data_metadata=True)
+        return ownership
+    except Exception:
+        return "unavailable"
+    finally:
+        if acquired and not released:
+            import fcntl
+
+            with contextlib.suppress(OSError):
+                fcntl.flock(item.descriptor, fcntl.LOCK_UN)
+        with contextlib.suppress(OSError):
+            os.close(item.descriptor)
+
+
 def _prepare_private_paths(
     config: BetterHindsightConfig,
 ) -> tuple[Path, Path, Path, tuple[int, int], tuple[int, int]]:
@@ -1265,6 +1662,7 @@ __all__ = [
     "OutboxClaimResult",
     "OutboxClaimStatus",
     "OutboxFailureCategory",
+    "OutboxInspection",
     "OutboxOpenError",
     "OutboxReadError",
     "OutboxRow",
@@ -1275,4 +1673,5 @@ __all__ = [
     "ProfileLockOwner",
     "ProfileLockStatus",
     "SQLiteOutbox",
+    "inspect_outbox",
 ]

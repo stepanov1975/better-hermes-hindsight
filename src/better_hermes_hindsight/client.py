@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import metadata
 from typing import Protocol, TypeVar, cast
 
@@ -52,6 +52,22 @@ class RetainConfirmation:
     confirmed: bool
 
 
+@dataclass(frozen=True, slots=True)
+class MissionValue:
+    """One exact remote mission value without value-bearing representation."""
+
+    present: bool
+    value: str | None = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class MissionSnapshot:
+    """Validated allowlisted mission values from resolved bank configuration."""
+
+    retain_mission: MissionValue
+    observations_mission: MissionValue
+
+
 class HindsightClientProtocol(Protocol):
     """The complete Hindsight surface used by the shared process runtime."""
 
@@ -86,6 +102,14 @@ class HindsightClientProtocol(Protocol):
 
     async def close(self) -> None:
         """Close the client on its owning event loop."""
+
+
+class MissionClientProtocol(Protocol):
+    """The exact typed mission surface used only by explicit management commands."""
+
+    async def get_bank_config(self) -> MissionSnapshot: ...
+
+    async def update_bank_missions(self, updates: Mapping[str, str]) -> MissionSnapshot: ...
 
 
 class HindsightSdkFactory(Protocol):
@@ -165,10 +189,11 @@ def is_available() -> bool:
         if metadata.version(HINDSIGHT_DISTRIBUTION) != HINDSIGHT_SDK_VERSION:
             return False
         from hindsight_client import Hindsight
+        from hindsight_client_api.models.bank_config_response import BankConfigResponse
         from hindsight_client_api.models.bank_config_update import BankConfigUpdate
     except Exception:
         return False
-    return Hindsight is not None and BankConfigUpdate is not None
+    return Hindsight is not None and BankConfigResponse is not None and BankConfigUpdate is not None
 
 
 def create_hindsight_client(
@@ -286,15 +311,19 @@ class HindsightClientAdapter:
             lambda: self._sdk.banks.get_bank_profile(bank_id=self._bank_id),
         )
 
-    async def get_bank_config(self) -> object:
-        """Read configuration through the SDK's public async banks API."""
+    async def get_bank_config(self) -> MissionSnapshot:
+        """Read and exactly validate missions through the SDK's public async banks API."""
+
+        async def get() -> MissionSnapshot:
+            response = await self._sdk.banks.get_bank_config(bank_id=self._bank_id)
+            return _mission_snapshot(response, expected_bank_id=self._bank_id)
 
         return await _mapped_call(
             "bank_config",
-            lambda: self._sdk.banks.get_bank_config(bank_id=self._bank_id),
+            get,
         )
 
-    async def update_bank_missions(self, updates: Mapping[str, str]) -> object:
+    async def update_bank_missions(self, updates: Mapping[str, str]) -> MissionSnapshot:
         """Apply only configured retain and observations mission changes."""
 
         copied_updates = dict(updates)
@@ -310,13 +339,18 @@ class HindsightClientAdapter:
                 "each update must be a configured non-empty mission."
             )
 
-        async def update() -> object:
+        async def update() -> MissionSnapshot:
             from hindsight_client_api.models.bank_config_update import BankConfigUpdate
 
             request = BankConfigUpdate(updates=copied_updates)
-            return await self._sdk.banks.update_bank_config(
+            response = await self._sdk.banks.update_bank_config(
                 bank_id=self._bank_id,
                 bank_config_update=request,
+            )
+            return _mission_snapshot(
+                response,
+                expected_bank_id=self._bank_id,
+                expected_updates=copied_updates,
             )
 
         return await _mapped_call("mission_update", update)
@@ -405,6 +439,43 @@ def _retain_confirmation(response: object, *, expected_bank_id: str) -> RetainCo
     )
 
 
+def _mission_snapshot(
+    response: object,
+    *,
+    expected_bank_id: str,
+    expected_updates: Mapping[str, str] | None = None,
+) -> MissionSnapshot:
+    from hindsight_client_api.models.bank_config_response import BankConfigResponse
+
+    if type(response) is not BankConfigResponse:
+        raise ValueError("malformed bank configuration response")
+    bank_id = response.bank_id
+    config = response.config
+    if type(bank_id) is not str or bank_id != expected_bank_id or type(config) is not dict:
+        raise ValueError("malformed bank configuration response")
+    mission_config = cast(dict[str, object], config)
+    snapshot = MissionSnapshot(
+        retain_mission=_mission_value(mission_config, "retain_mission"),
+        observations_mission=_mission_value(mission_config, "observations_mission"),
+    )
+    if expected_updates is not None:
+        for name, expected_value in expected_updates.items():
+            if getattr(snapshot, name) != MissionValue(present=True, value=expected_value):
+                raise ValueError("malformed bank configuration response")
+    return snapshot
+
+
+def _mission_value(config: dict[str, object], name: str) -> MissionValue:
+    if name not in config:
+        return MissionValue(present=False, value=None)
+    value = config[name]
+    if value is None:
+        return MissionValue(present=True, value=None)
+    if type(value) is not str:
+        raise ValueError("malformed bank configuration response")
+    return MissionValue(present=True, value=value)
+
+
 def _require_disposable_confirmation(confirmed: bool) -> None:
     if confirmed is not True:
         raise DisposableBankGuardError("Better Hindsight disposable-bank confirmation required.")
@@ -428,7 +499,10 @@ __all__ = [
     "HindsightClientError",
     "HindsightClientProtocol",
     "MISSION_UPDATE_FIELDS",
+    "MissionClientProtocol",
+    "MissionSnapshot",
     "MissionUpdateError",
+    "MissionValue",
     "RetainConfirmation",
     "RetainSegment",
     "create_hindsight_client",

@@ -33,6 +33,31 @@ RetainFault: TypeAlias = Literal[
     "async_integer",
     "delay",
 ]
+MissionReadFault: TypeAlias = Literal[
+    "wrong_bank",
+    "wrong_type",
+    "missing",
+    "null",
+    "blank",
+    "malformed_json",
+    "http_503",
+]
+MissionPatchFault: TypeAlias = Literal[
+    "wrong_bank",
+    "wrong_type",
+    "response_mismatch",
+    "malformed_json",
+    "http_503",
+    "response_loss_after_commit",
+    "unintended_untouched_mutation",
+]
+MissionReadbackFault: TypeAlias = Literal[
+    "wrong_bank",
+    "wrong_type",
+    "mismatch",
+    "malformed_json",
+    "http_503",
+]
 AuthorizationState: TypeAlias = Literal[
     "absent",
     "valid_bearer",
@@ -66,7 +91,7 @@ class FakeServerReport:
 
 
 class FakeHindsightServer:
-    """Serve only the exact Task 3 Hindsight routes on a loopback socket."""
+    """Serve the exact Task 3/4 Hindsight routes on a loopback socket."""
 
     def __init__(
         self,
@@ -84,6 +109,15 @@ class FakeHindsightServer:
         self._request_count = 0
         self._next_recall_fault: RecallFault | None = None
         self._next_retain_fault: RetainFault | None = None
+        self._next_mission_read_fault: MissionReadFault | None = None
+        self._next_mission_patch_fault: MissionPatchFault | None = None
+        self._next_mission_readback_fault: MissionReadbackFault | None = None
+        self._mission_readback_fault_ready = False
+        self._last_mission_updates: tuple[str, ...] = ()
+        self._mission_config: dict[str, object] = {
+            "retain_mission": "retain-old",
+            "observations_mission": "observe-old",
+        }
         self._delay_entered = asyncio.Event()
         self._delay_release = asyncio.Event()
         self._delay_finished = asyncio.Event()
@@ -246,6 +280,27 @@ class FakeHindsightServer:
         if not self._retain_delay_entered.is_set():
             return
         await asyncio.wait_for(self._retain_delay_finished.wait(), timeout=1.0)
+
+    def arm_mission_read_fault(self, fault: MissionReadFault) -> None:
+        """Apply one fault to the next mission GET that is not a PATCH readback."""
+
+        if self._next_mission_read_fault is not None:
+            raise RuntimeError("Fake Hindsight mission read fault is already armed.")
+        self._next_mission_read_fault = fault
+
+    def arm_mission_patch_fault(self, fault: MissionPatchFault) -> None:
+        """Apply one fault to the next mission PATCH only."""
+
+        if self._next_mission_patch_fault is not None:
+            raise RuntimeError("Fake Hindsight mission patch fault is already armed.")
+        self._next_mission_patch_fault = fault
+
+    def arm_mission_readback_fault(self, fault: MissionReadbackFault) -> None:
+        """Apply one fault to the first mission GET after the next PATCH."""
+
+        if self._next_mission_readback_fault is not None:
+            raise RuntimeError("Fake Hindsight mission readback fault is already armed.")
+        self._next_mission_readback_fault = fault
 
     def safe_report(self) -> FakeServerReport:
         """Return only bounded route metadata, never bodies or authorization values."""
@@ -431,7 +486,16 @@ class FakeHindsightServer:
 
     async def _get_config(self, request: web.Request) -> web.Response:
         await self._record(request)
-        return web.json_response(self._config_response({}))
+        fault: MissionReadFault | MissionReadbackFault | None
+        readback = self._mission_readback_fault_ready
+        if readback:
+            fault = self._next_mission_readback_fault
+            self._next_mission_readback_fault = None
+            self._mission_readback_fault_ready = False
+        else:
+            fault = self._next_mission_read_fault
+            self._next_mission_read_fault = None
+        return self._mission_read_response(fault, readback=readback)
 
     async def _patch_config(self, request: web.Request) -> web.Response:
         json_body = await self._record(request)
@@ -440,12 +504,59 @@ class FakeHindsightServer:
             updates = json_body.get("updates")
         if (
             not isinstance(updates, dict)
-            or len(updates) != 1
+            or not updates
             or not set(updates).issubset({"retain_mission", "observations_mission"})
             or any(not isinstance(value, str) or not value for value in updates.values())
         ):
-            raise web.HTTPBadRequest(text="Fake Hindsight expected one changed mission key.")
-        return web.json_response(self._config_response(updates))
+            raise web.HTTPBadRequest(text="Fake Hindsight expected changed mission keys only.")
+
+        copied_updates = {str(key): value for key, value in updates.items()}
+        fault = self._next_mission_patch_fault
+        self._next_mission_patch_fault = None
+        if fault == "http_503":
+            return web.Response(status=503, text=self._error_sentinel)
+
+        self._mission_config.update(copied_updates)
+        self._last_mission_updates = tuple(copied_updates)
+        if fault == "unintended_untouched_mutation":
+            untouched = [
+                field
+                for field in ("retain_mission", "observations_mission")
+                if field not in copied_updates
+            ]
+            if not untouched:
+                raise web.HTTPBadRequest(
+                    text="Fake Hindsight untouched-field fault requires a partial mission PATCH."
+                )
+            self._mission_config[untouched[0]] = "unexpected-untouched-mutation"
+
+        if self._next_mission_readback_fault is not None:
+            self._mission_readback_fault_ready = True
+
+        if fault == "response_loss_after_commit":
+            transport = request.transport
+            if transport is None:
+                raise web.HTTPInternalServerError(text="Fake Hindsight transport unavailable.")
+            transport.close()
+            await asyncio.sleep(0)
+            return web.Response(status=204)
+        if fault == "malformed_json":
+            return web.Response(
+                text=f"{self._error_sentinel}{{",
+                content_type="application/json",
+            )
+
+        response_config = dict(self._mission_config)
+        response_bank_id = self._bank_id
+        if fault == "wrong_bank":
+            response_bank_id = "different-fixture-bank"
+        elif fault == "wrong_type":
+            response_config[next(iter(copied_updates))] = {"raw_error": self._error_sentinel}
+        elif fault == "response_mismatch":
+            response_config[next(iter(copied_updates))] = "patch-response-mismatch"
+        return web.json_response(
+            self._config_response(config=response_config, bank_id=response_bank_id)
+        )
 
     async def _create_disposable(self, request: web.Request) -> web.Response:
         json_body = await self._record(request)
@@ -472,16 +583,54 @@ class FakeHindsightServer:
             "mission": "Fixture mission",
         }
 
-    def _config_response(self, updates: dict[object, object]) -> dict[str, object]:
-        config: dict[object, object] = {
-            "retain_mission": "retain-old",
-            "observations_mission": "observe-old",
-        }
-        config.update(updates)
+    def _mission_read_response(
+        self,
+        fault: MissionReadFault | MissionReadbackFault | None,
+        *,
+        readback: bool,
+    ) -> web.Response:
+        if fault == "malformed_json":
+            return web.Response(
+                text=f"{self._error_sentinel}{{",
+                content_type="application/json",
+            )
+        if fault == "http_503":
+            return web.Response(status=503, text=self._error_sentinel)
+
+        config = dict(self._mission_config)
+        bank_id = self._bank_id
+        if fault == "wrong_bank":
+            bank_id = "different-fixture-bank"
+        elif fault == "wrong_type":
+            config["retain_mission"] = {"raw_error": self._error_sentinel}
+        elif fault == "missing":
+            config.pop("retain_mission", None)
+            config.pop("observations_mission", None)
+        elif fault == "null":
+            config["retain_mission"] = None
+            config["observations_mission"] = None
+        elif fault == "blank":
+            config["retain_mission"] = ""
+            config["observations_mission"] = " \t"
+        elif fault == "mismatch":
+            if not readback or not self._last_mission_updates:
+                raise web.HTTPInternalServerError(
+                    text="Fake Hindsight readback mismatch requires a preceding PATCH."
+                )
+            config[self._last_mission_updates[0]] = "readback-mismatch"
+        return web.json_response(self._config_response(config=config, bank_id=bank_id))
+
+    def _config_response(
+        self,
+        *,
+        config: dict[str, object] | None = None,
+        bank_id: str | None = None,
+    ) -> dict[str, object]:
+        resolved = dict(self._mission_config if config is None else config)
         return {
-            "bank_id": self._bank_id,
-            "config": config,
-            "overrides": dict(config),
+            "bank_id": self._bank_id if bank_id is None else bank_id,
+            "config": resolved,
+            "overrides": dict(resolved),
         }
 
 
@@ -490,6 +639,9 @@ __all__ = [
     "MAX_REQUEST_RECORDS",
     "FakeHindsightServer",
     "FakeServerReport",
+    "MissionPatchFault",
+    "MissionReadFault",
+    "MissionReadbackFault",
     "RecallFault",
     "RequestRecord",
     "RetainFault",

@@ -1,4 +1,4 @@
-"""Integration proof for the exact released Hermes filesystem memory loader."""
+"""Integration proof for exact released-Hermes memory and command discovery."""
 
 from __future__ import annotations
 
@@ -13,15 +13,26 @@ import better_hermes_hindsight.hermes_plugin as packaged_plugin
 
 RELEASE_COMMIT = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
 RELEASE_VERSION = "0.19.0"
+SHIM_FILES = ("__init__.py", "cli.py", "plugin.yaml")
 
-_DISCOVERY_SCRIPT = r"""
+_ACTIVE_DISCOVERY_SCRIPT = r"""
+import argparse
+import fcntl
 import inspect
 import json
+import os
+import socket
+import sqlite3
+import subprocess
 import sys
+import threading
 from importlib import metadata
+from pathlib import Path
 
 release_commit = sys.argv[1]
 release_version = sys.argv[2]
+hermes_home = Path(sys.argv[3]).resolve()
+plugin_config_path = hermes_home / "better_hindsight" / "config.json"
 
 distribution = metadata.distribution("hermes-agent")
 assert distribution.version == release_version
@@ -30,7 +41,62 @@ assert direct_url_text is not None
 direct_url = json.loads(direct_url_text)
 assert direct_url["vcs_info"]["commit_id"] == release_commit
 
+
+def forbidden(label):
+    def fail(*_args, **_kwargs):
+        raise AssertionError(label)
+
+    return fail
+
+
+socket.socket.connect = forbidden("released discovery attempted a socket connection")
+socket.socket.connect_ex = forbidden("released discovery attempted a socket probe")
+socket.create_connection = forbidden("released discovery attempted a socket connection")
+sqlite3.connect = forbidden("released discovery opened SQLite")
+fcntl.flock = forbidden("released discovery touched a profile lock")
+subprocess.Popen = forbidden("released discovery started a subprocess or service")
+threading.Thread.start = forbidden("released discovery started a thread")
+
+
+def audit_plugin_config(event, args):
+    if event != "open" or not args:
+        return
+    candidate = args[0]
+    if not isinstance(candidate, (str, bytes, os.PathLike)):
+        return
+    try:
+        opened = Path(candidate).resolve()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return
+    if opened == plugin_config_path:
+        raise AssertionError("released discovery read Better Hindsight configuration")
+
+
+sys.addaudithook(audit_plugin_config)
+
+import better_hermes_hindsight.client as client_module
+import better_hermes_hindsight.config as config_module
+import better_hermes_hindsight.outbox as outbox_module
+import better_hermes_hindsight.runtime as runtime_module
+import hindsight_client
+
+config_module.load_config = forbidden("released discovery validated provider configuration")
+client_module.create_hindsight_client = forbidden("released discovery constructed a client")
+hindsight_client.Hindsight = forbidden("released discovery constructed the pinned SDK client")
+runtime_module.acquire_process_runtime = forbidden("released discovery acquired a runtime")
+runtime_module.OutboxSender.start = forbidden("released discovery started a sender")
+outbox_module.SQLiteOutbox.open = classmethod(
+    forbidden("released discovery opened the provider outbox")
+)
+
 import plugins.memory as memory_loader
+
+memory_source = inspect.getsourcefile(memory_loader)
+release_files = distribution.files
+assert memory_source is not None
+assert release_files is not None
+memory_entry = next(entry for entry in release_files if str(entry) == "plugins/memory/__init__.py")
+assert Path(memory_source).resolve() == Path(str(distribution.locate_file(memory_entry))).resolve()
 
 names = memory_loader.list_memory_provider_names()
 assert names.count("better_hindsight") == 1
@@ -38,18 +104,48 @@ assert names.count("better_hindsight") == 1
 registrations = []
 original_register = memory_loader._ProviderCollector.register_memory_provider
 
+
 def recording_register(self, provider):
     registrations.append(provider.name)
     return original_register(self, provider)
 
+
 memory_loader._ProviderCollector.register_memory_provider = recording_register
 provider = memory_loader.load_memory_provider("better_hindsight")
-
 assert provider is not None
 assert provider.name == "better_hindsight"
 assert provider.is_available() is True
 assert provider.get_tool_schemas() == []
 assert registrations == ["better_hindsight"]
+
+commands = memory_loader.discover_plugin_cli_commands()
+assert len(commands) == 1
+command = commands[0]
+assert set(command) == {
+    "description",
+    "handler_fn",
+    "help",
+    "name",
+    "plugin",
+    "setup_fn",
+}
+assert command["name"] == "better_hindsight"
+assert command["plugin"] == "better_hindsight"
+assert callable(command["setup_fn"])
+assert callable(command["handler_fn"])
+assert command["setup_fn"].__name__ == "register_cli"
+assert command["handler_fn"].__name__ == "better_hindsight_command"
+assert inspect.iscoroutinefunction(command["setup_fn"]) is False
+assert inspect.iscoroutinefunction(command["handler_fn"]) is False
+assert command["setup_fn"].__module__ == "_hermes_user_memory.better_hindsight.cli"
+assert command["handler_fn"].__module__ == "_hermes_user_memory.better_hindsight.cli"
+
+parser = argparse.ArgumentParser(prog="hermes better_hindsight")
+command["setup_fn"](parser)
+assert parser.parse_args(["status"]) is not None
+assert parser.parse_args(["missions", "check"]) is not None
+apply_args = parser.parse_args(["missions", "apply", "--confirm"])
+assert apply_args.confirm is True
 
 from agent.codex_runtime import run_codex_app_server_turn
 from agent.turn_context import build_turn_context
@@ -63,12 +159,53 @@ assert "run_turn(user_input=user_message)" in codex_source
 assert 'api_mode", None) != "codex_app_server"' in turn_context_source
 
 print(json.dumps({
+    "cli_commands": [command["name"]],
+    "cli_module": command["setup_fn"].__module__,
     "codex_app_server_memory_supported": False,
     "commit": direct_url["vcs_info"]["commit_id"],
     "discovered": names.count("better_hindsight"),
     "loaded": provider.name,
+    "model_tools": provider.get_tool_schemas(),
     "registrations": registrations,
     "version": distribution.version,
+}, sort_keys=True))
+"""
+
+_INACTIVE_DISCOVERY_SCRIPT = r"""
+import inspect
+import json
+import sys
+from importlib import metadata
+from pathlib import Path
+
+release_commit = sys.argv[1]
+release_version = sys.argv[2]
+
+distribution = metadata.distribution("hermes-agent")
+assert distribution.version == release_version
+direct_url_text = distribution.read_text("direct_url.json")
+assert direct_url_text is not None
+assert json.loads(direct_url_text)["vcs_info"]["commit_id"] == release_commit
+
+import plugins.memory as memory_loader
+
+memory_source = inspect.getsourcefile(memory_loader)
+files = distribution.files
+assert memory_source is not None
+assert files is not None
+entry = next(item for item in files if str(item) == "plugins/memory/__init__.py")
+assert Path(memory_source).resolve() == Path(str(distribution.locate_file(entry))).resolve()
+
+# This is intentionally the released direct discovery seam. Do not invoke an
+# inactive command token through full Hermes, where unknown text can enter chat fallback.
+commands = memory_loader.discover_plugin_cli_commands()
+assert commands == []
+assert "_hermes_user_memory.better_hindsight.cli" not in sys.modules
+print(json.dumps({
+    "active_provider": memory_loader._get_active_memory_provider(),
+    "commands": commands,
+    "commit": release_commit,
+    "version": release_version,
 }, sort_keys=True))
 """
 
@@ -108,20 +245,44 @@ def _clean_subprocess_env(home: Path) -> dict[str, str]:
 def _materialize_packaged_shim(hermes_home: Path) -> Path:
     source = Path(packaged_plugin.__file__).resolve().parent
     destination = hermes_home / "plugins" / "better_hindsight"
-    destination.mkdir(parents=True)
-    for name in ("__init__.py", "plugin.yaml"):
-        shutil.copy2(source / name, destination / name)
+    destination.mkdir(parents=True, exist_ok=True)
+    # cli.py is intentionally absent at the RED checkpoint. Copy whatever is
+    # present so released discovery—not fixture setup—exposes the missing shim.
+    for name in SHIM_FILES:
+        candidate = source / name
+        if candidate.is_file():
+            shutil.copy2(candidate, destination / name)
     return destination
 
 
-def test_exact_released_loader_discovers_loads_and_registers_one_provider(
+def _write_host_selection(hermes_home: Path, provider: str) -> None:
+    hermes_home.mkdir(parents=True, exist_ok=True)
+    (hermes_home / "config.yaml").write_text(
+        f"memory:\n  provider: {provider}\n",
+        encoding="utf-8",
+    )
+
+
+def test_exact_released_loader_discovers_three_file_active_shim_cli_and_no_model_tools(
     tmp_path: Path,
 ) -> None:
     hermes_home = tmp_path / "hermes-home"
+    _write_host_selection(hermes_home, "better_hindsight")
     shim = _materialize_packaged_shim(hermes_home)
+    config_dir = hermes_home / "better_hindsight"
+    config_dir.mkdir(parents=True)
+    # Import/discovery must not validate even a deliberately invalid profile.
+    (config_dir / "config.json").write_text('{"single_principal":', encoding="utf-8")
 
     completed = subprocess.run(
-        [sys.executable, "-c", _DISCOVERY_SCRIPT, RELEASE_COMMIT, RELEASE_VERSION],
+        [
+            sys.executable,
+            "-c",
+            _ACTIVE_DISCOVERY_SCRIPT,
+            RELEASE_COMMIT,
+            RELEASE_VERSION,
+            str(hermes_home),
+        ],
         cwd=tmp_path,
         env=_clean_subprocess_env(tmp_path),
         check=False,
@@ -133,12 +294,50 @@ def test_exact_released_loader_discovers_loads_and_registers_one_provider(
     assert completed.returncode == 0, completed.stderr[-4000:]
     payload = json.loads(completed.stdout.splitlines()[-1])
     assert payload == {
+        "cli_commands": ["better_hindsight"],
+        "cli_module": "_hermes_user_memory.better_hindsight.cli",
         "codex_app_server_memory_supported": False,
         "commit": RELEASE_COMMIT,
         "discovered": 1,
         "loaded": "better_hindsight",
+        "model_tools": [],
         "registrations": ["better_hindsight"],
         "version": RELEASE_VERSION,
     }
-    assert sorted(path.name for path in shim.iterdir()) == ["__init__.py", "plugin.yaml"]
+    assert sorted(path.name for path in shim.iterdir()) == list(SHIM_FILES)
     assert not (hermes_home / "plugins" / "memory").exists()
+    assert not (config_dir / "outbox.sqlite3").exists()
+    assert not (config_dir / "outbox.sqlite3.lock").exists()
+
+
+def test_exact_released_inactive_provider_discovery_returns_no_better_command_directly(
+    tmp_path: Path,
+) -> None:
+    hermes_home = tmp_path / "hermes-home"
+    _write_host_selection(hermes_home, "hindsight")
+    shim = _materialize_packaged_shim(hermes_home)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _INACTIVE_DISCOVERY_SCRIPT,
+            RELEASE_COMMIT,
+            RELEASE_VERSION,
+        ],
+        cwd=tmp_path,
+        env=_clean_subprocess_env(tmp_path),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0, completed.stderr[-4000:]
+    assert json.loads(completed.stdout) == {
+        "active_provider": "hindsight",
+        "commands": [],
+        "commit": RELEASE_COMMIT,
+        "version": RELEASE_VERSION,
+    }
+    assert {path.name for path in shim.iterdir()}.issubset(set(SHIM_FILES))

@@ -4,9 +4,9 @@
 
 - **Canonical plan:** `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
 - **Canonical SHA-256:** `f4d71a33f327510f70e64a1e3d0533281fd8a22862c42e5fbe54d54c08fb6562`
-- **Plan state:** Active; Tasks 0–3 and the original active-plan Task 4 contract gate are complete. Deterministic GREEN work proved two SQLite WAL facts omitted by that contract: a coherent active-WAL `mode=ro` read may update the existing derived `-shm` WAL index, while an ordinary read of a fully checkpointed closed WAL-mode file may create empty sidecars. The exact amendment freezes SQLite-owned same-inode SHM coordination/recovery changes, a guarded sidecar-absent `mode=ro&immutable=1` branch, a byte-preserving transient `flock` probe, and the trusted same-principal pathname-reopen limitation. It avoids stale active-WAL reads and a bespoke VFS/WAL parser without claiming hostile same-UID safety. No Task 4 implementation candidate may be finalized until this amendment is independently approved.
+- **Plan state:** Active; Tasks 0–3 and both active-plan Task 4 contract gates are complete. The original contract was checkpointed as `9579d8af0098899cdb0ebe3447c2bb57fb4519da`; the SQLite WAL/SHM amendment was independently approved and checkpointed as `0bc681cf6ab066bce6a9793c9d72157886aae2e4`. Deterministic RED evidence is preserved, and Task 4 implementation and verification are active.
 - **Code checkpoint:** `ef200c948b738a34f9a74a6ee3f2a964445c5126` (`ef200c9`) is the completed Task 3 sender-delivery and retry checkpoint.
-- **Next action:** Independently approve this exact SQLite WAL/SHM amendment from Task 4 contract checkpoint `9579d8a`, then resume the preserved deterministic implementation. Add only bounded sanitized queue diagnostics and explicit mission check/apply commands—no retry/drain command, IPC, model-facing memory tools, generic control plane, installation, deployment, isolated live-write proof, or production rollout.
+- **Next action:** Finish and independently approve the Task 4 implementation from amended contract checkpoint `0bc681c`. Add only bounded sanitized queue diagnostics and explicit mission check/apply commands—no retry/drain command, IPC, model-facing memory tools, generic control plane, installation, deployment, isolated live-write proof, or production rollout.
 
 The canonical plan is intentionally local under `.hermes/plans/`, which is ignored because Hermes runtime state and private artifacts do not belong in Git. This tracked file is the durable cross-session router. If the canonical file is missing or its hash differs, stop and resolve the plan state instead of selecting another plan.
 
@@ -38,6 +38,7 @@ The product is a plugin-only, best-effort integration for released Hermes and se
 - bounded automatic current-query recall;
 - opt-in automatic retention from released `sync_turn()` callbacks;
 - retry durability beginning only after the plugin's own SQLite admission commits;
+- passive bounded queue diagnostics and confirmation-gated mission check/apply commands;
 - no authoritative human/synthetic-origin claim;
 - no pre-callback or pre-turn-return zero-loss claim;
 - no Hermes-core prerequisite;

@@ -19,7 +19,8 @@ The primary goal is useful memory on unmodified released Hermes:
 
 - bounded recall against the current user query;
 - opt-in best-effort retention of the completed-turn callbacks released Hermes actually supplies;
-- short local admission followed by retryable background delivery to self-hosted Hindsight; and
+- short local admission followed by retryable background delivery to self-hosted Hindsight;
+- passive bounded queue diagnostics plus explicit confirmation-gated mission management; and
 - easy rollback to the bundled provider while old data stays untouched.
 
 Recall is enabled by default. Automatic retention is disabled by default until an operator proves
@@ -44,7 +45,7 @@ not claim exactly-once transport.
 
 `codex_app_server` is unsupported on the pinned release because that runtime bypasses normal provider
 memory behavior. No model-facing memory tools in the first prerelease are registered; recall is
-automatic context and mission changes are future explicit operator commands.
+automatic context and mission changes require an explicit operator command.
 
 ## Initial scope
 
@@ -64,8 +65,27 @@ automatic context and mission changes are future explicit operator commands.
   file-size guarantee.
 - Source documents are the preserved record. Facts, observations, embeddings, and summaries are
   derived indexes.
-- Retain and observation mission text remain distinct. Check/apply is explicit future operator
-  behavior, never automatic initialization policy.
+- Retain and observation mission text remain distinct. `better_hindsight missions check` is
+  read-only; `better_hindsight missions apply --confirm` changes only configured drifted fields and
+  verifies exact readback. Neither command is automatic initialization policy.
+
+## Operator commands
+
+Released Hermes discovers the underscore-only command from the active memory-provider shim:
+
+```text
+hermes better_hindsight status
+hermes better_hindsight missions check
+hermes better_hindsight missions apply --confirm
+```
+
+`status` passively inspects an existing schema-v1 SQLite outbox and probes the existing sender lock;
+an absent outbox is reported as `uninitialized` without creating files. Mission commands require
+`single_principal=true` and own a short-lived client-only runtime that never opens the retention
+outbox or starts its sender. Handler-controlled output is canonical JSON bounded to 1,024 UTF-8
+bytes. Exit statuses are `0` for success/equality, `1` for drift or missing mission state, `2` for
+host-owned usage errors, `3` for fixed pre-write/local failures, and `4` once a remote write was
+attempted but the final outcome cannot be proven. There is no retry or drain command.
 
 ## Isolation and rollback
 

@@ -56,8 +56,9 @@ project-specific candidate to evaluate, not a justified universal default.
    guarantee.
 5. Preserve destination matching, one profile sender, bounded cross-process polling, stable
    replace-mode replay, and retry recovery. Do not claim exactly-once transport or global FIFO.
-6. Keep retain and observation mission text distinct. Checking or applying it is explicit future
-   operator behavior, not initialization policy.
+6. Keep retain and observation mission text distinct. Checking is explicit and read-only; applying
+   requires `better_hindsight missions apply --confirm`, changes only configured drift, verifies exact
+   readback, and never becomes initialization policy.
 7. Accept Hindsight's documented `shared` observation scope only after exact principal and exclusive
    bank proof. Hindsight's shared write-capable key is not a server-enforced provider policy boundary.
 8. Ship no model-facing memory tools in the first prerelease.

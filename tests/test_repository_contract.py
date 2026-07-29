@@ -77,16 +77,22 @@ TASK4_FROZEN_AUTHORITY_PATHS = (
 )
 
 _TASK4_FROZEN_AUTHORITY_SHA256 = {
-    "IMPLEMENTATION.md": "TASK4_IMPLEMENTATION_REQUIRED",
-    "README.md": "TASK4_IMPLEMENTATION_REQUIRED",
-    "DESIGN.md": "TASK4_IMPLEMENTATION_REQUIRED",
-    "docs/audit-findings.md": "TASK4_IMPLEMENTATION_REQUIRED",
-    "docs/compatibility.md": "TASK4_IMPLEMENTATION_REQUIRED",
-    "docs/configuration.md": "TASK4_IMPLEMENTATION_REQUIRED",
-    "docs/operations.md": "TASK4_IMPLEMENTATION_REQUIRED",
-    "docs/public-release-checklist.md": "TASK4_IMPLEMENTATION_REQUIRED",
-    "src/better_hermes_hindsight/config.py": "TASK4_IMPLEMENTATION_REQUIRED",
-    "src/better_hermes_hindsight/hermes_plugin/cli.py": "TASK4_IMPLEMENTATION_REQUIRED",
+    "IMPLEMENTATION.md": "08af9c74f5baff3f37796c3053fc8ffe94c8e3284ff0911253e83d47ceaca96b",
+    "README.md": "45217602de050da35375026c4c5e5bf631a13443dbaeca5afc9e2055bec5986c",
+    "DESIGN.md": "cab348c60b052efbbbd6753a411bed96afcac5d54069c29f69f48a158487db61",
+    "docs/audit-findings.md": "af1134c0772062eacb7185018a0b2585260cd79955974a5acbf145c2fc63fba2",
+    "docs/compatibility.md": "9fa11d5fbec38970b13fa1009f65101f173c935fccc8ca8f0487e438c241bbe2",
+    "docs/configuration.md": "08f660c7e8f311640a26b495ef160e187137156fc6632b37d7bb180b64a975d5",
+    "docs/operations.md": "7fe0cee6645dd5d5cdad110b013695289af72e093630dfb82724a3d2e4b7bfb0",
+    "docs/public-release-checklist.md": (
+        "62ca48184b7f5c6fa4b5f187f1e1860bcd0cf0f3a42348339b48b01f67fe02f5"
+    ),
+    "src/better_hermes_hindsight/config.py": (
+        "ce310b60359d34c6e2c30fcc46592d43ecc0b2ad36a6731ae87743b21a733621"
+    ),
+    "src/better_hermes_hindsight/hermes_plugin/cli.py": (
+        "dbfbf37a26771d993ea2d66e558a05940922b4d1640150341b98c6d1a96c53d5"
+    ),
 }
 
 
@@ -235,6 +241,8 @@ def _assert_task4_production_hash_map_is_source_literal() -> None:
 
 
 def _read_local_plan_pair() -> tuple[bytes, bytes] | None:
+    """Read ignored planning aids; tracked clean-clone authority is tested separately below."""
+
     plan_exists = LOCAL_PLAN_PATH.is_file()
     index_exists = LOCAL_PLAN_INDEX_PATH.is_file()
     if not plan_exists and not index_exists:
@@ -299,7 +307,7 @@ def test_best_effort_provider_scope_and_lifecycle_are_explicit() -> None:
     )
 
 
-def test_task3_delivery_checkpoint_is_documented_without_task4_or_rollout_claims() -> None:
+def test_task3_delivery_and_task4_operator_contract_are_documented_without_rollout_claims() -> None:
     readme = _read("README.md")
     _assert_terms(
         readme,
@@ -322,8 +330,10 @@ def test_task3_delivery_checkpoint_is_documented_without_task4_or_rollout_claims
         "stable document ID",
         "replace mode",
         "not exactly-once transport",
-        "operator-visible queue counts and management commands remain Task 4",
+        "hermes better_hindsight status",
+        "hermes better_hindsight missions apply --confirm",
     )
+    assert "future task 4 operator behavior" not in _normalized(delivery_contract)
 
 
 def test_active_contracts_do_not_reinstate_retired_requirements() -> None:
@@ -486,7 +496,7 @@ def test_release_gate_requires_isolated_development_and_reversible_canary() -> N
 def test_task3_sender_contract_is_frozen_before_red_tests() -> None:
     local_plan_pair = _read_local_plan_pair()
     if local_plan_pair is None:
-        return
+        pytest.skip("ignored local planning aids are absent from this clean checkout")
     plan_bytes, _plan_index_bytes = local_plan_pair
     plan = plan_bytes.decode("utf-8", errors="strict")
     task3 = plan.split("### Task 3:", maxsplit=1)[1].split("### Task 4:", maxsplit=1)[0]
@@ -554,7 +564,7 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
 
     local_plan_pair = _read_local_plan_pair()
     if local_plan_pair is None:
-        return
+        pytest.skip("ignored local planning aids are absent from this clean checkout")
     plan_bytes, plan_index_bytes = local_plan_pair
     plan = plan_bytes.decode("utf-8", errors="strict")
     plan_index = plan_index_bytes.decode("utf-8", errors="strict")
@@ -715,16 +725,14 @@ def test_task4_status_document_oracle_rejects_structural_and_authority_drift() -
                 _assert_task4_frozen_authority_hashes(changed, expected_hashes)
 
 
-def test_task4_sqlite_wal_contract_amendment_is_frozen_when_local_plan_is_present() -> None:
+def test_task4_approved_contract_and_active_implementation_route_are_frozen() -> None:
     router = _read("IMPLEMENTATION.md")
     _assert_terms(
         router,
         "f4d71a33f327510f70e64a1e3d0533281fd8a22862c42e5fbe54d54c08fb6562",
-        "ordinary read of a fully checkpointed closed WAL-mode file may create empty sidecars",
-        (
-            "No Task 4 implementation candidate may be finalized until this amendment "
-            "is independently approved"
-        ),
+        "both active-plan Task 4 contract gates are complete",
+        "0bc681cf6ab066bce6a9793c9d72157886aae2e4",
+        "Task 4 implementation and verification are active",
         "no retry/drain command",
     )
 
@@ -830,6 +838,48 @@ def test_task4_sqlite_wal_contract_amendment_is_frozen_when_local_plan_is_presen
         "f4d71a33f327510f70e64a1e3d0533281fd8a22862c42e5fbe54d54c08fb6562",
         "requires independent approval before implementation resumes",
     )
+
+
+def test_task4_owned_docs_describe_current_operator_commands_without_stale_negatives() -> None:
+    expected = {
+        "README.md": (
+            "hermes better_hindsight status",
+            "hermes better_hindsight missions apply --confirm",
+        ),
+        "DESIGN.md": (
+            "better_hindsight missions check",
+            "write_attempted_outcome_unknown",
+        ),
+        "docs/audit-findings.md": (
+            "better_hindsight missions apply --confirm",
+            "never becomes initialization policy",
+        ),
+        "docs/compatibility.md": (
+            "Passive `better_hindsight status`",
+            "Explicit mission check/apply",
+        ),
+        "docs/configuration.md": (
+            "better_hindsight missions check",
+            "better_hindsight missions apply --confirm",
+        ),
+        "docs/operations.md": (
+            "hermes better_hindsight status",
+            "hermes better_hindsight missions apply --confirm",
+        ),
+    }
+    stale = {
+        "README.md": ("mission changes are future", "Check/apply is explicit future"),
+        "DESIGN.md": ("explicit future mission", "A future explicit operator command"),
+        "docs/audit-findings.md": ("explicit future operator behavior",),
+        "docs/compatibility.md": ("future confirmation-gated mission apply",),
+        "docs/configuration.md": ("future operator",),
+        "docs/operations.md": ("management commands remain Task 4", "adds no queue CLI"),
+    }
+    for relative_path, terms in expected.items():
+        content = _read(relative_path)
+        _assert_terms(content, *terms)
+        for obsolete in stale[relative_path]:
+            assert obsolete not in content
 
 
 def test_changed_markdown_links_resolve_inside_repository() -> None:

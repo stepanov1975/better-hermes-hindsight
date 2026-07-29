@@ -29,7 +29,7 @@ The project owns:
 - deterministic redaction, segmentation, and stable retain document identity;
 - atomic profile-local SQLite admission with logical row/payload caps;
 - destination-matched replace-mode retry and one POSIX sender owner;
-- explicit future mission check/apply commands; and
+- passive queue status plus explicit mission check/apply commands; and
 - compatibility, fake-service, isolated-development, and rollback proofs.
 
 Released Hermes owns whether and when a provider callback is invoked. Hindsight owns remote commit
@@ -102,9 +102,22 @@ read/write boundary against a process with terminal access and the key.
 ## Missions
 
 Retain and observation mission text are distinct optional configuration fields. Provider
-initialization neither reads nor applies remote mission policy. A future explicit operator command
-will check the allowlisted fields and apply only confirmed changes with readback; that Task 4
-behavior is outside the current configuration slice.
+initialization neither reads nor applies remote mission policy. `better_hindsight missions check`
+performs one typed bank-config read through a client-only runtime. It compares configured fields
+byte-for-byte and reports only `equal`, `drift`, `missing`, or `error`; it never emits mission text.
+`better_hindsight missions apply --confirm` performs one pre-read, at most one changed-field-only
+PATCH, and one exact readback. Untouched allowlisted fields must remain byte-for-byte identical.
+There is no automatic retry or rollback after PATCH dispatch: an unprovable post-dispatch outcome is
+reported as `write_attempted_outcome_unknown` with exit status 4.
+
+## Local operator diagnostics
+
+`better_hindsight status` opens only an existing schema-v1 outbox in SQLite read-only/query-only
+mode and reports one exclusive queue partition, logical queued bytes, oldest-age bucket, latest fixed
+error category, and a point-in-time nonblocking sender-lock observation. It does not initialize,
+recover, claim, complete, reschedule, or drain rows. A missing outbox is a successful
+`uninitialized` result and creates nothing. Import and help paths do not inspect configuration,
+SQLite, locks, clients, or sender state.
 
 ## Supported and unsupported runtime paths
 

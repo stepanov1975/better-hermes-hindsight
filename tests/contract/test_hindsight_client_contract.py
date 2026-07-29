@@ -6,14 +6,17 @@ import asyncio
 import importlib
 import subprocess
 import sys
-from collections.abc import Mapping
+import traceback
+from collections.abc import Callable, Mapping
 from dataclasses import FrozenInstanceError
 from importlib import metadata as importlib_metadata
 from importlib.metadata import PackageNotFoundError
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Protocol, cast
 
 import pytest
+from hindsight_client_api.models.bank_config_response import BankConfigResponse
 from hindsight_client_api.models.bank_config_update import BankConfigUpdate
 from hindsight_client_api.models.retain_response import RetainResponse as SdkRetainResponse
 
@@ -38,10 +41,100 @@ class _UnprintableFailure(RuntimeError):
         raise AssertionError("raw SDK failures must not be stringified")
 
 
+class _SensitiveMissionValue:
+    def __str__(self) -> str:  # pragma: no cover - a passing adapter never calls this
+        raise AssertionError("raw mission values must not be stringified")
+
+    def __repr__(self) -> str:  # pragma: no cover - a passing adapter never calls this
+        raise AssertionError("raw mission values must not be represented")
+
+
+class _BankConfigResponseSubclass(BankConfigResponse):
+    pass
+
+
+class _DictSubclass(dict[str, object]):
+    pass
+
+
+class _StringSubclass(str):
+    pass
+
+
+class _MissionValueView(Protocol):
+    @property
+    def present(self) -> bool: ...
+
+    @property
+    def value(self) -> str | None: ...
+
+
+class _MissionSnapshotView(Protocol):
+    @property
+    def retain_mission(self) -> object: ...
+
+    @property
+    def observations_mission(self) -> object: ...
+
+
+_UNSET = object()
+
+
+def _sdk_bank_config_response(
+    *,
+    bank_id: object = "sample-bank",
+    config: object = _UNSET,
+    overrides: object = _UNSET,
+) -> BankConfigResponse:
+    resolved = (
+        {
+            "retain_mission": "retain-old",
+            "observations_mission": "observe-old",
+        }
+        if config is _UNSET
+        else config
+    )
+    resolved_overrides: object = dict(resolved) if isinstance(resolved, dict) else {}
+    if overrides is not _UNSET:
+        resolved_overrides = overrides
+    return BankConfigResponse.model_construct(
+        bank_id=bank_id,
+        config=resolved,
+        overrides=resolved_overrides,
+    )
+
+
+def _expected_mission_snapshot(
+    *,
+    retain_present: bool,
+    retain_value: str | None,
+    observations_present: bool,
+    observations_value: str | None,
+) -> object:
+    mission_value = cast(Callable[..., object], vars(client_module)["MissionValue"])
+    mission_snapshot = cast(Callable[..., object], vars(client_module)["MissionSnapshot"])
+    return mission_snapshot(
+        retain_mission=mission_value(present=retain_present, value=retain_value),
+        observations_mission=mission_value(
+            present=observations_present,
+            value=observations_value,
+        ),
+    )
+
+
 class _FakeBanksApi:
-    def __init__(self, failures: dict[str, BaseException]) -> None:
+    def __init__(
+        self,
+        failures: dict[str, BaseException],
+        responses: dict[str, object],
+    ) -> None:
         self.calls: list[tuple[str, dict[str, object]]] = []
         self._failures = failures
+        self._responses = responses
+        self._mission_config: dict[str, object] = {
+            "retain_mission": "retain-old",
+            "observations_mission": "observe-old",
+        }
 
     async def get_bank_profile(self, **kwargs: object) -> object:
         return self._record("get_bank_profile", kwargs)
@@ -61,6 +154,15 @@ class _FakeBanksApi:
             raise failure
         copied = dict(kwargs)
         self.calls.append((operation, copied))
+        if operation == "update_bank_config":
+            request = copied["bank_config_update"]
+            if not isinstance(request, BankConfigUpdate):
+                raise AssertionError("contract fake requires the pinned BankConfigUpdate")
+            self._mission_config.update(request.updates)
+        if operation in self._responses:
+            return self._responses[operation]
+        if operation in {"get_bank_config", "update_bank_config"}:
+            return _sdk_bank_config_response(config=self._mission_config)
         return {"operation": operation}
 
 
@@ -69,7 +171,7 @@ class _FakeSdkClient:
         self.calls: list[tuple[str, dict[str, object]]] = []
         self.failures: dict[str, BaseException] = {}
         self.responses: dict[str, object] = {}
-        self.banks = _FakeBanksApi(self.failures)
+        self.banks = _FakeBanksApi(self.failures, self.responses)
 
     async def arecall(self, **kwargs: object) -> object:
         return self._record("arecall", kwargs)
@@ -455,7 +557,40 @@ def test_malformed_direct_retain_response_maps_to_fixed_client_error(tmp_path: P
     assert caught.value.__cause__ is None
 
 
-def test_bank_reads_and_allowlisted_mission_update_use_public_banks_api(
+def test_mission_value_and_snapshot_are_exact_frozen_slotted_project_types() -> None:
+    mission_value_type = cast(type[object], vars(client_module)["MissionValue"])
+    mission_snapshot_type = cast(type[object], vars(client_module)["MissionSnapshot"])
+    mission_value = cast(Callable[..., object], mission_value_type)
+    mission_snapshot = cast(Callable[..., object], mission_snapshot_type)
+
+    present = mission_value(present=True, value="synthetic mission")
+    absent = mission_value(present=False, value=None)
+    snapshot = mission_snapshot(
+        retain_mission=present,
+        observations_mission=absent,
+    )
+
+    assert type(present) is mission_value_type
+    assert type(absent) is mission_value_type
+    assert type(snapshot) is mission_snapshot_type
+    present_view = cast(_MissionValueView, present)
+    absent_view = cast(_MissionValueView, absent)
+    snapshot_view = cast(_MissionSnapshotView, snapshot)
+    assert present_view.present is True
+    assert present_view.value == "synthetic mission"
+    assert absent_view.present is False
+    assert absent_view.value is None
+    assert snapshot_view.retain_mission is present
+    assert snapshot_view.observations_mission is absent
+    assert not hasattr(present, "__dict__")
+    assert not hasattr(snapshot, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        present.__setattr__("value", "replacement")
+    with pytest.raises(FrozenInstanceError):
+        snapshot.__setattr__("retain_mission", absent)
+
+
+def test_bank_reads_and_allowlisted_mission_update_use_public_banks_api_and_typed_snapshots(
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path, injected={"bank_id": "sample-bank"})
@@ -477,8 +612,18 @@ def test_bank_reads_and_allowlisted_mission_update_use_public_banks_api(
 
     assert version == {"operation": "aget_version"}
     assert profile == {"operation": "get_bank_profile"}
-    assert bank_config == {"operation": "get_bank_config"}
-    assert updated == {"operation": "update_bank_config"}
+    assert bank_config == _expected_mission_snapshot(
+        retain_present=True,
+        retain_value="retain-old",
+        observations_present=True,
+        observations_value="observe-old",
+    )
+    assert updated == _expected_mission_snapshot(
+        retain_present=True,
+        retain_value="Retain stable preferences.",
+        observations_present=True,
+        observations_value="Consolidate stable observations.",
+    )
     assert frozenset({"retain_mission", "observations_mission"}) == MISSION_UPDATE_FIELDS
     assert sdk_client.banks.calls[:2] == [
         ("get_bank_profile", {"bank_id": "sample-bank"}),
@@ -493,6 +638,166 @@ def test_bank_reads_and_allowlisted_mission_update_use_public_banks_api(
         "retain_mission": "Retain stable preferences.",
         "observations_mission": "Consolidate stable observations.",
     }
+
+
+@pytest.mark.parametrize(
+    (
+        "resolved_config",
+        "retain_present",
+        "retain_value",
+        "observations_present",
+        "observations_value",
+    ),
+    [
+        ({}, False, None, False, None),
+        ({"retain_mission": None}, True, None, False, None),
+        (
+            {"retain_mission": "", "observations_mission": " \t"},
+            True,
+            "",
+            True,
+            " \t",
+        ),
+        (
+            {"retain_mission": "retain-exact", "observations_mission": "observe-exact"},
+            True,
+            "retain-exact",
+            True,
+            "observe-exact",
+        ),
+    ],
+)
+def test_get_bank_config_preserves_exact_presence_null_and_blank_values_from_resolved_config(
+    tmp_path: Path,
+    resolved_config: dict[str, object],
+    retain_present: bool,
+    retain_value: str | None,
+    observations_present: bool,
+    observations_value: str | None,
+) -> None:
+    config = _config(tmp_path, injected={"bank_id": "sample-bank"})
+    sdk_client = _FakeSdkClient()
+    sdk_client.responses["get_bank_config"] = _sdk_bank_config_response(
+        config=resolved_config,
+        overrides={"retain_mission": _SensitiveMissionValue()},
+    )
+    adapter = HindsightClientAdapter(config=config, sdk_client=sdk_client)
+
+    snapshot = asyncio.run(adapter.get_bank_config())
+
+    assert snapshot == _expected_mission_snapshot(
+        retain_present=retain_present,
+        retain_value=retain_value,
+        observations_present=observations_present,
+        observations_value=observations_value,
+    )
+    assert sdk_client.banks.calls == [("get_bank_config", {"bank_id": "sample-bank"})]
+
+
+_RAW_MISSION_SENTINEL = "SYNTHETIC_RAW_MISSION_MUST_NOT_LEAK"
+_RAW_BANK_SENTINEL = "SYNTHETIC_RAW_BANK_MUST_NOT_LEAK"
+_VALID_MISSION_CONFIG = {
+    "retain_mission": "retain-old",
+    "observations_mission": "observe-old",
+}
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected_category", "expected_message"),
+    [
+        (
+            "get_bank_config",
+            "bank_config_failed",
+            "Better Hindsight bank configuration read failed.",
+        ),
+        (
+            "update_bank_config",
+            "mission_update_failed",
+            "Better Hindsight mission update failed.",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "response",
+    [
+        object(),
+        _BankConfigResponseSubclass.model_construct(
+            bank_id="sample-bank",
+            config=_VALID_MISSION_CONFIG,
+            overrides={},
+        ),
+        _sdk_bank_config_response(bank_id=_RAW_BANK_SENTINEL),
+        _sdk_bank_config_response(bank_id=_StringSubclass("sample-bank")),
+        _sdk_bank_config_response(config=_DictSubclass(_VALID_MISSION_CONFIG)),
+        _sdk_bank_config_response(config=[]),
+        _sdk_bank_config_response(
+            config={
+                "retain_mission": 7,
+                "observations_mission": "observe-old",
+            }
+        ),
+        _sdk_bank_config_response(
+            config={
+                "retain_mission": _StringSubclass("retain-old"),
+                "observations_mission": "observe-old",
+            }
+        ),
+        _sdk_bank_config_response(
+            config={
+                "retain_mission": {"raw": _RAW_MISSION_SENTINEL},
+                "observations_mission": "observe-old",
+            }
+        ),
+        _sdk_bank_config_response(
+            config={
+                "retain_mission": _SensitiveMissionValue(),
+                "observations_mission": "observe-old",
+            }
+        ),
+    ],
+    ids=[
+        "wrong-response-type",
+        "response-subclass",
+        "wrong-bank",
+        "bank-string-subclass",
+        "config-dict-subclass",
+        "wrong-config-type",
+        "wrong-mission-type",
+        "mission-string-subclass",
+        "raw-mission-container",
+        "unprintable-mission-value",
+    ],
+)
+def test_get_and_patch_require_exact_sdk_response_bank_config_and_mission_types(
+    tmp_path: Path,
+    operation: str,
+    expected_category: str,
+    expected_message: str,
+    response: object,
+) -> None:
+    config = _config(tmp_path, injected={"bank_id": "sample-bank"})
+    sdk_client = _FakeSdkClient()
+    sdk_client.responses[operation] = response
+    adapter = HindsightClientAdapter(config=config, sdk_client=sdk_client)
+
+    async def invoke() -> object:
+        if operation == "get_bank_config":
+            return await adapter.get_bank_config()
+        return await adapter.update_bank_missions({"retain_mission": "retain-new"})
+
+    with pytest.raises(HindsightClientError) as caught:
+        asyncio.run(invoke())
+
+    assert caught.value.category == expected_category
+    assert str(caught.value) == expected_message
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__ is True
+    error_surface = "\n".join(
+        (repr(caught.value), "".join(traceback.format_exception(caught.value)))
+    )
+    assert _RAW_BANK_SENTINEL not in error_surface
+    assert _RAW_MISSION_SENTINEL not in error_surface
+    assert len(sdk_client.banks.calls) == 1
 
 
 def test_non_allowlisted_bank_config_update_is_rejected_before_sdk_call(

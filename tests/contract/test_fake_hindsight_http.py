@@ -20,16 +20,16 @@ from pathlib import Path
 from typing import Protocol, cast
 
 import pytest
-from aiohttp import ClientConnectorError, ClientSession
+from aiohttp import ClientConnectorError, ClientError, ClientSession
 from hindsight_client import Hindsight
 from hindsight_client_api.exceptions import ServiceException
-from hindsight_client_api.models.bank_config_response import BankConfigResponse
 from hindsight_client_api.models.bank_profile_response import BankProfileResponse
 from hindsight_client_api.models.delete_response import DeleteResponse
 from hindsight_client_api.models.recall_response import RecallResponse
 from hindsight_client_api.models.version_response import VersionResponse
 from pydantic import ValidationError
 
+import better_hermes_hindsight.client as client_module
 from better_hermes_hindsight import __version__
 from better_hermes_hindsight.client import (
     DisposableBankGuardError,
@@ -46,6 +46,9 @@ from tests.fakes.hindsight_server import (
     MAX_REQUEST_BYTES,
     MAX_REQUEST_RECORDS,
     FakeHindsightServer,
+    MissionPatchFault,
+    MissionReadbackFault,
+    MissionReadFault,
     RecallFault,
     RequestRecord,
     RetainFault,
@@ -100,6 +103,24 @@ def _config(
         injected["retain"] = retain
     environ = {} if api_key is None else {"HINDSIGHT_API_KEY": api_key}
     return load_config(hermes_home=tmp_path, environ=environ, injected=injected)
+
+
+def _mission_snapshot(
+    *,
+    retain_present: bool,
+    retain_value: str | None,
+    observations_present: bool,
+    observations_value: str | None,
+) -> object:
+    mission_value = cast(Callable[..., object], vars(client_module)["MissionValue"])
+    mission_snapshot = cast(Callable[..., object], vars(client_module)["MissionSnapshot"])
+    return mission_snapshot(
+        retain_mission=mission_value(present=retain_present, value=retain_value),
+        observations_mission=mission_value(
+            present=observations_present,
+            value=observations_value,
+        ),
+    )
 
 
 async def _capture_failure(operation: Callable[[], Awaitable[object]]) -> BaseException:
@@ -212,8 +233,18 @@ def test_real_adapter_serializes_and_decodes_complete_public_contract(
             assert isinstance(recalled, RecallResponse)
             assert retained == RetainConfirmation(confirmed=True)
             assert replayed == RetainConfirmation(confirmed=True)
-            assert isinstance(bank_config, BankConfigResponse)
-            assert isinstance(updated_config, BankConfigResponse)
+            assert bank_config == _mission_snapshot(
+                retain_present=True,
+                retain_value="retain-old",
+                observations_present=True,
+                observations_value="observe-old",
+            )
+            assert updated_config == _mission_snapshot(
+                retain_present=True,
+                retain_value="retain-new",
+                observations_present=True,
+                observations_value="observe-old",
+            )
             assert isinstance(created, BankProfileResponse)
             assert isinstance(deleted, DeleteResponse)
             assert version.api_version == "0.8.5"
@@ -237,11 +268,6 @@ def test_real_adapter_serializes_and_decodes_complete_public_contract(
             assert recalled.source_facts is not None
             assert recalled.source_facts["source-fact-1"].text == "fixture source fact"
 
-            assert bank_config.bank_id == FIXTURE_BANK_ID
-            assert bank_config.config["retain_mission"] == "retain-old"
-            assert bank_config.config["observations_mission"] == "observe-old"
-            assert updated_config.config["retain_mission"] == "retain-new"
-            assert updated_config.config["observations_mission"] == "observe-old"
             assert created.bank_id == disposable_bank_id
             assert created.name == "Disposable fixture bank"
             assert deleted.success is True
@@ -351,6 +377,247 @@ def test_real_adapter_serializes_and_decodes_complete_public_contract(
     assert FIXTURE_API_KEY not in caplog.text
     assert FIXTURE_API_KEY not in captured.out
     assert FIXTURE_API_KEY not in captured.err
+
+
+def test_real_adapter_mission_wire_is_stateful_typed_and_changed_field_only(
+    tmp_path: Path,
+    runtime_sentinel: str,
+) -> None:
+    async def scenario() -> None:
+        server = FakeHindsightServer(
+            bank_id=FIXTURE_BANK_ID,
+            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
+            error_sentinel=runtime_sentinel,
+            expected_api_key=None,
+        )
+        await server.start()
+        adapter: HindsightClientAdapter | None = None
+        try:
+            adapter = create_hindsight_client(
+                _config(tmp_path, base_url=server.base_url, api_key=None)
+            )
+
+            before = await adapter.get_bank_config()
+            patched = await adapter.update_bank_missions({"retain_mission": "retain-new"})
+            readback = await adapter.get_bank_config()
+
+            records = server.records
+            assert [(record.method, record.path) for record in records] == [
+                ("GET", f"/v1/default/banks/{FIXTURE_BANK_ID}/config"),
+                ("PATCH", f"/v1/default/banks/{FIXTURE_BANK_ID}/config"),
+                ("GET", f"/v1/default/banks/{FIXTURE_BANK_ID}/config"),
+            ]
+            assert records[0].json_body is None
+            assert records[1].json_body == {"updates": {"retain_mission": "retain-new"}}
+            assert records[2].json_body is None
+            patch_body = cast(dict[str, object], records[1].json_body)
+            patch_updates = patch_body["updates"]
+            assert isinstance(patch_updates, dict)
+            assert "observations_mission" not in patch_updates
+
+            initial_snapshot = _mission_snapshot(
+                retain_present=True,
+                retain_value="retain-old",
+                observations_present=True,
+                observations_value="observe-old",
+            )
+            updated_snapshot = _mission_snapshot(
+                retain_present=True,
+                retain_value="retain-new",
+                observations_present=True,
+                observations_value="observe-old",
+            )
+            assert before == initial_snapshot
+            assert patched == updated_snapshot
+            assert readback == updated_snapshot
+            assert runtime_sentinel not in repr(server.safe_report())
+        finally:
+            if adapter is not None:
+                await adapter.close()
+            await server.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "wrong_bank",
+        "wrong_type",
+        "missing",
+        "null",
+        "blank",
+        "malformed_json",
+        "http_503",
+    ],
+)
+def test_real_adapter_mission_get_validates_wire_and_preserves_missing_null_blank(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    runtime_sentinel: str,
+    fault: MissionReadFault,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def scenario() -> str:
+        server = FakeHindsightServer(
+            bank_id=FIXTURE_BANK_ID,
+            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
+            error_sentinel=runtime_sentinel,
+            expected_api_key=None,
+        )
+        await server.start()
+        adapter: HindsightClientAdapter | None = None
+        try:
+            adapter = create_hindsight_client(
+                _config(tmp_path, base_url=server.base_url, api_key=None)
+            )
+            server.arm_mission_read_fault(fault)
+            if fault in {"wrong_bank", "wrong_type", "malformed_json", "http_503"}:
+                failure = await _capture_failure(adapter.get_bank_config)
+                assert type(failure) is HindsightClientError
+                assert isinstance(failure, HindsightClientError)
+                assert failure.category == "bank_config_failed"
+                assert str(failure) == "Better Hindsight bank configuration read failed."
+                assert failure.__cause__ is None
+                assert failure.__suppress_context__ is True
+                error_surface = "\n".join(
+                    (repr(failure), "".join(traceback.format_exception(failure)))
+                )
+            else:
+                snapshot = await adapter.get_bank_config()
+                if fault == "missing":
+                    expected = _mission_snapshot(
+                        retain_present=False,
+                        retain_value=None,
+                        observations_present=False,
+                        observations_value=None,
+                    )
+                elif fault == "null":
+                    expected = _mission_snapshot(
+                        retain_present=True,
+                        retain_value=None,
+                        observations_present=True,
+                        observations_value=None,
+                    )
+                else:
+                    expected = _mission_snapshot(
+                        retain_present=True,
+                        retain_value="",
+                        observations_present=True,
+                        observations_value=" \t",
+                    )
+                assert snapshot == expected
+                error_surface = ""
+
+            recovered = await adapter.get_bank_config()
+            assert recovered == _mission_snapshot(
+                retain_present=True,
+                retain_value="retain-old",
+                observations_present=True,
+                observations_value="observe-old",
+            )
+            assert len(server.records) == 2
+            return error_surface
+        finally:
+            if adapter is not None:
+                await adapter.close()
+            await server.close()
+
+    error_surface = asyncio.run(scenario())
+    assert runtime_sentinel not in error_surface
+    assert runtime_sentinel not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["wrong_bank", "wrong_type", "response_mismatch", "malformed_json", "http_503"],
+)
+def test_real_adapter_mission_patch_validates_response_without_raw_error_leakage(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    runtime_sentinel: str,
+    fault: MissionPatchFault,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+
+    async def scenario() -> str:
+        server = FakeHindsightServer(
+            bank_id=FIXTURE_BANK_ID,
+            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
+            error_sentinel=runtime_sentinel,
+            expected_api_key=None,
+        )
+        await server.start()
+        adapter: HindsightClientAdapter | None = None
+        try:
+            adapter = create_hindsight_client(
+                _config(tmp_path, base_url=server.base_url, api_key=None)
+            )
+            server.arm_mission_patch_fault(fault)
+            failure = await _capture_failure(
+                lambda: adapter.update_bank_missions({"retain_mission": "retain-new"})
+            )
+            assert type(failure) is HindsightClientError
+            assert isinstance(failure, HindsightClientError)
+            assert failure.category == "mission_update_failed"
+            assert str(failure) == "Better Hindsight mission update failed."
+            assert failure.__cause__ is None
+            assert failure.__suppress_context__ is True
+            assert len(server.records) == 1
+            assert server.records[0].json_body == {"updates": {"retain_mission": "retain-new"}}
+            return "\n".join((repr(failure), "".join(traceback.format_exception(failure))))
+        finally:
+            if adapter is not None:
+                await adapter.close()
+            await server.close()
+
+    error_surface = asyncio.run(scenario())
+    assert runtime_sentinel not in error_surface
+    assert runtime_sentinel not in caplog.text
+
+
+def test_real_adapter_maps_commit_then_patch_response_loss_but_fake_retains_state(
+    tmp_path: Path,
+    runtime_sentinel: str,
+) -> None:
+    async def scenario() -> None:
+        server = FakeHindsightServer(
+            bank_id=FIXTURE_BANK_ID,
+            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
+            error_sentinel=runtime_sentinel,
+            expected_api_key=None,
+        )
+        await server.start()
+        adapter: HindsightClientAdapter | None = None
+        try:
+            adapter = create_hindsight_client(
+                _config(tmp_path, base_url=server.base_url, api_key=None)
+            )
+            server.arm_mission_patch_fault("response_loss_after_commit")
+            failure = await _capture_failure(
+                lambda: adapter.update_bank_missions({"retain_mission": "retain-new"})
+            )
+            assert type(failure) is HindsightClientError
+            assert isinstance(failure, HindsightClientError)
+            assert failure.category == "mission_update_failed"
+            assert str(failure) == "Better Hindsight mission update failed."
+            assert failure.__cause__ is None
+
+            readback = await adapter.get_bank_config()
+            assert readback == _mission_snapshot(
+                retain_present=True,
+                retain_value="retain-new",
+                observations_present=True,
+                observations_value="observe-old",
+            )
+            assert [record.method for record in server.records] == ["PATCH", "GET"]
+        finally:
+            if adapter is not None:
+                await adapter.close()
+            await server.close()
+
+    asyncio.run(scenario())
 
 
 def test_real_adapter_retain_wire_uses_only_canonical_redacted_tags(
@@ -663,6 +930,334 @@ def test_query_only_recall_freezes_sdk_defaults_nulls_and_absent_auth(
         finally:
             if adapter is not None:
                 await adapter.close()
+            await server.close()
+
+    asyncio.run(scenario())
+
+
+def test_fake_mission_config_is_stateful_and_preserves_unrequested_fields(
+    runtime_sentinel: str,
+) -> None:
+    async def scenario() -> None:
+        server = FakeHindsightServer(
+            bank_id=FIXTURE_BANK_ID,
+            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
+            error_sentinel=runtime_sentinel,
+            expected_api_key=None,
+        )
+        await server.start()
+        config_url = f"{server.base_url}/v1/default/banks/{FIXTURE_BANK_ID}/config"
+        try:
+            async with ClientSession() as session:
+                before_response = await session.get(config_url)
+                before = await before_response.json()
+                patch_response = await session.patch(
+                    config_url,
+                    json={"updates": {"retain_mission": "retain-new"}},
+                )
+                patched = await patch_response.json()
+                after_response = await session.get(config_url)
+                after = await after_response.json()
+
+            assert before_response.status == 200
+            assert patch_response.status == 200
+            assert after_response.status == 200
+            assert before == {
+                "bank_id": FIXTURE_BANK_ID,
+                "config": {
+                    "retain_mission": "retain-old",
+                    "observations_mission": "observe-old",
+                },
+                "overrides": {
+                    "retain_mission": "retain-old",
+                    "observations_mission": "observe-old",
+                },
+            }
+            expected_after = {
+                "bank_id": FIXTURE_BANK_ID,
+                "config": {
+                    "retain_mission": "retain-new",
+                    "observations_mission": "observe-old",
+                },
+                "overrides": {
+                    "retain_mission": "retain-new",
+                    "observations_mission": "observe-old",
+                },
+            }
+            assert patched == expected_after
+            assert after == expected_after
+            assert [(record.method, record.json_body) for record in server.records] == [
+                ("GET", None),
+                ("PATCH", {"updates": {"retain_mission": "retain-new"}}),
+                ("GET", None),
+            ]
+        finally:
+            await server.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "wrong_bank",
+        "wrong_type",
+        "missing",
+        "null",
+        "blank",
+        "malformed_json",
+        "http_503",
+    ],
+)
+def test_fake_mission_read_faults_are_one_shot_and_do_not_mutate_state(
+    runtime_sentinel: str,
+    fault: MissionReadFault,
+) -> None:
+    async def scenario() -> None:
+        server = FakeHindsightServer(
+            bank_id=FIXTURE_BANK_ID,
+            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
+            error_sentinel=runtime_sentinel,
+            expected_api_key=None,
+        )
+        await server.start()
+        config_url = f"{server.base_url}/v1/default/banks/{FIXTURE_BANK_ID}/config"
+        try:
+            server.arm_mission_read_fault(fault)
+            with pytest.raises(RuntimeError, match="mission read fault is already armed"):
+                server.arm_mission_read_fault("wrong_bank")
+
+            async with ClientSession() as session:
+                fault_response = await session.get(config_url)
+                if fault == "malformed_json":
+                    assert fault_response.status == 200
+                    assert runtime_sentinel in await fault_response.text()
+                elif fault == "http_503":
+                    assert fault_response.status == 503
+                    assert runtime_sentinel in await fault_response.text()
+                else:
+                    payload = await fault_response.json()
+                    assert fault_response.status == 200
+                    if fault == "wrong_bank":
+                        assert payload["bank_id"] == "different-fixture-bank"
+                    elif fault == "wrong_type":
+                        assert payload["config"]["retain_mission"] == {
+                            "raw_error": runtime_sentinel
+                        }
+                    elif fault == "missing":
+                        assert payload["config"] == {}
+                    elif fault == "null":
+                        assert payload["config"] == {
+                            "retain_mission": None,
+                            "observations_mission": None,
+                        }
+                    else:
+                        assert payload["config"] == {
+                            "retain_mission": "",
+                            "observations_mission": " \t",
+                        }
+
+                recovered_response = await session.get(config_url)
+                recovered = await recovered_response.json()
+
+            assert recovered_response.status == 200
+            assert recovered["bank_id"] == FIXTURE_BANK_ID
+            assert recovered["config"] == {
+                "retain_mission": "retain-old",
+                "observations_mission": "observe-old",
+            }
+            assert len(server.records) == 2
+        finally:
+            await server.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "wrong_bank",
+        "wrong_type",
+        "response_mismatch",
+        "malformed_json",
+        "http_503",
+    ],
+)
+def test_fake_mission_patch_faults_are_one_shot_with_explicit_commit_behavior(
+    runtime_sentinel: str,
+    fault: MissionPatchFault,
+) -> None:
+    async def scenario() -> None:
+        server = FakeHindsightServer(
+            bank_id=FIXTURE_BANK_ID,
+            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
+            error_sentinel=runtime_sentinel,
+            expected_api_key=None,
+        )
+        await server.start()
+        config_url = f"{server.base_url}/v1/default/banks/{FIXTURE_BANK_ID}/config"
+        try:
+            server.arm_mission_patch_fault(fault)
+            with pytest.raises(RuntimeError, match="mission patch fault is already armed"):
+                server.arm_mission_patch_fault("wrong_bank")
+
+            async with ClientSession() as session:
+                fault_response = await session.patch(
+                    config_url,
+                    json={"updates": {"retain_mission": "retain-new"}},
+                )
+                if fault == "malformed_json":
+                    assert fault_response.status == 200
+                    assert runtime_sentinel in await fault_response.text()
+                elif fault == "http_503":
+                    assert fault_response.status == 503
+                    assert runtime_sentinel in await fault_response.text()
+                else:
+                    payload = await fault_response.json()
+                    assert fault_response.status == 200
+                    if fault == "wrong_bank":
+                        assert payload["bank_id"] == "different-fixture-bank"
+                    elif fault == "wrong_type":
+                        assert payload["config"]["retain_mission"] == {
+                            "raw_error": runtime_sentinel
+                        }
+                    else:
+                        assert payload["config"]["retain_mission"] == "patch-response-mismatch"
+
+                recovered_response = await session.get(config_url)
+                recovered = await recovered_response.json()
+
+            expected_retain = "retain-old" if fault == "http_503" else "retain-new"
+            assert recovered_response.status == 200
+            assert recovered["config"] == {
+                "retain_mission": expected_retain,
+                "observations_mission": "observe-old",
+            }
+            assert len(server.records) == 2
+        finally:
+            await server.close()
+
+    asyncio.run(scenario())
+
+
+def test_fake_mission_patch_can_commit_then_lose_its_response(runtime_sentinel: str) -> None:
+    async def scenario() -> None:
+        server = FakeHindsightServer(
+            bank_id=FIXTURE_BANK_ID,
+            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
+            error_sentinel=runtime_sentinel,
+            expected_api_key=None,
+        )
+        await server.start()
+        config_url = f"{server.base_url}/v1/default/banks/{FIXTURE_BANK_ID}/config"
+        try:
+            server.arm_mission_patch_fault("response_loss_after_commit")
+            async with ClientSession() as session:
+                with pytest.raises(ClientError):
+                    await session.patch(
+                        config_url,
+                        json={"updates": {"retain_mission": "retain-new"}},
+                    )
+                recovered_response = await session.get(config_url)
+                recovered = await recovered_response.json()
+
+            assert recovered_response.status == 200
+            assert recovered["config"] == {
+                "retain_mission": "retain-new",
+                "observations_mission": "observe-old",
+            }
+            assert [record.method for record in server.records] == ["PATCH", "GET"]
+        finally:
+            await server.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("fault", ["mismatch", "malformed_json", "http_503"])
+def test_fake_mission_readback_faults_wait_for_patch_and_are_one_shot(
+    runtime_sentinel: str,
+    fault: MissionReadbackFault,
+) -> None:
+    async def scenario() -> None:
+        server = FakeHindsightServer(
+            bank_id=FIXTURE_BANK_ID,
+            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
+            error_sentinel=runtime_sentinel,
+            expected_api_key=None,
+        )
+        await server.start()
+        config_url = f"{server.base_url}/v1/default/banks/{FIXTURE_BANK_ID}/config"
+        try:
+            server.arm_mission_readback_fault(fault)
+            async with ClientSession() as session:
+                before_response = await session.get(config_url)
+                before = await before_response.json()
+                patch_response = await session.patch(
+                    config_url,
+                    json={"updates": {"retain_mission": "retain-new"}},
+                )
+                patched = await patch_response.json()
+                fault_response = await session.get(config_url)
+                if fault == "mismatch":
+                    fault_payload = await fault_response.json()
+                    assert fault_response.status == 200
+                    assert fault_payload["config"]["retain_mission"] == "readback-mismatch"
+                elif fault == "malformed_json":
+                    assert fault_response.status == 200
+                    assert runtime_sentinel in await fault_response.text()
+                else:
+                    assert fault_response.status == 503
+                    assert runtime_sentinel in await fault_response.text()
+                recovered_response = await session.get(config_url)
+                recovered = await recovered_response.json()
+
+            assert before["config"]["retain_mission"] == "retain-old"
+            assert patched["config"]["retain_mission"] == "retain-new"
+            assert recovered_response.status == 200
+            assert recovered["config"] == {
+                "retain_mission": "retain-new",
+                "observations_mission": "observe-old",
+            }
+            assert [record.method for record in server.records] == ["GET", "PATCH", "GET", "GET"]
+        finally:
+            await server.close()
+
+    asyncio.run(scenario())
+
+
+def test_fake_mission_patch_can_mutate_an_untouched_field_deterministically(
+    runtime_sentinel: str,
+) -> None:
+    async def scenario() -> None:
+        server = FakeHindsightServer(
+            bank_id=FIXTURE_BANK_ID,
+            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
+            error_sentinel=runtime_sentinel,
+            expected_api_key=None,
+        )
+        await server.start()
+        config_url = f"{server.base_url}/v1/default/banks/{FIXTURE_BANK_ID}/config"
+        try:
+            server.arm_mission_patch_fault("unintended_untouched_mutation")
+            async with ClientSession() as session:
+                patch_response = await session.patch(
+                    config_url,
+                    json={"updates": {"retain_mission": "retain-new"}},
+                )
+                patched = await patch_response.json()
+                read_response = await session.get(config_url)
+                readback = await read_response.json()
+
+            expected = {
+                "retain_mission": "retain-new",
+                "observations_mission": "unexpected-untouched-mutation",
+            }
+            assert patch_response.status == 200
+            assert read_response.status == 200
+            assert patched["config"] == expected
+            assert readback["config"] == expected
+            assert server.records[0].json_body == {"updates": {"retain_mission": "retain-new"}}
+        finally:
             await server.close()
 
     asyncio.run(scenario())

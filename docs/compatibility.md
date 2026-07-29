@@ -5,6 +5,16 @@ then states the released callback boundary used by the best-effort plugin. It re
 credential, bank identity, principal identifier, transcript, memory text, database, log, or local
 checkout path.
 
+<!-- better-hindsight-status-compatibility:start -->
+## Status inspection compatibility
+
+Inspection of an existing outbox requires `os.name == "posix"`, linked SQLite `>=3.22.0`,
+Python URI connections, and SQLite's built-in POSIX `unix` VFS selected with `vfs=unix`.
+A non-POSIX or older runtime returns fixed `status_unavailable` before `sqlite3.connect()`;
+an unavailable `unix` VFS fails selection before the target database is opened. The command
+does not support a process-default or custom VFS.
+<!-- better-hindsight-status-compatibility:end -->
+
 ## Product boundary
 
 Better Hermes Hindsight registers only `better_hindsight`; bundled `hindsight` remains the rollback
@@ -44,10 +54,13 @@ product and does not provide Better Hindsight's profile outbox or destination-ma
 
 ## Hermes loader and lifecycle boundary
 
-The released specialized loader is `plugins/memory/__init__.py`. The canonical plugin bundle is
-`plugins/memory/<name>/{__init__.py,plugin.yaml,README.md}`; the released user-plugin scan resolves
-`$HERMES_HOME/plugins/<name>/`. A later managed installer will place only a marker-owned shim at the
-tested user path and will never shadow bundled `hindsight`.
+The released specialized loader is `plugins/memory/__init__.py`; bundled providers use
+`plugins/memory/<name>/`, and the released user-plugin scan resolves
+`$HERMES_HOME/plugins/<name>/`. Better Hindsight's tested user shim is exactly
+`$HERMES_HOME/plugins/better_hindsight/{__init__.py,cli.py,plugin.yaml}`: the provider loader
+consumes the first and third files, while released active-provider command discovery imports
+`cli.py` without executing provider initialization. A later managed installer will place only this
+marker-owned shim at the tested user path and will never shadow bundled `hindsight`.
 
 The plugin imports `MemoryProvider` from `agent/memory_provider.py`; its `register(ctx)` entry point
 calls `ctx.register_memory_provider(...)`. The released lifecycle used by Better is:
@@ -105,7 +118,7 @@ The adapter uses only the audited public `hindsight-client==0.8.5` APIs needed b
 - `aretain_batch()` for one persisted stable document ID with `update_mode="replace"` and
   `retain_async=False`;
 - `banks.get_bank_profile()`, `banks.get_bank_config()`, and
-  `banks.update_bank_config()` with `BankConfigUpdate` for explicit diagnostics and future
+  `banks.update_bank_config()` with `BankConfigUpdate` for explicit typed mission diagnostics and
   confirmation-gated mission apply;
 - `acreate_bank()` and `banks.delete_bank()` only in guarded disposable setup/cleanup; and
 - `aclose()` on the runtime's owning event loop.
@@ -127,6 +140,8 @@ server-enforced capability boundary.
 | Bounded current-query recall | Supported; enabled by default |
 | Best-effort automatic retention | Supported when explicitly enabled |
 | Local durability | Begins after successful SQLite admission only |
+| Passive `better_hindsight status` | Supported for an existing schema-v1 profile outbox |
+| Explicit mission check/apply | Supported; apply requires `--confirm` and exact readback |
 | `codex_app_server` memory behavior | Unsupported on the pinned release |
 | Hindsight server/client 0.8.5 | Exact supported target |
 | External/self-hosted deployment | Supported target |

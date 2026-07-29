@@ -200,7 +200,7 @@ class RetainConfig:
 
 @dataclass(frozen=True, slots=True)
 class MissionConfig:
-    """Distinct mission text for explicit future operator check/apply commands."""
+    """Configured desired mission text used only by explicit operator check/apply commands."""
 
     retain_mission: str | None = field(default=None, repr=False)
     observations_mission: str | None = field(default=None, repr=False)
