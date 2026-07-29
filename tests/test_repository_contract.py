@@ -2,13 +2,56 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_PLAN_PATH = ROOT / ".hermes/plans/2026-07-27_071437-best-effort-plugin.md"
 LOCAL_PLAN_INDEX_PATH = ROOT / ".hermes/plans/README.md"
+
+_STATUS_COMPATIBILITY_START = b"<!-- better-hindsight-status-compatibility:start -->"
+_STATUS_COMPATIBILITY_END = b"<!-- better-hindsight-status-compatibility:end -->"
+_STATUS_STORAGE_START = b"<!-- better-hindsight-status-storage:start -->"
+_STATUS_STORAGE_END = b"<!-- better-hindsight-status-storage:end -->"
+
+_STATUS_COMPATIBILITY_CONTRACT = b"""\
+## Status inspection compatibility
+
+Inspection of an existing outbox requires `os.name == "posix"`, linked SQLite `>=3.22.0`,
+Python URI connections, and SQLite's built-in POSIX `unix` VFS selected with `vfs=unix`.
+A non-POSIX or older runtime returns fixed `status_unavailable` before `sqlite3.connect()`;
+an unavailable `unix` VFS fails selection before the target database is opened. The command
+does not support a process-default or custom VFS.
+"""
+
+_STATUS_STORAGE_CONTRACT = b"""\
+## Status storage contract
+
+- **Active WAL.** When WAL exists, status requires a pre-existing regular SHM file and uses
+  SQLite `mode=ro&vfs=unix` with `PRAGMA query_only=ON` and one read transaction. SQLite may
+  initialize, recover, resize, or otherwise change contents, size, atime, mtime, and ctime only
+  on the same pre-existing regular SHM inode. Its inode, type, link count, mode, UID, GID, and
+  xattrs/ACL xattrs remain unchanged.
+- **Byte and lock effects.** Status issues no database, WAL, profile-lock, or row-byte writes.
+  The point-in-time sender probe may acquire and release a transient kernel `flock` without
+  changing lock-file bytes. An authorized writer may change database or WAL bytes and timestamps
+  during the read; those external changes are not attributed to status.
+- **Sidecar-free snapshot.** When WAL, SHM, and rollback journal are all absent, status uses
+  `mode=ro&immutable=1&vfs=unix`, requires the main-file identity/size/mtime/ctime to remain
+  unchanged, and requires all three sidecars to remain absent. Missing SHM is not an error in the
+  all-sidecars-absent branch.
+- **Malformed topology.** If WAL exists but SHM is missing, status fails before SQLite opens and
+  creates nothing. A pre-existing rollback journal or SHM without WAL is unavailable. Active WAL
+  never uses `immutable=1`.
+- **Trusted topology.** Supported concurrency assumes stable file identities and journal mode.
+  Observable same-principal races return `status_unavailable` when detected, but raced-path effects
+  and undetectable ABA are not prevented; status is not safe against hostile same-UID replacement.
+  This is not a zero-mutation claim because SQLite may change the derived SHM as described above.
+"""
 
 ACTIVE_CONTRACT_PATHS = (
     "README.md",
@@ -19,6 +62,32 @@ ACTIVE_CONTRACT_PATHS = (
     "docs/operations.md",
     "docs/public-release-checklist.md",
 )
+
+TASK4_FROZEN_AUTHORITY_PATHS = (
+    "IMPLEMENTATION.md",
+    "README.md",
+    "DESIGN.md",
+    "docs/audit-findings.md",
+    "docs/compatibility.md",
+    "docs/configuration.md",
+    "docs/operations.md",
+    "docs/public-release-checklist.md",
+    "src/better_hermes_hindsight/config.py",
+    "src/better_hermes_hindsight/hermes_plugin/cli.py",
+)
+
+_TASK4_FROZEN_AUTHORITY_SHA256 = {
+    "IMPLEMENTATION.md": "TASK4_IMPLEMENTATION_REQUIRED",
+    "README.md": "TASK4_IMPLEMENTATION_REQUIRED",
+    "DESIGN.md": "TASK4_IMPLEMENTATION_REQUIRED",
+    "docs/audit-findings.md": "TASK4_IMPLEMENTATION_REQUIRED",
+    "docs/compatibility.md": "TASK4_IMPLEMENTATION_REQUIRED",
+    "docs/configuration.md": "TASK4_IMPLEMENTATION_REQUIRED",
+    "docs/operations.md": "TASK4_IMPLEMENTATION_REQUIRED",
+    "docs/public-release-checklist.md": "TASK4_IMPLEMENTATION_REQUIRED",
+    "src/better_hermes_hindsight/config.py": "TASK4_IMPLEMENTATION_REQUIRED",
+    "src/better_hermes_hindsight/hermes_plugin/cli.py": "TASK4_IMPLEMENTATION_REQUIRED",
+}
 
 
 def _read(relative_path: str) -> str:
@@ -37,15 +106,143 @@ def _assert_terms(text: str, *terms: str) -> None:
     assert not missing, f"missing repository contract terms: {missing}"
 
 
-def _read_local_plan_pair() -> tuple[str, str] | None:
+def _extract_marked_contract(
+    document: bytes,
+    *,
+    start: bytes,
+    end: bytes,
+) -> bytes:
+    document.decode("utf-8", errors="strict")
+    assert b"\r" not in document
+    assert document.count(start) == 1
+    assert document.count(end) == 1
+
+    # CommonMark physical lines are LF-delimited; Unicode separators are ordinary content bytes.
+    lines = document.split(b"\n")
+    assert lines.count(start) == 1
+    assert lines.count(end) == 1
+    start_index = lines.index(start)
+    end_index = lines.index(end)
+    assert start_index < end_index
+    assert end_index < len(lines) - 1
+
+    before_lines = lines[:start_index]
+    before = b"\n".join(before_lines)
+    # The owner section must precede every raw-HTML opener, rather than partially parsing HTML.
+    assert b"<" not in before
+
+    fence_character: str | None = None
+    fence_length = 0
+    for raw_line in before_lines:
+        line = raw_line.decode("utf-8")
+        if fence_character is not None:
+            closing = re.fullmatch(
+                rf" {{0,3}}{re.escape(fence_character)}{{{fence_length},}}[ \t]*",
+                line,
+            )
+            if closing is not None:
+                fence_character = None
+                fence_length = 0
+            continue
+
+        opening = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if opening is None:
+            continue
+        delimiter, info = opening.groups()
+        if delimiter[0] == "`" and "`" in info:
+            continue
+        fence_character = delimiter[0]
+        fence_length = len(delimiter)
+    assert fence_character is None
+    contract_lines = lines[start_index + 1 : end_index]
+    return b"\n".join(contract_lines) + b"\n"
+
+
+def _assert_task4_status_document_contract(contents: dict[str, bytes]) -> None:
+    assert contents.keys() == dict.fromkeys(TASK4_FROZEN_AUTHORITY_PATHS).keys()
+    for document in contents.values():
+        document.decode("utf-8", errors="strict")
+    marker_owners = {
+        _STATUS_COMPATIBILITY_START: "docs/compatibility.md",
+        _STATUS_COMPATIBILITY_END: "docs/compatibility.md",
+        _STATUS_STORAGE_START: "docs/operations.md",
+        _STATUS_STORAGE_END: "docs/operations.md",
+    }
+    for marker, owner in marker_owners.items():
+        assert sum(document.count(marker) for document in contents.values()) == 1
+        assert contents[owner].count(marker) == 1
+
+    compatibility_contract = _extract_marked_contract(
+        contents["docs/compatibility.md"],
+        start=_STATUS_COMPATIBILITY_START,
+        end=_STATUS_COMPATIBILITY_END,
+    )
+    storage_contract = _extract_marked_contract(
+        contents["docs/operations.md"],
+        start=_STATUS_STORAGE_START,
+        end=_STATUS_STORAGE_END,
+    )
+    assert compatibility_contract == _STATUS_COMPATIBILITY_CONTRACT
+    assert storage_contract == _STATUS_STORAGE_CONTRACT
+
+
+def _assert_task4_frozen_authority_hashes(
+    contents: dict[str, bytes],
+    expected_hashes: dict[str, str] | None = None,
+) -> None:
+    if expected_hashes is None:
+        expected_hashes = _TASK4_FROZEN_AUTHORITY_SHA256
+    assert contents.keys() == expected_hashes.keys()
+    for relative_path, content in contents.items():
+        expected = expected_hashes[relative_path]
+        assert re.fullmatch(r"[0-9a-f]{64}", expected) is not None
+        assert hashlib.sha256(content).hexdigest() == expected
+
+
+def _task4_literal_hash_map_from_source(source: str) -> dict[str, str]:
+    tree = ast.parse(source)
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "_TASK4_FROZEN_AUTHORITY_SHA256"
+            for target in node.targets
+        )
+    ]
+    assert len(assignments) == 1
+    value = assignments[0].value
+    assert isinstance(value, ast.Dict)
+    assert all(isinstance(key, ast.Constant) and isinstance(key.value, str) for key in value.keys)
+    assert all(
+        isinstance(item, ast.Constant) and isinstance(item.value, str) for item in value.values
+    )
+    return {
+        key.value: item.value
+        for key, item in zip(value.keys, value.values, strict=True)
+        if isinstance(key, ast.Constant)
+        and isinstance(key.value, str)
+        and isinstance(item, ast.Constant)
+        and isinstance(item.value, str)
+    }
+
+
+def _assert_task4_production_hash_map_is_source_literal() -> None:
+    source = (ROOT / "tests/test_repository_contract.py").read_text(encoding="utf-8")
+    literal = _task4_literal_hash_map_from_source(source)
+    assert literal == _TASK4_FROZEN_AUTHORITY_SHA256
+    assert tuple(literal) == TASK4_FROZEN_AUTHORITY_PATHS
+
+
+def _read_local_plan_pair() -> tuple[bytes, bytes] | None:
     plan_exists = LOCAL_PLAN_PATH.is_file()
     index_exists = LOCAL_PLAN_INDEX_PATH.is_file()
     if not plan_exists and not index_exists:
         return None
     assert plan_exists and index_exists, "local canonical plan and index must exist together"
     return (
-        LOCAL_PLAN_PATH.read_text(encoding="utf-8"),
-        LOCAL_PLAN_INDEX_PATH.read_text(encoding="utf-8"),
+        LOCAL_PLAN_PATH.read_bytes(),
+        LOCAL_PLAN_INDEX_PATH.read_bytes(),
     )
 
 
@@ -61,6 +258,13 @@ def test_owned_active_contract_inventory_is_complete() -> None:
     )
     for relative_path in ACTIVE_CONTRACT_PATHS:
         assert (ROOT / relative_path).is_file()
+    assert (
+        "IMPLEMENTATION.md",
+        *ACTIVE_CONTRACT_PATHS,
+        "src/better_hermes_hindsight/config.py",
+        "src/better_hermes_hindsight/hermes_plugin/cli.py",
+    ) == TASK4_FROZEN_AUTHORITY_PATHS
+    assert tuple(_TASK4_FROZEN_AUTHORITY_SHA256) == TASK4_FROZEN_AUTHORITY_PATHS
 
 
 def test_best_effort_provider_scope_and_lifecycle_are_explicit() -> None:
@@ -283,7 +487,8 @@ def test_task3_sender_contract_is_frozen_before_red_tests() -> None:
     local_plan_pair = _read_local_plan_pair()
     if local_plan_pair is None:
         return
-    plan, _plan_index = local_plan_pair
+    plan_bytes, _plan_index_bytes = local_plan_pair
+    plan = plan_bytes.decode("utf-8", errors="strict")
     task3 = plan.split("### Task 3:", maxsplit=1)[1].split("### Task 4:", maxsplit=1)[0]
 
     _assert_terms(
@@ -350,7 +555,9 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
     local_plan_pair = _read_local_plan_pair()
     if local_plan_pair is None:
         return
-    plan, plan_index = local_plan_pair
+    plan_bytes, plan_index_bytes = local_plan_pair
+    plan = plan_bytes.decode("utf-8", errors="strict")
+    plan_index = plan_index_bytes.decode("utf-8", errors="strict")
     active_match = re.search(r"Canonical plan:\*\* `([^`]+)`", router)
     hash_match = re.search(r"Canonical SHA-256:\*\* `([0-9a-f]{64})`", router)
     index_hash_match = re.search(r"SHA-256: `([0-9a-f]{64})`", plan_index)
@@ -363,8 +570,10 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
 
     active_path = ROOT / active_match.group(1)
     assert active_path == LOCAL_PLAN_PATH
-    active_bytes = plan.encode("utf-8")
-    assert hashlib.sha256(active_bytes).hexdigest() == hash_match.group(1)
+    assert hashlib.sha256(plan_bytes).hexdigest() == hash_match.group(1)
+    crlf_plan_bytes = plan_bytes.replace(b"\n", b"\r\n")
+    assert crlf_plan_bytes != plan_bytes
+    assert hashlib.sha256(crlf_plan_bytes).hexdigest() != hash_match.group(1)
     assert "ACTIVE — CANONICAL IMPLEMENTATION PLAN" in plan[:1000]
 
     for retired_name in (
@@ -377,14 +586,143 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
             _assert_terms(retired_header, "RETIRED — DO NOT IMPLEMENT", "HISTORICAL RECORD ONLY")
 
 
-def test_task4_pre_red_contract_is_frozen_when_local_plan_is_present() -> None:
+def test_task4_production_hash_oracle_is_source_literal() -> None:
+    _assert_task4_production_hash_map_is_source_literal()
+    computed_forms = (
+        "_TASK4_FROZEN_AUTHORITY_SHA256 = {p: p for p in ()}",
+        '_TASK4_FROZEN_AUTHORITY_SHA256 = {"x": make_hash()}',
+        '_TASK4_FROZEN_AUTHORITY_SHA256 = {"x": "a" + "b"}',
+        '_TASK4_FROZEN_AUTHORITY_SHA256 = {**{"x": "y"}}',
+    )
+    for source in computed_forms:
+        with pytest.raises(AssertionError):
+            _task4_literal_hash_map_from_source(source)
+
+
+def test_task4_status_public_documentation_is_frozen_in_clean_clones() -> None:
+    if not (ROOT / "src/better_hermes_hindsight/management.py").is_file():
+        return
+
+    _assert_task4_production_hash_map_is_source_literal()
+    contents: dict[str, bytes] = {}
+    for relative_path in TASK4_FROZEN_AUTHORITY_PATHS:
+        path = ROOT / relative_path
+        assert path.is_file(), relative_path
+        contents[relative_path] = path.read_bytes()
+    _assert_task4_status_document_contract(contents)
+    _assert_task4_frozen_authority_hashes(contents)
+
+
+def test_task4_status_document_oracle_rejects_structural_and_authority_drift() -> None:
+    compatibility = (
+        _STATUS_COMPATIBILITY_START
+        + b"\n"
+        + _STATUS_COMPATIBILITY_CONTRACT
+        + _STATUS_COMPATIBILITY_END
+        + b"\n"
+    )
+    operations = (
+        _STATUS_STORAGE_START + b"\n" + _STATUS_STORAGE_CONTRACT + _STATUS_STORAGE_END + b"\n"
+    )
+    contents = {
+        relative_path: f"frozen authority: {relative_path}\n".encode()
+        for relative_path in TASK4_FROZEN_AUTHORITY_PATHS
+    }
+    contents["docs/compatibility.md"] = compatibility
+    contents["docs/operations.md"] = operations
+
+    # The raw byte bodies include every valid branch qualification and explicit negation.
+    _assert_task4_status_document_contract(contents)
+    expected_hashes = {
+        relative_path: hashlib.sha256(content).hexdigest()
+        for relative_path, content in contents.items()
+    }
+    _assert_task4_frozen_authority_hashes(contents, expected_hashes)
+
+    structural_counterfactuals: list[dict[str, bytes]] = []
+    for changed_compatibility in (
+        compatibility.replace(b"`vfs=unix`", b"`VFS=UNIX`", 1),
+        compatibility.replace(
+            _STATUS_COMPATIBILITY_START + b"\n",
+            b"prefix " + _STATUS_COMPATIBILITY_START + b"\n",
+            1,
+        ),
+        compatibility.replace(
+            _STATUS_COMPATIBILITY_START + b"\n",
+            b"  " + _STATUS_COMPATIBILITY_START + b"\n",
+            1,
+        ),
+        b"````markdown\n```\n" + compatibility + b"````\n",
+        b"~~~~markdown\n~~~\n" + compatibility + b"~~~~\n",
+        b"<!-- open comment\n" + compatibility + b"-->\n",
+        b'<script type="text/plain">\n' + compatibility + b"</script>\n",
+        compatibility.replace(b"\n", b"\r\n"),
+    ):
+        changed = dict(contents)
+        changed["docs/compatibility.md"] = changed_compatibility
+        structural_counterfactuals.append(changed)
+
+    for delimiter in (b"````", b"~~~~"):
+        for non_commonmark_separator in (
+            "\u2028".encode(),
+            "\u2029".encode(),
+            "\u0085".encode(),
+            b"\x0b",
+        ):
+            changed = dict(contents)
+            changed["docs/compatibility.md"] = (
+                delimiter
+                + b"\ntext"
+                + non_commonmark_separator
+                + delimiter
+                + b"\n"
+                + compatibility
+                + delimiter
+                + b"\n"
+            )
+            structural_counterfactuals.append(changed)
+
+    changed_indentation = dict(contents)
+    changed_indentation["docs/operations.md"] = operations.replace(
+        b"  SQLite `mode=ro", b"    SQLite `mode=ro", 1
+    )
+    structural_counterfactuals.append(changed_indentation)
+
+    duplicate_elsewhere = dict(contents)
+    duplicate_elsewhere["README.md"] += b"\n" + compatibility
+    structural_counterfactuals.append(duplicate_elsewhere)
+
+    for changed in structural_counterfactuals:
+        recomputed_hashes = {
+            relative_path: hashlib.sha256(content).hexdigest()
+            for relative_path, content in changed.items()
+        }
+        _assert_task4_frozen_authority_hashes(changed, recomputed_hashes)
+        with pytest.raises(AssertionError):
+            _assert_task4_status_document_contract(changed)
+
+    contradictions = (
+        b"Status fails whenever S&#72;M is absent.",
+        b"The shared-memory coordination file and all timestamps remain unchanged.",
+        b"SQLite's default V&#70;S is supported too.",
+        b"Every concurrency race is prevented.",
+    )
+    for relative_path in TASK4_FROZEN_AUTHORITY_PATHS:
+        for contradiction in contradictions:
+            changed = dict(contents)
+            changed[relative_path] += b"\n" + contradiction + b"\n"
+            with pytest.raises(AssertionError):
+                _assert_task4_frozen_authority_hashes(changed, expected_hashes)
+
+
+def test_task4_sqlite_wal_contract_amendment_is_frozen_when_local_plan_is_present() -> None:
     router = _read("IMPLEMENTATION.md")
     _assert_terms(
         router,
-        "da6610578119ba9b8d0539cebd58372768e3ba63166aff778e3df6344ff7b0f9",
-        "behavior-defining gaps",
+        "f4d71a33f327510f70e64a1e3d0533281fd8a22862c42e5fbe54d54c08fb6562",
+        "ordinary read of a fully checkpointed closed WAL-mode file may create empty sidecars",
         (
-            "No Task 4 production source may be edited until this exact amendment "
+            "No Task 4 implementation candidate may be finalized until this amendment "
             "is independently approved"
         ),
         "no retry/drain command",
@@ -393,7 +731,9 @@ def test_task4_pre_red_contract_is_frozen_when_local_plan_is_present() -> None:
     local_plan_pair = _read_local_plan_pair()
     if local_plan_pair is None:
         return
-    plan, plan_index = local_plan_pair
+    plan_bytes, plan_index_bytes = local_plan_pair
+    plan = plan_bytes.decode("utf-8", errors="strict")
+    plan_index = plan_index_bytes.decode("utf-8", errors="strict")
     task4 = plan.split("### Task 4:", maxsplit=1)[1].split("### Task 5:", maxsplit=1)[0]
     _assert_terms(
         task4,
@@ -401,8 +741,39 @@ def test_task4_pre_red_contract_is_frozen_when_local_plan_is_present() -> None:
         "synchronous `better_hindsight_command(args)`",
         "mutually exclusive ordered partition",
         "`1m_to_lt_1h`",
-        "SQLite `mode=ro`",
+        "SQLite `mode=ro&vfs=unix`",
         "`PRAGMA query_only=ON`",
+        "existing regular `-shm` is also required at preflight",
+        "`-shm` is derived SQLite coordination state",
+        "initialize, recover, resize, or otherwise update WAL-index contents",
+        "link count, mode, UID, GID, and xattrs/ACL xattrs must remain unchanged",
+        "may only acquire/release a transient kernel `flock`",
+        "Quiescent mutation-oracle tests require database/WAL/profile-lock bytes",
+        "authorized same-principal writer may legitimately append, checkpoint, or update",
+        "misattributing external byte or timestamp changes to status",
+        "exact `single_principal=true` assertion is also the filesystem threat boundary",
+        (
+            "supported concurrency case is ordinary row work against stable "
+            "database/sidecar identities"
+        ),
+        "journal-mode transitions, sidecar teardown, and ABA substitution",
+        "cannot prevent SQLite from touching/creating a raced pathname",
+        "same-principal TOCTOU side effects and undetectable ABA limit",
+        "neither `-wal`, `-shm`, nor rollback `-journal` exists at preflight",
+        "`mode=ro&immutable=1&vfs=unix` for that sidecar-absent main-file snapshot",
+        "regardless of the persisted journal mode",
+        "requires all three sidecars to remain absent",
+        "pre-existing rollback journal or SHM without WAL is unavailable",
+        "`immutable=1` is forbidden whenever a WAL exists",
+        "avoid a bespoke WAL parser",
+        "commits a row present only in uncheckpointed WAL frames",
+        "active `immutable=1` would return the stale main-file count",
+        '`os.name == "posix"`',
+        "SQLite `>=3.22.0`",
+        "before `sqlite3.connect()`",
+        "built-in POSIX `unix` VFS selected explicitly with `vfs=unix`",
+        ("unavailable `unix` VFS fails connection selection before the target database is opened"),
+        "public operations documentation",
         "`single_principal=true`",
         "exact pinned SDK `BankConfigResponse`",
         "write_attempted` immediately before PATCH dispatch",
@@ -416,7 +787,22 @@ def test_task4_pre_red_contract_is_frozen_when_local_plan_is_present() -> None:
         "host-owned stderr may echo arbitrarily long malformed argv",
         "all-unconfigured failed-GET case",
         "docs/audit-findings.md",
-        "docs/compatibility.md",
+        "Define the Task 4 frozen authority corpus exactly as tracked `IMPLEMENTATION.md`",
+        "public configuration docstring owner",
+        "public CLI-help owner",
+        "Once tracked `management.py` exists, a separate unconditional clean-clone repository test",
+        "read that complete corpus as raw UTF-8 bytes",
+        "`better-hindsight-status-compatibility`",
+        "`better-hindsight-status-storage`",
+        "none of the four marker tokens may occur in another authority file",
+        "marker must precede every `<` byte in its file",
+        "Physical lines are split only on the LF byte",
+        "U+2028, U+2029, NEL, VT",
+        "explicit source-literal dictionary",
+        "AST discriminator rejects comprehensions",
+        "Canonical ignored-plan SHA checks likewise hash `read_bytes()` directly",
+        "CRLF mutation misses the tracked digest",
+        "same-line/indented markers, shorter pseudo-closes",
         "import/help perform no database or lock access",
         "Do not add IPC, a retry/drain command",
     )
@@ -426,12 +812,23 @@ def test_task4_pre_red_contract_is_frozen_when_local_plan_is_present() -> None:
             "Handler-controlled JSON from mission status/check/apply is bounded and sanitized; "
             "released host-owned argparse stderr is outside that guarantee"
         ),
+        "never claims a custom VFS or hostile same-UID safety",
+        "An unconditional clean-clone test activated by tracked `management.py`",
+        "complete explicitly scoped authority corpus as raw bytes",
+        "globally unique owner-only case-sensitive LF marker lines",
+        "fences parsed on LF bytes only",
+        "ignored canonical-plan SHA against raw bytes",
+        "AST-proven source-literal map",
+        "Unicode-separator pseudo-closes",
+        "sentinels, computed hashes, CRLF/case/structure drift",
+        "without trying to interpret arbitrary English",
     )
     assert "Mission status/check/apply commands are bounded and sanitized" not in plan
+
     _assert_terms(
         plan_index,
-        "da6610578119ba9b8d0539cebd58372768e3ba63166aff778e3df6344ff7b0f9",
-        "requires independent approval before RED implementation work",
+        "f4d71a33f327510f70e64a1e3d0533281fd8a22862c42e5fbe54d54c08fb6562",
+        "requires independent approval before implementation resumes",
     )
 
 
