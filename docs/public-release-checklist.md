@@ -78,10 +78,16 @@ candidate. Publication and production rollout require separate owner approval.
       deduplication, reconsolidation, pruning, or deletion.
 - [ ] Canary activation is separately authorized after isolated proof and evaluates recall usefulness
       plus retained-source quality without mutating the old bank.
-- [ ] Rollback selects bundled `hindsight`, restarts through ordinary operator procedure, verifies
-      old recall, and preserves Better's outbox plus both banks.
-- [ ] Managed uninstall removes only manifest-owned unchanged shim files and never removes profile
-      configuration, outbox data, package data, or remote bank data.
+- [ ] Rollback is not called configuration-only: with Hermes stopped it removes the verified Better
+      shim while the wheel still supplies the command, selects bundled `hindsight`, removes the Better
+      wheel, restores exact `hindsight-client==0.6.1`, verifies first recall without lazy package
+      installation, and preserves Better's outbox plus both banks.
+- [ ] Returning to Better explicitly reinstalls the wheel and `hindsight-client==0.8.5`, verifies the
+      managed shim before selection/restart, and does not migrate or delete either bank/outbox.
+- [ ] Managed uninstall atomically hides an exact foreign-free target, converges from partial tree,
+      empty uninstall-wrapper, empty transaction-root, and final parent-fsync failures, and never
+      removes profile configuration, outbox data, package data, remote bank data, or a foreign/local
+      modification.
 
 ## Compatibility and artifacts
 
@@ -89,10 +95,19 @@ candidate. Publication and production rollout require separate owner approval.
       and tested.
 - [ ] Imports, discovery, availability checks, and configuration loading perform no network call,
       package installation, bank mutation, or service restart.
-- [ ] Managed installation, upgrade, health, rollback, and uninstall pass in fresh temporary
-      environments for wheel and source distribution artifacts.
-- [ ] Wheel/sdist contents, versions, loader-shim hashes, import provenance, metadata, license, and
-      third-party notices are verified.
+- [ ] Managed installation, upgrade, fresh-process health, rollback, and resumable uninstall pass in
+      fresh temporary environments for wheel and source distribution artifacts, including both
+      explicit Better `0.8.5` and bundled `0.6.1` SDK states.
+- [ ] Complete transaction trees remain below both released scanner traversal boundaries, and every
+      phase proves specialized-provider plus general-registry manifest-path provenance.
+- [ ] Deterministic checked-hash bytecode for optimization levels 0/1/2 is marker-owned and a
+      root-capable released-Hermes import causes no managed-target mutation.
+- [ ] Exact wheel/sdist member paths, versions, current-resource shim hashes, executed Better modules
+      and Hermes `plugins.memory`, `hermes_cli.plugins`, and `tools.lazy_deps` provenance, metadata,
+      console entry point, license, docs, and third-party notices are verified.
+- [ ] The tracked installer help owner plus installation and rollback guides are in the unconditional
+      whole-file authority/hash corpus with clean-checkout mutation tests that do not require ignored
+      planning files.
 - [ ] Pre-alpha warnings are replaced with accurate prerelease status and install instructions.
 
 ## Public safety and repository health

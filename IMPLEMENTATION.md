@@ -3,10 +3,10 @@
 ## Current status
 
 - **Canonical plan:** `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
-- **Canonical SHA-256:** `f4d71a33f327510f70e64a1e3d0533281fd8a22862c42e5fbe54d54c08fb6562`
-- **Plan state:** Active; Tasks 0–4 are complete. The Task 4 contract and SQLite WAL/SHM amendment remain checkpointed as `9579d8af0098899cdb0ebe3447c2bb57fb4519da` and `0bc681cf6ab066bce6a9793c9d72157886aae2e4`; the exact implementation passed independent specification and adversarial review before checkpoint. Active-plan Task 5 is next.
+- **Canonical SHA-256:** `bb575de8723f2a2d70054700c2713d0154ae59181cd5546ee611ecae328ddf62`
+- **Plan state:** Active; Tasks 0–4 are complete. The Task 4 contract and SQLite WAL/SHM amendment remain checkpointed as `9579d8af0098899cdb0ebe3447c2bb57fb4519da` and `0bc681cf6ab066bce6a9793c9d72157886aae2e4`; the exact implementation passed independent specification and adversarial review before checkpoint. The review-amended Task 5 contract now combines the approved `0.8.5`/`0.6.1` operator package transition with scanner-proof nested transaction trees, root-safe owned checked-hash bytecode, exact command outcomes and host-module provenance, and phase-complete retry-convergent cleanup/uninstall state machines. Independent approval is pending and implementation remains blocked until that gate passes.
 - **Code checkpoint:** `9843a9b802ce54b5483a2adb7e95aff989d1df0f` (`9843a9b`) is the completed Task 4 bounded diagnostics and explicit mission-management checkpoint.
-- **Next action:** Begin active-plan Task 5 by freezing the managed wheel-plus-shim ownership, health-check, and rollback contract, then write deterministic transactional RED tests. Do not install into a live Hermes home, select the provider, restart Hermes, touch profile configuration/outboxes, contact Hindsight, deploy, or roll out production while implementing it.
+- **Next action:** Independently review and checkpoint the amended active-plan Task 5 scanner/path ownership, checked-hash cache ownership, publication/cleanup state machines, fresh-process health, SDK rollback, artifacts, and tracked-doc authority contract. Only after approval, write deterministic RED tests. Do not install into a live Hermes home/interpreter, invoke pip from the shim manager, select a provider, restart Hermes, touch profile configuration/outboxes, contact Hindsight, deploy, or roll out production.
 
 The canonical plan is intentionally local under `.hermes/plans/`, which is ignored because Hermes runtime state and private artifacts do not belong in Git. This tracked file is the durable cross-session router. If the canonical file is missing or its hash differs, stop and resolve the plan state instead of selecting another plan.
 

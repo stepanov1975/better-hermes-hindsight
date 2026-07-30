@@ -12,7 +12,7 @@ passes. This design describes the implementable best-effort plugin, not an ideal
 ## Primary goal
 
 Provide useful current-query recall and opt-in automatic retention on unmodified released Hermes,
-with bounded local work, retryable Hindsight delivery, isolated rollout, and easy rollback. The
+with bounded local work, retryable Hindsight delivery, isolated rollout, and documented rollback. The
 project should reduce recurring integration maintenance without recreating every cloud, embedded,
 installer, or control-plane feature of the bundled provider.
 
@@ -137,8 +137,11 @@ Production rollout uses a separate canary instance and bank and preserves the ol
 old provider configuration, instance, and bank remain intact as the rollback source. Prerelease proof
 does not migrate, copy, rebuild, deduplicate, reconsolidate, prune, or delete existing data.
 
-Rollback selects bundled `hindsight`, restarts through ordinary operator procedure, and preserves the
-Better outbox plus both banks for diagnosis or later replay.
+Rollback preserves the Better outbox plus both banks, but it is not configuration-only in released
+Hermes 0.19.0. With Hermes stopped, the operator removes the verified Better shim while its wheel still
+supplies the command, selects bundled `hindsight`, removes the Better wheel, restores exact
+`hindsight-client==0.6.1`, restarts, and verifies recall. Returning to Better reinstalls the wheel and
+exact `0.8.5` client before shim health and provider selection.
 
 ## Proof acceptance gates
 
@@ -157,7 +160,8 @@ Before prerelease, prove all of the following against one stable candidate:
 - fake-service restart, timeout, response-loss, and shutdown recovery;
 - explicit mission check/apply behavior without initialization-time mutation;
 - isolated development proof with zero production credentials or resources;
-- separate production canary and configuration rollback while the old deployment stays untouched;
+- separate production canary and version-aware provider/package rollback while the old deployment
+  stays untouched;
 - Python 3.11-3.13 tests, lint, formatting, typing, lock, build, package, security, and independent
   review gates; and
 - no private endpoint, credential, bank name, principal identifier, memory, transcript, database, or

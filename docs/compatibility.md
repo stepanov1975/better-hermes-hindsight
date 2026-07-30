@@ -17,9 +17,12 @@ does not support a process-default or custom VFS.
 
 ## Product boundary
 
-Better Hermes Hindsight registers only `better_hindsight`; bundled `hindsight` remains the rollback
-target. The first prerelease is external/self-hosted only. It does not implement cloud setup,
-supervise an embedded server, or require a Hermes core patch.
+Better Hermes Hindsight registers only `better_hindsight`; bundled `hindsight` remains the preserved
+data/provider rollback target. On released Hermes 0.19.0 the same interpreter cannot run the two
+providers as a configuration-only switch: Better requires exact `hindsight-client==0.8.5`, while the
+bundled provider's lazy dependency gate requires exact `0.6.1`. Rollback therefore uses the documented
+stopped-process provider/wheel/client transition. The first prerelease is external/self-hosted only.
+It does not implement cloud setup, supervise an embedded server, or require a Hermes core patch.
 
 The supported path is unmodified released Hermes's normal conversation loop. Recall is enabled by
 default and automatic retention is disabled by default. `codex_app_server` is unsupported on the
@@ -36,6 +39,13 @@ the first prerelease are registered.
 | Current upstream observation at audit time | `NousResearch/hermes-agent` `main` at `eb52760564dbba2e5971fa54bd67384e281cd3b8`, observed 2026-07-26 UTC | Historical audit evidence, not a runtime prerequisite |
 | Hindsight | Release `v0.8.5`, commit `705757f362552918dfb0242906cb8466de320378` | Hindsight server 0.8.5 and `hindsight-client==0.8.5` are the exact initial target |
 | Python | 3.11, 3.12, and 3.13 | All three remain release gates |
+
+Released Hermes's bundled provider calls `tools.lazy_deps.ensure("memory.hindsight", prompt=False)`
+before constructing its external client. That registry pins `hindsight-client==0.6.1` and treats
+installed `0.8.5` as unsatisfied, so first bundled use either attempts a downgrade or fails when lazy
+installation is disabled. Importing the bundled provider under `0.8.5` is not rollback proof. Task 5
+instead tests an explicit disposable transition to `0.6.1` with no lazy package-manager call, and the
+reverse reinstall of Better plus `0.8.5`; neither transition edits Hermes source or migrates data.
 
 The nine carried checkout commits, newest first, are retained as historical comparison evidence:
 
@@ -56,11 +66,23 @@ product and does not provide Better Hindsight's profile outbox or destination-ma
 
 The released specialized loader is `plugins/memory/__init__.py`; bundled providers use
 `plugins/memory/<name>/`, and the released user-plugin scan resolves
-`$HERMES_HOME/plugins/<name>/`. Better Hindsight's tested user shim is exactly
-`$HERMES_HOME/plugins/better_hindsight/{__init__.py,cli.py,plugin.yaml}`: the provider loader
-consumes the first and third files, while released active-provider command discovery imports
-`cli.py` without executing provider initialization. A later managed installer will place only this
-marker-owned shim at the tested user path and will never shadow bundled `hindsight`.
+`$HERMES_HOME/plugins/<name>/`. Better Hindsight's canonical managed tree contains copied
+`{__init__.py,cli.py,plugin.yaml}`, the ownership marker, and six marker-owned checked-hash cache files
+for optimization levels 0/1/2 beneath `__pycache__`. The provider loader consumes `__init__.py` and
+`plugin.yaml`, while active-provider command discovery imports `cli.py` without provider
+initialization. Precompiled current-interpreter caches are required because the released Docker image
+may run as root and `0555` alone cannot prevent bytecode writes; root-capable proof must show real
+imports leave all managed bytes, modes, and entries unchanged.
+
+Complete transaction trees live only at
+`$HERMES_HOME/plugins/.better-hindsight-transactions/<wrapper>/tree`. The specialized scanner skips
+the dot-prefixed transaction root. The general plugin registry does not skip it, but reaches the
+manifest-free wrapper at its recursion cap and cannot visit `tree/plugin.yaml`. Phase tests therefore
+exercise both scanners and verify exact canonical manifest-path provenance, not merely provider-name
+equality. Health likewise binds executed `plugins.memory`, `hermes_cli.plugins`, and `tools.lazy_deps`
+modules to their exact `hermes-agent==0.19.0` distribution members before trusting loader traversal,
+general-registry recursion, or the bundled lazy dependency table. The installer never shadows bundled
+`hindsight`.
 
 The plugin imports `MemoryProvider` from `agent/memory_provider.py`; its `register(ctx)` entry point
 calls `ctx.register_memory_provider(...)`. The released lifecycle used by Better is:

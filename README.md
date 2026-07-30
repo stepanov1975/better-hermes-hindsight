@@ -4,8 +4,10 @@
 [![Security scans](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/security.yml/badge.svg)](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/security.yml)
 
 Better Hermes Hindsight is an unofficial Hermes memory provider for external/self-hosted Hindsight.
-The provider ID is `better_hindsight`, deliberately distinct from bundled `hindsight` so rollback is
-a configuration change rather than a data migration.
+The provider ID is `better_hindsight`, deliberately distinct from bundled `hindsight` so rollback
+does not require a data migration. On released Hermes 0.19.0 it is not configuration-only: Better
+requires `hindsight-client==0.8.5`, while bundled `hindsight` requires exact `0.6.1`, so switching
+providers also requires the documented stopped-process package-version transition.
 
 > **Status: pre-alpha.** Sender delivery is implemented for opt-in automatic retention in the tested
 > repository checkpoint, while retention remains disabled by default. Managed installation and
@@ -21,7 +23,7 @@ The primary goal is useful memory on unmodified released Hermes:
 - opt-in best-effort retention of the completed-turn callbacks released Hermes actually supplies;
 - short local admission followed by retryable background delivery to self-hosted Hindsight;
 - passive bounded queue diagnostics plus explicit confirmation-gated mission management; and
-- easy rollback to the bundled provider while old data stays untouched.
+- documented rollback to the bundled provider while Better's outbox and both banks stay untouched.
 
 Recall is enabled by default. Automatic retention is disabled by default until an operator proves
 writes against an isolated development deployment and explicitly enables it for a canary.
@@ -101,10 +103,11 @@ activation, publication, and any production mutation remain separately authorize
 ## Repository and implementation authority
 
 The tracked [implementation router](IMPLEMENTATION.md) identifies the canonical local plan, its hash,
-the completed sender-delivery checkpoint, the active diagnostics/mission-command stage, and two
-explicitly retired plans. Never infer implementation requirements from a retired plan or from stale
-proof wording. The separate Hermes-core worktree is frozen research and must not be imported,
-installed, committed, or treated as a prerequisite.
+the completed sender-delivery checkpoint, the completed diagnostics/mission-command checkpoint, the
+active managed-installation Task 5 review stage, and two explicitly retired plans. Never infer
+implementation requirements from a retired plan or from stale proof wording. The separate Hermes-core
+worktree is frozen research and must not be imported, installed, committed, or treated as a
+prerequisite.
 
 The exact version/source observations are in [docs/compatibility.md](docs/compatibility.md). Sender
 recovery, retry, and shutdown semantics are in [docs/operations.md](docs/operations.md). Sanitized
