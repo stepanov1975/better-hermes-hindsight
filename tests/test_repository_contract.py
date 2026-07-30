@@ -15,7 +15,7 @@ from markdown_it.token import Token
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_PLAN_PATH = ROOT / ".hermes/plans/2026-07-27_071437-best-effort-plugin.md"
 LOCAL_PLAN_INDEX_PATH = ROOT / ".hermes/plans/README.md"
-LOCAL_PLAN_INDEX_SHA256 = "44981484c96877ed12bc0ec2e4ac16bdbf7f666bb0f7b342c0f3aecde49872b6"
+LOCAL_PLAN_INDEX_SHA256 = "c6a8ec1e9b398cbf16624fc373d6b04a27763bf1d3abd350e0bfe7264f990a47"
 
 _STATUS_COMPATIBILITY_START = b"<!-- better-hindsight-status-compatibility:start -->"
 _STATUS_COMPATIBILITY_END = b"<!-- better-hindsight-status-compatibility:end -->"
@@ -81,8 +81,8 @@ TASK4_FROZEN_AUTHORITY_PATHS = (
 )
 
 _TASK4_FROZEN_AUTHORITY_SHA256 = {
-    "IMPLEMENTATION.md": "5187d2d03b60aec343d8ffb61758afdb82cdfd3a4f20723cda5f07ac8585af4c",
-    "README.md": "b4a071e98d72c866670efc052f0a5d6464814f3630183890d949ea7c4dd0e025",
+    "IMPLEMENTATION.md": "264b95734ddac82c6c5b7278b6caf7897dd5dd9e991390d9b2f90af86d29a66e",
+    "README.md": "adec2a160ced49b710250594c64b6e63b2e6904dad932ed6af409653507ee7ca",
     "DESIGN.md": "30cf941f2399f10fd4e2ae0fcaf955e7d675810664fb5bfaa02fdca47773622c",
     "docs/audit-findings.md": "af1134c0772062eacb7185018a0b2585260cd79955974a5acbf145c2fc63fba2",
     "docs/compatibility.md": "20c2699d734e275ed7401ab50c7ddd275897902d8fd6ae0d786da749f8e3b14c",
@@ -1161,7 +1161,8 @@ def test_callback_boundary_and_retired_plan_precedence_are_explicit() -> None:
         "2026-07-25_194157-better-hermes-hindsight-implementation.md",
         "2026-07-27_055353-plugin-only-rescope.md",
         "must never drive implementation",
-        "active-plan Task 5",
+        "passed independent specification, quality, and adversarial review",
+        "Write deterministic RED tests",
     )
 
 
@@ -1300,7 +1301,8 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
     _assert_terms(
         router,
         "9843a9b802ce54b5483a2adb7e95aff989d1df0f",
-        "active-plan Task 5",
+        "passed independent specification, quality, and adversarial review",
+        "Write deterministic RED tests",
     )
     normalized_router = _normalized(router)
     for premature_completion in (
@@ -1502,7 +1504,10 @@ def test_task4_completed_implementation_and_task5_route_are_frozen() -> None:
         "root-safe owned checked-hash bytecode",
         "exact command outcomes and host-module provenance",
         "retry-convergent cleanup/uninstall state machines",
-        "implementation remains blocked until that gate passes",
+        "passed independent specification, quality, and adversarial review",
+        "6652212a5aaa72833e3df050523652fa3b935583",
+        "Write deterministic RED tests",
+        "Do not write production installer code until those tests fail",
         "Do not install into a live Hermes home",
     )
     router_status = _extract_heading_section_at(
@@ -1537,13 +1542,12 @@ def test_task4_completed_implementation_and_task5_route_are_frozen() -> None:
         amendment remain checkpointed as `9579d8af0098899cdb0ebe3447c2bb57fb4519da` and
         `0bc681cf6ab066bce6a9793c9d72157886aae2e4`; the exact implementation passed independent
         specification and adversarial review before checkpoint. The review-amended Task 5 contract
-        now
         combines the approved `0.8.5`/`0.6.1` operator package transition with scanner-proof nested
         transaction trees, root-safe owned checked-hash bytecode, exact command outcomes and
         host-module provenance, and phase-complete retry-convergent cleanup/uninstall state
-        machines.
-        Independent
-        approval is pending and implementation remains blocked until that gate passes.""",
+        machines. That contract passed independent specification, quality, and adversarial review
+        and
+        is checkpointed as `6652212a5aaa72833e3df050523652fa3b935583`.""",
     )
     router_next = _extract_list_item_at(
         router_status,
@@ -1554,21 +1558,25 @@ def test_task4_completed_implementation_and_task5_route_are_frozen() -> None:
     )
     _assert_exact_normalized(
         router_next,
-        """- **Next action:** Independently review and checkpoint the amended active-plan Task 5
-        scanner/path ownership, checked-hash cache ownership, publication/cleanup state machines,
-        fresh-process health, SDK rollback, artifacts, and tracked-doc authority contract. Only
-        after
-        approval, write deterministic RED tests. Do not install into a live Hermes home/interpreter,
-        invoke pip from the shim manager, select a provider, restart Hermes, touch profile
-        configuration/outboxes, contact Hindsight, deploy, or roll out production.""",
+        """- **Next action:** Write deterministic RED tests for Task 5 transactional
+        install/publication, upgrade rollback, ownership refusal, uninstall/retry cleanup, archive
+        contents, released-host discovery/health, and Better `0.8.5` versus bundled `0.6.1` version
+        agreement. Do not write production installer code until those tests fail for the intended
+        missing behavior. Do not install into a live Hermes home/interpreter, invoke pip from the
+        shim
+        manager, select a provider, restart Hermes, touch profile configuration/outboxes, contact
+        Hindsight, deploy, or roll out production.""",
     )
+    assert "Independent approval is pending" not in router
+    assert "Only after approval, write deterministic RED tests" not in router
 
     readme = _read("README.md")
     _assert_terms(
         readme,
         "completed sender-delivery checkpoint",
         "completed diagnostics/mission-command checkpoint",
-        "active managed-installation Task 5 review stage",
+        "approved managed-installation Task 5 contract",
+        "active deterministic RED-test stage",
     )
     readme_authority = _extract_heading_section_at(
         readme,
@@ -1587,12 +1595,13 @@ def test_task4_completed_implementation_and_task5_route_are_frozen() -> None:
         """The tracked [implementation router](IMPLEMENTATION.md) identifies the canonical local
         plan, its hash, the completed sender-delivery checkpoint, the completed
         diagnostics/mission-command
-        checkpoint, the active managed-installation Task 5 review stage, and two explicitly retired
-        plans. Never infer implementation requirements from a retired plan or from stale proof
-        wording.
+        checkpoint, the approved managed-installation Task 5 contract and active deterministic
+        RED-test stage, and two explicitly retired plans. Never infer implementation requirements
+        from a retired plan or from stale proof wording.
         The separate Hermes-core worktree is frozen research and must not be imported, installed,
         committed, or treated as a prerequisite.""",
     )
+    assert "active managed-installation Task 5 review stage" not in readme
 
 
 def test_local_task4_plan_contract_matches_completed_implementation_when_present() -> None:
@@ -1703,7 +1712,9 @@ def test_local_task4_plan_contract_matches_completed_implementation_when_present
         "root-safe checked-hash bytecode",
         "exact CLI outcomes and host-module provenance",
         "retry-convergent cleanup/uninstall state machines",
-        "independent approval is pending",
+        "independently approved",
+        "contract checkpoint `6652212`",
+        "write deterministic RED tests",
         "9843a9b",
     )
     plan_index_active = _extract_heading_section_at(
@@ -1734,11 +1745,12 @@ def test_local_task4_plan_contract_matches_completed_implementation_when_present
     )
     _assert_exact_normalized(
         plan_index_state,
-        """- State: active; Tasks 0–4 are complete; review-amended active-plan Task 5 contract now
+        """- State: active; Tasks 0–4 are complete; the review-amended active-plan Task 5 contract
         combines the approved explicit `0.8.5`/`0.6.1` transition with scanner-proof nested
         transactions, root-safe checked-hash bytecode, exact CLI outcomes and host-module
         provenance,
-        and retry-convergent cleanup/uninstall state machines; independent approval is pending""",
+        and retry-convergent cleanup/uninstall state machines; it is independently approved and
+        tracked at contract checkpoint `6652212`""",
     )
     plan_index_next = _extract_list_item_at(
         plan_index_active,
@@ -1749,11 +1761,15 @@ def test_local_task4_plan_contract_matches_completed_implementation_when_present
     )
     _assert_exact_normalized(
         plan_index_next,
-        """- Next action: independently approve and checkpoint the amended Task 5 scanner/path and
-        bytecode ownership, publication/cleanup state machines, fresh-process health, SDK rollback,
-        artifacts, and tracked-doc authority contract before writing RED tests; do not touch a live
-        Hermes home, profile, service, interpreter, or Hindsight instance""",
+        """- Next action: write deterministic RED tests for Task 5 transactional
+        install/publication, upgrade rollback, ownership refusal, uninstall/retry cleanup, archive
+        contents, released-host
+        discovery/health, and Better `0.8.5` versus bundled `0.6.1` version agreement; do not write
+        production installer code or touch a live Hermes home, profile, service, interpreter, or
+        Hindsight instance""",
     )
+    assert "independent approval is pending" not in plan_index
+    assert "independently approve and checkpoint" not in plan_index
 
 
 def test_local_task5_managed_installation_contract_is_frozen_when_present() -> None:

@@ -104,7 +104,8 @@ activation, publication, and any production mutation remain separately authorize
 
 The tracked [implementation router](IMPLEMENTATION.md) identifies the canonical local plan, its hash,
 the completed sender-delivery checkpoint, the completed diagnostics/mission-command checkpoint, the
-active managed-installation Task 5 review stage, and two explicitly retired plans. Never infer
+approved managed-installation Task 5 contract and active deterministic RED-test stage, and two
+explicitly retired plans. Never infer
 implementation requirements from a retired plan or from stale proof wording. The separate Hermes-core
 worktree is frozen research and must not be imported, installed, committed, or treated as a
 prerequisite.
