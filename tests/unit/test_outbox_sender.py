@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import hashlib
 import multiprocessing
 import os
 import sqlite3
@@ -81,6 +82,17 @@ def _single_segment(seed: str) -> RetainedSegment:
     segments = _turn(seed)
     assert len(segments) == 1
     return segments[0]
+
+
+def _client_segment(segment: RetainedSegment) -> ClientRetainSegment:
+    return ClientRetainSegment(
+        content=segment.content,
+        document_id=segment.document_id,
+        payload_schema=segment.payload_schema,
+        source_sha256=segment.source_sha256,
+        segment_index=segment.segment_index,
+        segment_count=segment.segment_count,
+    )
 
 
 def _execute(path: Path, statement: str, parameters: tuple[object, ...] = ()) -> None:
@@ -967,15 +979,61 @@ def test_sender_eagerly_recovers_preexisting_sending_and_deletes_typed_success(
         runner.shutdown()
         delegate.close()
 
-    assert client.factory_segments == [
-        ClientRetainSegment(content=segment.content, document_id=segment.document_id)
-    ]
+    assert client.factory_segments == [_client_segment(segment)]
     assert observed.snapshot_operations()[:4] == (
         "acquire:acquired",
         "recover:applied",
         "claim:claimed",
         "complete:applied",
     )
+
+
+@pytest.mark.skipif(os.name != "posix", reason="sender ownership is POSIX-only")
+def test_sender_preserves_remote_metadata_needed_to_reconstruct_segmented_source(
+    tmp_path: Path,
+) -> None:
+    segment_max_bytes = 128
+    config = _config(tmp_path, segment_max_bytes=segment_max_bytes)
+    segments = _turn("remote-reconstruction", segment_max_bytes=segment_max_bytes)
+    assert len(segments) > 1
+    delegate = SQLiteOutbox.open(config)
+    observed = _ObservedOutbox(delegate)
+    runner = AsyncRunner()
+
+    async def confirm(_segment: ClientRetainSegment, _attempt: int) -> RetainConfirmation:
+        return RetainConfirmation(confirmed=True)
+
+    client = _ScriptedRetainClient(confirm)
+    sender = _make_sender(
+        config=config,
+        outbox=observed,
+        client=client,
+        runner=runner,
+        wall_time=_WallClock(100.0),
+    )
+    try:
+        assert delegate.admit(segments).accepted
+        _execute(config.outbox.path, "UPDATE outbox SET next_attempt_at=90.0")
+        sender.start()
+        assert client.wait_for_factory_calls(len(segments), timeout=2.0)
+        deadline = time.monotonic() + 2.0
+        while delegate.read_unconfirmed() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert delegate.read_unconfirmed() == ()
+    finally:
+        sender.request_stop()
+        assert sender.join(timeout=2.0)
+        runner.shutdown()
+        delegate.close()
+
+    remote_documents = list(reversed(client.factory_segments))
+    assert {segment.source_sha256 for segment in remote_documents} == {segments[0].source_sha256}
+    ordered = sorted(remote_documents, key=lambda segment: segment.segment_index)
+    assert [segment.segment_index for segment in ordered] == list(range(len(segments)))
+    assert {segment.segment_count for segment in ordered} == {len(segments)}
+    assert {segment.payload_schema for segment in ordered} == {"better-hindsight-turn-v1"}
+    reconstructed = "".join(segment.content for segment in ordered)
+    assert hashlib.sha256(reconstructed.encode("utf-8")).hexdigest() == segments[0].source_sha256
 
 
 @pytest.mark.parametrize(
@@ -1039,9 +1097,7 @@ def test_sender_maps_remote_failures_to_fixed_retry_categories(
     assert rows[0].next_attempt_at == 202.0
     assert rows[0].content == segment.content
     assert rows[0].document_id == segment.document_id
-    assert client.factory_segments == [
-        ClientRetainSegment(content=segment.content, document_id=segment.document_id)
-    ]
+    assert client.factory_segments == [_client_segment(segment)]
     assert f"reschedule:{expected_category.value}:applied" in observed.snapshot_operations()
 
 
@@ -1121,7 +1177,7 @@ def test_late_valid_retain_stays_timeout_holds_lock_and_replays_stable_segment(
         runner.shutdown()
         delegate.close()
 
-    expected = ClientRetainSegment(content=segment.content, document_id=segment.document_id)
+    expected = _client_segment(segment)
     assert client.factory_segments == [expected, expected]
     assert client.max_active_calls == 1
 
@@ -1323,9 +1379,7 @@ def test_non_owner_is_passive_then_takes_over_and_recovers_after_owner_exit(
     assert operations[0] == "acquire:contended"
     assert "acquire:acquired" in operations
     assert "recover:applied" in operations
-    assert client.factory_segments == [
-        ClientRetainSegment(content=segment.content, document_id=segment.document_id)
-    ]
+    assert client.factory_segments == [_client_segment(segment)]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="sender ownership is POSIX-only")
@@ -1378,7 +1432,7 @@ def test_local_completion_failure_releases_lock_then_recovers_and_replays(
         runner.shutdown()
         delegate.close()
 
-    expected = ClientRetainSegment(content=segment.content, document_id=segment.document_id)
+    expected = _client_segment(segment)
     assert client.factory_segments == [expected, expected]
     operations = observed.snapshot_operations()
     assert operations.count("acquire:acquired") == 2
@@ -1434,9 +1488,7 @@ def test_idle_owner_polls_cross_connection_admission_without_process_local_wake(
         admitting_outbox.close()
         delegate.close()
 
-    assert client.factory_segments == [
-        ClientRetainSegment(content=segment.content, document_id=segment.document_id)
-    ]
+    assert client.factory_segments == [_client_segment(segment)]
 
 
 @pytest.mark.skipif(os.name != "posix", reason="sender ownership is POSIX-only")
@@ -1523,9 +1575,7 @@ def test_production_runtime_polls_spawned_non_owner_admission_without_local_wake
         assert time.monotonic() - child_result[4] <= delivery_bound
         assert client.wait_for_factory_calls(1, timeout=delivery_bound)
         assert delegate.read_unconfirmed() == ()
-        assert client.factory_segments == [
-            ClientRetainSegment(content=segment.content, document_id=segment.document_id)
-        ]
+        assert client.factory_segments == [_client_segment(segment)]
         # Process B has no reference to A's process-local event; bounded polling did the work.
         assert local_wakes == []
 
@@ -1872,8 +1922,8 @@ def test_delayed_failed_row_does_not_block_other_ready_row(tmp_path: Path) -> No
         delegate.close()
 
     assert client.factory_segments == [
-        ClientRetainSegment(content=first.content, document_id=first.document_id),
-        ClientRetainSegment(content=second.content, document_id=second.document_id),
+        _client_segment(first),
+        _client_segment(second),
     ]
     assert len(rows) == 1
     assert rows[0].document_id == first.document_id

@@ -43,6 +43,10 @@ class RetainSegment:
 
     content: str
     document_id: str
+    payload_schema: str
+    source_sha256: str
+    segment_index: int
+    segment_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,6 +287,12 @@ class HindsightClientAdapter:
         item: dict[str, object] = {
             "content": segment.content,
             "document_id": segment.document_id,
+            "metadata": {
+                "better_hindsight_payload_schema": segment.payload_schema,
+                "better_hindsight_segment_count": str(segment.segment_count),
+                "better_hindsight_segment_index": str(segment.segment_index),
+                "better_hindsight_source_sha256": segment.source_sha256,
+            },
             "update_mode": "replace",
             "tags": list(self._retain_tags),
         }

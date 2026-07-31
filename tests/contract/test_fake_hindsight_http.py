@@ -105,6 +105,21 @@ def _config(
     return load_config(hermes_home=tmp_path, environ=environ, injected=injected)
 
 
+def _segment(
+    *,
+    content: str = "stable segment",
+    document_id: str = "stable-document-id",
+) -> RetainSegment:
+    return RetainSegment(
+        content=content,
+        document_id=document_id,
+        payload_schema="better-hindsight-turn-v1",
+        source_sha256="b" * 64,
+        segment_index=0,
+        segment_count=1,
+    )
+
+
 def _mission_snapshot(
     *,
     retain_present: bool,
@@ -198,7 +213,7 @@ def test_real_adapter_serializes_and_decodes_complete_public_contract(
             with pytest.warns(DeprecationWarning):
                 profile = await adapter.get_bank_profile()
             recalled = await adapter.recall("current query")
-            segment = RetainSegment(
+            segment = _segment(
                 content="immutable segment",
                 document_id="stable-document-id",
             )
@@ -336,7 +351,12 @@ def test_real_adapter_serializes_and_decodes_complete_public_contract(
                         "content": "immutable segment",
                         "timestamp": None,
                         "context": None,
-                        "metadata": None,
+                        "metadata": {
+                            "better_hindsight_payload_schema": "better-hindsight-turn-v1",
+                            "better_hindsight_segment_count": "1",
+                            "better_hindsight_segment_index": "0",
+                            "better_hindsight_source_sha256": "b" * 64,
+                        },
                         "document_id": "stable-document-id",
                         "entities": None,
                         "tags": ["kind:turn", "source:fixture"],
@@ -649,7 +669,7 @@ def test_real_adapter_retain_wire_uses_only_canonical_redacted_tags(
                     },
                 )
             )
-            segment = RetainSegment(
+            segment = _segment(
                 content="privacy-safe synthetic segment",
                 document_id="stable-private-wire-id",
             )
@@ -737,7 +757,7 @@ def test_real_adapter_returns_typed_false_for_valid_unconfirmed_retain_responses
             adapter = create_hindsight_client(
                 _config(tmp_path, base_url=server.base_url, api_key=None)
             )
-            segment = RetainSegment(content="stable segment", document_id="stable-document-id")
+            segment = _segment()
 
             server.arm_retain_fault(fault)
             unconfirmed = await adapter.retain_segment(segment)
@@ -789,7 +809,7 @@ def test_real_adapter_maps_invalid_retain_wire_responses_to_fixed_error_then_rec
             adapter = create_hindsight_client(
                 _config(tmp_path, base_url=server.base_url, api_key=None)
             )
-            segment = RetainSegment(content="stable segment", document_id="stable-document-id")
+            segment = _segment()
 
             server.arm_retain_fault(fault)
             failure = await _capture_failure(lambda: adapter.retain_segment(segment))
@@ -843,7 +863,7 @@ def test_real_sdk_adapter_retain_delay_is_one_shot_recorded_and_deterministic(
         adapter = HindsightClientAdapter(config=config, sdk_client=sdk)
         call: asyncio.Task[RetainConfirmation] | None = None
         try:
-            segment = RetainSegment(content="stable segment", document_id="stable-document-id")
+            segment = _segment()
             server.arm_retain_fault("delay")
             with pytest.raises(RuntimeError, match="retain fault is already armed"):
                 server.arm_retain_fault("http_503")

@@ -1,46 +1,90 @@
 # Implementation source of truth
 
-## Current status
+This file is the short repository router. Detailed contracts live in the canonical plan and the
+linked operator documents; this page records which contract is active so stale session history
+cannot restart abandoned work.
 
-- **Canonical plan:** `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
-- **Canonical SHA-256:** `bb575de8723f2a2d70054700c2713d0154ae59181cd5546ee611ecae328ddf62`
-- **Plan state:** Active; Tasks 0–4 are complete. The Task 4 contract and SQLite WAL/SHM amendment remain checkpointed as `9579d8af0098899cdb0ebe3447c2bb57fb4519da` and `0bc681cf6ab066bce6a9793c9d72157886aae2e4`; the exact implementation passed independent specification and adversarial review before checkpoint. The review-amended Task 5 contract combines the approved `0.8.5`/`0.6.1` operator package transition with scanner-proof nested transaction trees, root-safe owned checked-hash bytecode, exact command outcomes and host-module provenance, and phase-complete retry-convergent cleanup/uninstall state machines. That contract passed independent specification, quality, and adversarial review and is checkpointed as `6652212a5aaa72833e3df050523652fa3b935583`.
-- **Code checkpoint:** `9843a9b802ce54b5483a2adb7e95aff989d1df0f` (`9843a9b`) is the completed Task 4 bounded diagnostics and explicit mission-management checkpoint.
-- **Next action:** Write deterministic RED tests for Task 5 transactional install/publication, upgrade rollback, ownership refusal, uninstall/retry cleanup, archive contents, released-host discovery/health, and Better `0.8.5` versus bundled `0.6.1` version agreement. Do not write production installer code until those tests fail for the intended missing behavior. Do not install into a live Hermes home/interpreter, invoke pip from the shim manager, select a provider, restart Hermes, touch profile configuration/outboxes, contact Hindsight, deploy, or roll out production.
+## Current checkpoint
 
-The canonical plan is intentionally local under `.hermes/plans/`, which is ignored because Hermes runtime state and private artifacts do not belong in Git. This tracked file is the durable cross-session router. If the canonical file is missing or its hash differs, stop and resolve the plan state instead of selecting another plan.
+- Canonical plan: `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
+- Canonical-plan SHA-256:
+  `4bf8fbe88913e1adbc13d321e831a000a5c1da03d6c8d54cf554d184d3a32fa7`
+- Last completed code checkpoint: `9843c4b` (`feat: add operator controls and production contracts`)
+- Plan state: Tasks 0–4 complete; Task 5 active
+- Task 5 owner: this checkout on `spike/local-external-provider`
+- Task 5 scope: remote segment reconstruction metadata plus a thin root plugin layout for the
+  released Hermes Git plugin lifecycle
+- Next action: verify the bounded-review fixes and create the local Task 5 checkpoint commit
 
-## Retired plans
+## Completed foundation
 
-These files are historical evidence only and must never drive implementation:
+Tasks 0–4 provide:
 
-1. `.hermes/plans/2026-07-25_194157-better-hermes-hindsight-implementation.md`
-   - Retired because it made broad Hermes-core origin/trust/inline-admission patches and a patched SHA into product prerequisites.
-2. `.hermes/plans/2026-07-27_055353-plugin-only-rescope.md`
-   - Retired because it overcorrected to recall-only/operator-CLI behavior and removed useful best-effort automatic retention.
+- deterministic config and destination identity;
+- first-turn fail-open recall through the released memory-provider lifecycle;
+- redacted canonical turn retention with local SQLite admission;
+- bounded asynchronous sending, stable replace-mode replay, retry accounting, and process ownership
+  controls;
+- public-SDK Hindsight 0.8.5 integration;
+- operator `status` and `missions` controls, with no retry/drain/dead-letter command or dead-letter
+  state; and
+- package, compatibility, security, and release documentation.
 
-Both files carry title-level retirement banners. Instructions below those banners remain only to preserve design history.
+The stable checkpoint passed the non-Task-5 suite, Ruff, formatting, mypy, lock checks, package
+builds, and Twine validation. Task 5 must preserve those contracts.
 
-## Precedence for every session
+## Task 5 rebaseline
 
-1. Read this file before `README.md`, `DESIGN.md`, or implementation code.
-2. Verify the canonical plan path and SHA-256 above.
-3. Follow only the canonical active plan and current Git evidence.
-4. Treat the retired plans as non-authoritative even when their old prose says “required,” “execution rule,” or “production prerequisite.”
-5. Keep the separate Hermes-core worktree frozen research. Never import, install, commit, or make its SHA a Better Hindsight prerequisite.
-6. Keep the Task 0 product documents aligned with this router and the canonical active plan; resolve any future conflict in favor of the router and canonical plan.
-7. Update this router whenever the active plan path, hash, review state, or next task changes.
+The previous Task 5 specification and uncommitted RED oracle were abandoned after a read-only
+goal-alignment review. The candidate had grown to 10,144 lines and 1,928 test nodes covering an
+independent filesystem transaction/package manager: tombstones, quarantine, exact host-source
+snapshots, bytecode ownership, xattrs, descriptor behavior, fsync ordering, adversarial mutation,
+and a separate rollback engine.
 
-## Active product direction
+That design was disproportionate to the product. Hermes 0.19.0 already owns Git plugin install,
+update, remove, and memory-provider discovery. The abandoned test file was removed; do not recover
+or continue it from Git objects, session transcripts, delegation logs, or stale patches.
 
-The product is a plugin-only, best-effort integration for released Hermes and self-hosted Hindsight 0.8.5:
+The active Task 5 contract is deliberately narrow:
 
-- bounded automatic current-query recall;
-- opt-in automatic retention from released `sync_turn()` callbacks;
-- retry durability beginning only after the plugin's own SQLite admission commits;
-- passive bounded queue diagnostics and confirmation-gated mission check/apply commands;
-- no authoritative human/synthetic-origin claim;
-- no pre-callback or pre-turn-return zero-loss claim;
-- no Hermes-core prerequisite;
-- no model-facing memory tools in the first prerelease;
-- isolated Hindsight development/canary instances, preserving the existing deployment for rollback.
+1. Forward existing outbox `payload_schema`, `source_sha256`, `segment_index`, and `segment_count`
+   through Hindsight's public string metadata so multi-segment sources remain reconstructable after
+   local completion.
+2. Add root `plugin.yaml`, `__init__.py`, and `cli.py` as thin bridges to the installed Python
+   package.
+3. Prove released `hermes plugins install` and fresh-process provider/CLI discovery in disposable
+   homes and local Git repositories.
+4. Keep package and exact SDK transitions explicit, stopped-process operator work.
+5. Document rollback using bundled-provider selection, released plugin removal, and `uv` after every
+   process sharing the interpreter is stopped. Do not migrate, drain, or delete either bank or
+   Better's outbox.
+6. No custom installer, transaction tree, provenance manifest, or filesystem rollback engine ships.
+
+## Task 4 authority transition
+
+Task 4's exact authority snapshot was accepted at checkpoint `9843c4b`. Task 5 legitimately edits
+some tracked authority documents and tests, so their hash table in
+`tests/test_repository_contract.py` must transition together on the reviewed Task 5 candidate.
+The behavior contracts remain in force; changing an authority hash alone is never evidence that a
+semantic change is valid.
+
+## Later work
+
+Task 6 runs one bounded usefulness and retained-source proof against an operator-supplied dedicated
+Hermes interpreter/profile plus isolated Hindsight 0.8.5 development instance and generated bank.
+Profile isolation alone does not isolate the exact Hindsight SDK. The proof must not add repeated-run
+aggregation, a ranking framework, or release thresholds. Publication, production canary activation,
+migration, reconstruction, pruning, and deletion remain separately authorized work.
+
+## Operational ownership
+
+- Profile: an existing Hermes profile selected with `hermes --profile <name>` or an already
+  profile-specific `HERMES_HOME`; there is no `BETTER_HINDSIGHT_PROFILE` setting
+- Local path: `$HERMES_HOME/better_hindsight/outbox.sqlite3` for the selected profile
+- Runtime owner: one sender per profile/process; cross-process mutation requires the profile lock
+- Package owner: `uv`; the wheel and exact SDK are interpreter-global, so every sharing process must
+  be stopped before transition
+- Existing deployment: unchanged until a separately authorized canary
+- Rollback principle: preserve both banks and Better's outbox; switch providers while stopped
+- Security principle: no raw session identifiers, credentials, bank values, or source text in
+  remote reconstruction metadata, status output, logs, or committed fixtures

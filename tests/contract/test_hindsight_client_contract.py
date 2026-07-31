@@ -313,6 +313,21 @@ def test_is_available_fails_cleanly_for_missing_or_wrong_sdk(
     assert is_available() is False
 
 
+def _retain_segment(
+    *,
+    content: str = "segment",
+    document_id: str = "document-id",
+) -> RetainSegment:
+    return RetainSegment(
+        content=content,
+        document_id=document_id,
+        payload_schema="better-hindsight-turn-v1",
+        source_sha256="a" * 64,
+        segment_index=0,
+        segment_count=1,
+    )
+
+
 def test_client_construction_uses_exact_public_constructor_and_no_remote_calls(
     tmp_path: Path,
 ) -> None:
@@ -427,13 +442,22 @@ def test_retain_sends_one_replace_item_with_stable_item_id_scopes_and_tags(
     )
     sdk_client = _FakeSdkClient()
     adapter = HindsightClientAdapter(config=config, sdk_client=sdk_client)
-    segment = RetainSegment(content="immutable segment text", document_id="stable-document-id")
+    segment = _retain_segment(
+        content="immutable segment text",
+        document_id="stable-document-id",
+    )
 
     result = asyncio.run(adapter.retain_segment(segment))
 
     expected_item: dict[str, object] = {
         "content": "immutable segment text",
         "document_id": "stable-document-id",
+        "metadata": {
+            "better_hindsight_payload_schema": "better-hindsight-turn-v1",
+            "better_hindsight_segment_count": "1",
+            "better_hindsight_segment_index": "0",
+            "better_hindsight_source_sha256": "a" * 64,
+        },
         "update_mode": "replace",
         "tags": ["kind:turn", "source:sample"],
     }
@@ -470,9 +494,7 @@ def test_retain_sends_only_canonical_redacted_tags_to_the_sdk(tmp_path: Path) ->
     sdk_client = _FakeSdkClient()
     adapter = HindsightClientAdapter(config=config, sdk_client=sdk_client)
 
-    result = asyncio.run(
-        adapter.retain_segment(RetainSegment(content="segment", document_id="document-id"))
-    )
+    result = asyncio.run(adapter.retain_segment(_retain_segment()))
 
     assert result == client_module.RetainConfirmation(confirmed=True)
     _operation, kwargs = sdk_client.calls[0]
@@ -502,9 +524,7 @@ def test_well_formed_nonconfirming_retain_responses_return_typed_false(
     sdk_client.responses["aretain_batch"] = response
     adapter = HindsightClientAdapter(config=config, sdk_client=sdk_client)
 
-    result = asyncio.run(
-        adapter.retain_segment(RetainSegment(content="segment", document_id="document-id"))
-    )
+    result = asyncio.run(adapter.retain_segment(_retain_segment()))
 
     assert result == client_module.RetainConfirmation(confirmed=False)
 
@@ -534,9 +554,7 @@ def test_direct_response_type_lookalikes_do_not_confirm(
     sdk_client.responses["aretain_batch"] = SimpleNamespace(**fields)
     adapter = HindsightClientAdapter(config=config, sdk_client=sdk_client)
 
-    result = asyncio.run(
-        adapter.retain_segment(RetainSegment(content="segment", document_id="document-id"))
-    )
+    result = asyncio.run(adapter.retain_segment(_retain_segment()))
 
     assert result == client_module.RetainConfirmation(confirmed=False)
 
@@ -548,9 +566,7 @@ def test_malformed_direct_retain_response_maps_to_fixed_client_error(tmp_path: P
     adapter = HindsightClientAdapter(config=config, sdk_client=sdk_client)
 
     with pytest.raises(HindsightClientError) as caught:
-        asyncio.run(
-            adapter.retain_segment(RetainSegment(content="segment", document_id="document-id"))
-        )
+        asyncio.run(adapter.retain_segment(_retain_segment()))
 
     assert caught.value.category == "retain_failed"
     assert str(caught.value) == "Better Hindsight retain failed."
@@ -914,7 +930,7 @@ def test_raw_sdk_failures_map_to_fixed_sanitized_errors(
         if operation == "arecall":
             return await adapter.recall("query")
         if operation == "aretain_batch":
-            return await adapter.retain_segment(RetainSegment("content", "document-id"))
+            return await adapter.retain_segment(_retain_segment(content="content"))
         if operation == "get_bank_profile":
             return await adapter.get_bank_profile()
         if operation == "get_bank_config":

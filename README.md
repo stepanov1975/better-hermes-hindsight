@@ -9,10 +9,10 @@ does not require a data migration. On released Hermes 0.19.0 it is not configura
 requires `hindsight-client==0.8.5`, while bundled `hindsight` requires exact `0.6.1`, so switching
 providers also requires the documented stopped-process package-version transition.
 
-> **Status: pre-alpha.** Sender delivery is implemented for opt-in automatic retention in the tested
-> repository checkpoint, while retention remains disabled by default. Managed installation and
-> isolated live-write proof remain incomplete. Do not install or select this project in a production
-> Hermes profile. Read
+> **Status: pre-alpha.** Tasks 0–4 are complete. Task 5 is active: the plugin now preserves
+> multi-segment reconstruction metadata and is adding Hermes-managed plugin installation. No custom
+> installer or package manager will ship. Isolated live-write proof remains incomplete. Do not
+> install or select this project in a production Hermes profile. Read
 > [IMPLEMENTATION.md](IMPLEMENTATION.md) before changing code; it identifies the only active plan.
 
 ## What it is for
@@ -43,7 +43,9 @@ Hindsight's SQLite outbox. Callbacks lost before Hermes executes the provider ho
 guarantee. Local admission can also fail because of shutdown, contention, invalid input, queue
 saturation, or local I/O. There is no direct-user provenance claim and no pre-return or no-loss
 guarantee. Retried remote delivery uses a stable document ID and `update_mode="replace"`; it does
-not claim exactly-once transport.
+not claim exactly-once transport. Every remote segment also carries string metadata for payload
+schema, source digest, segment index, and segment count so a long source remains reconstructable
+after its completed local outbox rows are deleted.
 
 `codex_app_server` is unsupported on the pinned release because that runtime bypasses normal provider
 memory behavior. No model-facing memory tools in the first prerelease are registered; recall is
@@ -65,7 +67,8 @@ automatic context and mission changes require an explicit operator command.
   document ID with replace mode until synchronous response validation succeeds.
 - Logical pending-row and payload-byte limits bound admitted work; they are not an exact SQLite/WAL
   file-size guarantee.
-- Source documents are the preserved record. Facts, observations, embeddings, and summaries are
+- Source documents are the preserved record. Multi-segment reconstruction metadata is forwarded
+  through Hindsight's public item metadata; facts, observations, embeddings, and summaries remain
   derived indexes.
 - Retain and observation mission text remain distinct. `better_hindsight missions check` is
   read-only; `better_hindsight missions apply --confirm` changes only configured drifted fields and
@@ -89,26 +92,39 @@ bytes. Exit statuses are `0` for success/equality, `1` for drift or missing miss
 host-owned usage errors, `3` for fixed pre-write/local failures, and `4` once a remote write was
 attempted but the final outcome cannot be proven. There is no retry or drain command.
 
+## Installation model
+
+Hermes-managed plugin installation uses the released host lifecycle: the repository root contains a
+manifest and thin provider/CLI bridges consumed by `hermes plugins install|update|remove`. No custom
+installer, transaction tree, tombstone, quarantine, or package rollback engine is part of this
+project. `uv` owns the Python wheel and exact Hindsight SDK while every Hermes process sharing the
+interpreter is stopped, because released Hermes 0.19.0 cannot run Better's
+`hindsight-client==0.8.5` and the bundled provider's exact `0.6.1` in one interpreter at the same
+time. A profile scopes config and data, not packages.
+
+See [installation](docs/installation.md) and [rollback](docs/rollback.md) for the bounded workflow.
+Task 5 tests use only disposable Git repositories and temporary Hermes homes; they do not change a
+live profile, interpreter, service, outbox, or Hindsight bank.
+
 ## Isolation and rollback
 
-Development writes require an isolated Hindsight instance and Hermes profile, with separate storage,
-API key, and disposable bank. Deterministic fake-service tests run first and no production credential
-belongs in the test process.
+Development writes require a dedicated Hermes interpreter/profile plus an isolated Hindsight
+instance, separate storage, API key, and disposable bank. Deterministic fake-service tests run first
+and no production credential belongs in the test process.
 
-Production rollout uses a separate canary instance and bank and preserves the old deployment. The
-existing Hindsight instance and bank remain running, unmodified, and available for rollback; this
-prerelease performs no initial migration, deduplication, reconstruction, or deletion. Canary
-activation, publication, and any production mutation remain separately authorized.
+Production rollout uses a dedicated Hermes interpreter/profile plus a separate canary instance and
+bank, preserving the old deployment. The existing Hermes installation, Hindsight instance, and bank
+remain running, unmodified, and available for rollback; this prerelease performs no initial
+migration, deduplication, reconstruction, or deletion. Canary activation, publication, and any
+production mutation remain separately authorized.
 
 ## Repository and implementation authority
 
 The tracked [implementation router](IMPLEMENTATION.md) identifies the canonical local plan, its hash,
-the completed sender-delivery checkpoint, the completed diagnostics/mission-command checkpoint, the
-approved managed-installation Task 5 contract and active deterministic RED-test stage, and two
-explicitly retired plans. Never infer
-implementation requirements from a retired plan or from stale proof wording. The separate Hermes-core
-worktree is frozen research and must not be imported, installed, committed, or treated as a
-prerequisite.
+the completed Tasks 0–4 checkpoint, the abandoned overgrown installer oracle, and the active
+product-aligned Task 5 scope. Never infer implementation requirements from a retired plan, stale
+proof wording, or cached review transcript. The separate Hermes-core worktree is frozen research and
+must not be imported, installed, committed, or treated as a prerequisite.
 
 The exact version/source observations are in [docs/compatibility.md](docs/compatibility.md). Sender
 recovery, retry, and shutdown semantics are in [docs/operations.md](docs/operations.md). Sanitized

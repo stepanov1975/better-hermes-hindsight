@@ -62,9 +62,11 @@ Bundled `hindsight` remains selectable and untouched.
 5. **Background delivery.** A profile-wide POSIX advisory lock elects one sender. The lock owner uses
    bounded SQLite polling to observe cross-process admissions, claims only rows matching the current
    credential-free destination fingerprint and payload schema, and retries with bounded backoff.
-6. **Replace-safe replay.** Every retry reuses the same stable document ID and
-   `update_mode="replace"` with synchronous Hindsight response validation. Ambiguous completion
-   remains retryable; this is idempotent source replacement, not exactly-once transport.
+6. **Replace-safe replay and reconstruction.** Every retry reuses the same stable document ID and
+   `update_mode="replace"` with synchronous Hindsight response validation. Each item forwards the
+   outbox payload schema, source digest, segment index, and segment count as public string metadata,
+   so shuffled remote segments can reconstruct the source after local completion. Ambiguous
+   completion remains retryable; this is idempotent source replacement, not exactly-once transport.
 7. **Bounded shutdown.** Shutdown stops new local work, joins the sender only for a bounded interval,
    closes owned resources where possible, and leaves unconfirmed admitted rows recoverable.
 
@@ -126,22 +128,33 @@ The supported host path is the normal conversation loop in released Hermes `v202
 context and does not expose this provider's lifecycle behavior. Windows sender election, cloud
 Hindsight, embedded-daemon management, and multi-user routing are also outside the first prerelease.
 
+## Installation ownership
+
+Released Hermes owns the host-managed Git plugin directory through
+`hermes plugins install|update|remove`. The repository root supplies only `plugin.yaml` and thin
+provider/CLI bridges to the installed wheel. Better does not implement a transaction tree, custom
+installer, bytecode ownership scheme, or filesystem rollback engine. `uv` owns the Better wheel and
+incompatible SDK transition while every Hermes process sharing the interpreter is stopped. A profile
+scopes configuration and local data, not interpreter packages.
+
 ## Isolation, canary, and rollback
 
-Development writes require an isolated Hindsight instance and Hermes profile, separate datastore,
-separate API key, and generated disposable bank. Fake HTTP proof always precedes explicitly enabled
-live proof. The active Hermes configuration, gateway, existing Hindsight deployment, and existing
-bank remain outside development tests.
+Development writes require a dedicated Hermes interpreter/profile and isolated Hindsight instance,
+separate datastore, separate API key, and generated disposable bank. Fake HTTP proof always precedes
+explicitly enabled live proof. The active Hermes installation, existing Hindsight deployment, and
+existing bank remain outside development tests.
 
-Production rollout uses a separate canary instance and bank and preserves the old deployment. The
-old provider configuration, instance, and bank remain intact as the rollback source. Prerelease proof
-does not migrate, copy, rebuild, deduplicate, reconsolidate, prune, or delete existing data.
+Production rollout uses a dedicated Hermes interpreter/profile and separate canary instance/bank,
+preserving the old deployment. The old Hermes installation, provider configuration, instance, and
+bank remain intact as the rollback source. Prerelease proof does not migrate, copy, rebuild,
+deduplicate, reconsolidate, prune, or delete existing data.
 
 Rollback preserves the Better outbox plus both banks, but it is not configuration-only in released
-Hermes 0.19.0. With Hermes stopped, the operator removes the verified Better shim while its wheel still
-supplies the command, selects bundled `hindsight`, removes the Better wheel, restores exact
-`hindsight-client==0.6.1`, restarts, and verifies recall. Returning to Better reinstalls the wheel and
-exact `0.8.5` client before shim health and provider selection.
+Hermes 0.19.0. The operator stops every process sharing the interpreter, selects bundled `hindsight`
+for the target named profile, removes that profile's host-owned Git plugin, uses `uv` to remove the
+Better wheel and restore exact `hindsight-client==0.6.1`, then restarts only compatible profiles and
+verifies recall without lazy installation. Returning to Better reverses the exact package/profile
+transition and verifies discovery before restart.
 
 ## Proof acceptance gates
 
@@ -157,6 +170,8 @@ Before prerelease, prove all of the following against one stable candidate:
 - profile path confinement, logical queue bounds, collision rejection, and fixed sanitized errors;
 - one sender across process-shaped contenders and bounded cross-process polling;
 - destination mismatch blocking and stable replace-mode retries until exact typed success;
+- multi-segment reconstruction from remote item metadata after local completion;
+- released Hermes host-managed Git plugin installation and fresh-process provider/CLI discovery;
 - fake-service restart, timeout, response-loss, and shutdown recovery;
 - explicit mission check/apply behavior without initialization-time mutation;
 - isolated development proof with zero production credentials or resources;

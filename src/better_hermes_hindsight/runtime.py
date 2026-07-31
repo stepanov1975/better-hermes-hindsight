@@ -489,7 +489,14 @@ class OutboxSender:
         owner: ProfileLockOwner,
         row: OutboxRow,
     ) -> OutboxTransitionResult:
-        segment = RetainSegment(content=row.content, document_id=row.document_id)
+        segment = RetainSegment(
+            content=row.content,
+            document_id=row.document_id,
+            payload_schema=row.payload_schema,
+            source_sha256=row.source_sha256,
+            segment_index=row.segment_index,
+            segment_count=row.segment_count,
+        )
         category: OutboxFailureCategory | None = None
         try:
             confirmation = self._runner.run(

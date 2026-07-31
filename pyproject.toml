@@ -58,6 +58,8 @@ addopts = "-q --strict-markers"
 python_version = "3.11"
 strict = true
 files = ["src", "tests"]
+mypy_path = "src"
+explicit_package_bases = true
 
 [tool.ruff]
 target-version = "py311"
