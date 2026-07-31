@@ -9,16 +9,16 @@ cannot restart abandoned work.
 - Canonical plan: `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
 - Canonical-plan SHA-256:
   `4bf8fbe88913e1adbc13d321e831a000a5c1da03d6c8d54cf554d184d3a32fa7`
-- Last completed code checkpoint: `9843c4b` (`feat: add operator controls and production contracts`)
-- Plan state: Tasks 0–4 complete; Task 5 active
-- Task 5 owner: this checkout on `spike/local-external-provider`
-- Task 5 scope: remote segment reconstruction metadata plus a thin root plugin layout for the
-  released Hermes Git plugin lifecycle
-- Next action: verify the bounded-review fixes and create the local Task 5 checkpoint commit
+- Last completed code checkpoint: `883ef6c` (`feat: add host-managed plugin installation`)
+- Plan state: Tasks 0–5 complete; Task 6 pending an operator-supplied isolated environment
+- Completed Task 5 scope: remote segment reconstruction metadata plus a thin root plugin layout for
+  the released Hermes Git plugin lifecycle
+- Next action: begin Task 6 only when a dedicated Hermes interpreter/profile and isolated Hindsight
+  development instance are explicitly supplied and development writes are authorized
 
 ## Completed foundation
 
-Tasks 0–4 provide:
+Tasks 0–5 provide:
 
 - deterministic config and destination identity;
 - first-turn fail-open recall through the released memory-provider lifecycle;
@@ -28,10 +28,12 @@ Tasks 0–4 provide:
 - public-SDK Hindsight 0.8.5 integration;
 - operator `status` and `missions` controls, with no retry/drain/dead-letter command or dead-letter
   state; and
-- package, compatibility, security, and release documentation.
+- reconstructable remote segments, released host-managed Git plugin installation, and package,
+  compatibility, security, and release documentation.
 
-The stable checkpoint passed the non-Task-5 suite, Ruff, formatting, mypy, lock checks, package
-builds, and Twine validation. Task 5 must preserve those contracts.
+Checkpoint `883ef6c` passed 547 tests, Ruff, formatting, mypy, lock and diff checks, package builds,
+Twine validation, disposable released-Hermes install/load/CLI/remove proof, bounded independent
+review, and a clean focused re-review.
 
 ## Task 5 rebaseline
 

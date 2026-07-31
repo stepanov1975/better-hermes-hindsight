@@ -9,9 +9,10 @@ does not require a data migration. On released Hermes 0.19.0 it is not configura
 requires `hindsight-client==0.8.5`, while bundled `hindsight` requires exact `0.6.1`, so switching
 providers also requires the documented stopped-process package-version transition.
 
-> **Status: pre-alpha.** Tasks 0–4 are complete. Task 5 is active: the plugin now preserves
-> multi-segment reconstruction metadata and is adding Hermes-managed plugin installation. No custom
-> installer or package manager will ship. Isolated live-write proof remains incomplete. Do not
+> **Status: pre-alpha.** Tasks 0–5 are complete. Task 6 is pending an operator-supplied dedicated
+> Hermes interpreter/profile and isolated Hindsight development instance. The plugin preserves
+> multi-segment reconstruction metadata and installs through Hermes's released Git-plugin lifecycle;
+> no custom installer or package manager ships. Isolated live-write proof remains incomplete. Do not
 > install or select this project in a production Hermes profile. Read
 > [IMPLEMENTATION.md](IMPLEMENTATION.md) before changing code; it identifies the only active plan.
 
