@@ -82,6 +82,36 @@ Run profile-scoped discovery/status checks before restart and verify recall befo
 Neither direction changes remote data ownership. Better's outbox and both banks remain available for
 inspection or a later separately authorized migration.
 
+## Development proof and future canary
+
+The opt-in procedure in [development-instance.md](development-instance.md) owns only its generated,
+preflight-absent development bank and disposable temporary profile. Hindsight 0.8.5 has no conditional
+create-only primitive, so the separate development key and datastore must remain single-writer for the
+full proof; a host-local nonblocking lock rejects accidental concurrent local runs. A second process
+already holding the same key and random target ID is outside the safe contract. After the absence
+guard, the harness records a random local cleanup token before create and stores the matching witness
+in the bank's public display name. The marker is completely written, synced, and reread; partial or
+unverifiable writes fail before create. The child never deletes; both success and failure leave the
+marker for the parent. Public mission-command results `runtime_cleanup_failed` and
+`write_attempted_outcome_unknown` fail the proof because they do not prove operator-runtime quiescence.
+The parent treats the complete interval from before launch through process-tree absence as
+exception-total. After timeout or normal leader exit, it detects and terminates surviving descendants.
+An interrupt before the absence proof either settles the known tree before propagation or becomes an
+unsettled-tree result; an unknown launch outcome or failed liveness proof always suppresses cleanup.
+After proven absence, propagated Python interrupts still run ownership-gated cleanup before being
+re-raised. Parent cleanup treats authenticated HTTP 404 as confirmed absence without DELETE and deletes
+a present bank only when its ID and remote ownership witness both match. Existing-bank rejection and
+timeout before create therefore send no mutation, including timeout after the local marker is written.
+If cleanup fails, use the reported sanitized identifier only to correlate the generated resource in the
+development instance; never infer or delete a bank in the existing deployment from that value.
+
+A future production canary is a separate Hermes interpreter/profile plus another isolated Better
+Hindsight instance and bank. Activating it is not part of Task 6. To stop a failed canary, stop only its
+dedicated Hermes processes and select the unchanged old profile/deployment for traffic. Preserve the
+canary bank and Better outbox for diagnosis unless deletion receives separate authorization. The old
+deployment remains running throughout; canary rollback needs no migration, reconstruction,
+deduplication, reconsolidation, pruning, or deletion.
+
 ## Scope
 
 `hermes --profile "$PROFILE" plugins remove better_hindsight` removes that profile's host-owned Git

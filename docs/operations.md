@@ -1,9 +1,12 @@
 # Operations
 
-Better Hermes Hindsight is still pre-alpha. Sender delivery is implemented and covered by deterministic
-fake-service and released-Hermes tests, but retention remains disabled by default. Managed installation
-and isolated live-write proof remain incomplete. Do not enable this repository in a production Hermes
-profile.
+Better Hermes Hindsight is still pre-alpha. Sender delivery and host-managed installation are
+implemented and covered by deterministic fake-service and released-Hermes tests. An initial opt-in
+isolated proof ran once with synthetic data and ended with its generated bank absent; review findings
+are under closure before checkpoint. The live node in
+[development-instance.md](development-instance.md) is not an operator next action and requires renewed
+explicit authorization after any candidate change. Automatic retention remains disabled by default.
+Do not enable this repository in a production Hermes profile.
 
 <!-- better-hindsight-status-storage:start -->
 ## Status storage contract
@@ -96,5 +99,9 @@ policy command. Do not edit the SQLite outbox manually: doing so can violate imm
 capacity, and guarded-attempt invariants.
 
 Use the repository test suite and a temporary `HERMES_HOME` with the loopback fake before any separately
-authorized isolated deployment. Any future live proof must use a disposable development instance,
-credential, and bank; production rollout remains a later reversible canary decision.
+authorized isolated deployment. The one opt-in live-write procedure is defined in
+[development-instance.md](development-instance.md). It requires a dedicated interpreter because the
+SDK is interpreter-global, a separate development deployment/datastore/key, an exact endpoint decision,
+an independently supplied destination fingerprint, and a generated bank proved absent before create.
+It sanitizes child-process configuration and cleans only that disposable bank. Production rollout
+remains a later reversible canary decision; this harness does not activate it.

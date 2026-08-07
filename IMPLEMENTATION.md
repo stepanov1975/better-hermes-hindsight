@@ -10,11 +10,12 @@ cannot restart abandoned work.
 - Canonical-plan SHA-256:
   `4bf8fbe88913e1adbc13d321e831a000a5c1da03d6c8d54cf554d184d3a32fa7`
 - Last completed code checkpoint: `883ef6c` (`feat: add host-managed plugin installation`)
-- Plan state: Tasks 0–5 complete; Task 6 pending an operator-supplied isolated environment
+- Plan state: Tasks 0–5 complete; the initial Task 6 isolated proof ran and its review findings are
+  pending closure/checkpoint
 - Completed Task 5 scope: remote segment reconstruction metadata plus a thin root plugin layout for
   the released Hermes Git plugin lifecycle
-- Next action: begin Task 6 only when a dedicated Hermes interpreter/profile and isolated Hindsight
-  development instance are explicitly supplied and development writes are authorized
+- Next action: close Task 6 findings, verify the corrected candidate, and obtain an independent clean
+  re-review; do not repeat the live node without a changed candidate and renewed explicit authorization
 
 ## Completed foundation
 
@@ -72,8 +73,10 @@ semantic change is valid.
 
 ## Later work
 
-Task 6 runs one bounded usefulness and retained-source proof against an operator-supplied dedicated
-Hermes interpreter/profile plus isolated Hindsight 0.8.5 development instance and generated bank.
+Task 6 uses one bounded usefulness and retained-source proof against an operator-supplied dedicated
+Hermes interpreter/profile plus isolated Hindsight 0.8.5 development instance and generated bank. The
+initial run used only synthetic data, removed its generated bank, and left an authenticated bank count
+of zero; independent review findings are being closed before checkpoint.
 Profile isolation alone does not isolate the exact Hindsight SDK. The proof must not add repeated-run
 aggregation, a ranking framework, or release thresholds. Publication, production canary activation,
 migration, reconstruction, pruning, and deletion remain separately authorized work.

@@ -15,7 +15,7 @@ from markdown_it.token import Token
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_PLAN_PATH = ROOT / ".hermes/plans/2026-07-27_071437-best-effort-plugin.md"
 LOCAL_PLAN_INDEX_PATH = ROOT / ".hermes/plans/README.md"
-LOCAL_PLAN_INDEX_SHA256 = "aa282622997f0141178d65afa12905140b490f12f1fd94f40003753bfc0cef31"
+LOCAL_PLAN_INDEX_SHA256 = "bdd3d86d4985822a171170f5763ad8a0311e9032ff8704cfc6c72e51e2f1523e"
 
 _STATUS_COMPATIBILITY_START = b"<!-- better-hindsight-status-compatibility:start -->"
 _STATUS_COMPATIBILITY_END = b"<!-- better-hindsight-status-compatibility:end -->"
@@ -63,6 +63,7 @@ ACTIVE_CONTRACT_PATHS = (
     "docs/audit-findings.md",
     "docs/compatibility.md",
     "docs/configuration.md",
+    "docs/development-instance.md",
     "docs/operations.md",
     "docs/public-release-checklist.md",
 )
@@ -74,6 +75,7 @@ TASK4_FROZEN_AUTHORITY_PATHS = (
     "docs/audit-findings.md",
     "docs/compatibility.md",
     "docs/configuration.md",
+    "docs/development-instance.md",
     "docs/operations.md",
     "docs/public-release-checklist.md",
     "src/better_hermes_hindsight/config.py",
@@ -81,15 +83,18 @@ TASK4_FROZEN_AUTHORITY_PATHS = (
 )
 
 _TASK4_FROZEN_AUTHORITY_SHA256 = {
-    "IMPLEMENTATION.md": "ac8924e23987faaf3a8679064e68552d083aca61f34cb139ae402754065dd440",
-    "README.md": "5e2f0270784a241c9aeb48196f4276287f4d81d9d50ea17f2f3d85e4a89cba52",
+    "IMPLEMENTATION.md": "cb88181c69dd78ca0e942c5a3a2118484159d594d518c483045737c1de157874",
+    "README.md": "5c688366e3a851143dd4fa5734303c3ee8c0329b6893767238fba765ab634323",
     "DESIGN.md": "c9e8583157146bf0e9db0a3ee14700865ddfb991ebefac7ac63fbe10f0f21482",
     "docs/audit-findings.md": "af1134c0772062eacb7185018a0b2585260cd79955974a5acbf145c2fc63fba2",
     "docs/compatibility.md": "506ea29034db44aa79bb07b5350ff683c49c5cbece667a1a7825764a062790e1",
     "docs/configuration.md": "08f660c7e8f311640a26b495ef160e187137156fc6632b37d7bb180b64a975d5",
-    "docs/operations.md": "7fe0cee6645dd5d5cdad110b013695289af72e093630dfb82724a3d2e4b7bfb0",
+    "docs/development-instance.md": (
+        "37ec50c0074f07ecce3e9b75ed5528a1e2120b7faa83c5f68831747644a7a8e7"
+    ),
+    "docs/operations.md": "b7edbfce72d5a6fb01e85637e738ebfd56331b452887dec371858206c41374bf",
     "docs/public-release-checklist.md": (
-        "90f4be3d9f134885eb57222dad8b8d517fbd68c813433b3d96125e4375badd18"
+        "13ed7a2bc9e58b05c2819577d0cb586fb712a70ddc05dd46bb7f852de0ddc7bd"
     ),
     "src/better_hermes_hindsight/config.py": (
         "ce310b60359d34c6e2c30fcc46592d43ecc0b2ad36a6731ae87743b21a733621"
@@ -1009,6 +1014,7 @@ def test_owned_active_contract_inventory_is_complete() -> None:
         "docs/audit-findings.md",
         "docs/compatibility.md",
         "docs/configuration.md",
+        "docs/development-instance.md",
         "docs/operations.md",
         "docs/public-release-checklist.md",
     )
@@ -1060,10 +1066,10 @@ def test_task3_delivery_and_task4_operator_contract_are_documented_without_rollo
     _assert_terms(
         readme,
         "Tasks 0–5 are complete",
-        "Task 6 is pending",
+        "initial Task 6 proof ran once",
         "Automatic retention is disabled by default",
         "Hermes-managed plugin installation",
-        "Isolated live-write proof remains incomplete",
+        "must not be rerun without a changed candidate plus renewed explicit authorization",
     )
 
     delivery_contract = _read("docs/configuration.md") + _read("docs/operations.md")
@@ -1160,7 +1166,7 @@ def test_callback_boundary_and_retired_plan_precedence_are_explicit() -> None:
         "The previous Task 5 specification and uncommitted RED oracle were abandoned",
         "do not recover or continue it",
         "stale proof wording",
-        "Tasks 0–5 complete; Task 6 pending",
+        "initial Task 6 isolated proof ran",
     )
 
 
@@ -1240,6 +1246,69 @@ def test_release_gate_requires_isolated_development_and_reversible_canary() -> N
     )
 
 
+def test_task6_live_proof_and_non_activation_contract_are_explicit() -> None:
+    development = _read("docs/development-instance.md")
+    operations = _read("docs/operations.md")
+    rollback = _read("docs/rollback.md")
+    checklist = _read("docs/public-release-checklist.md")
+    task6_contract = "\n".join((development, operations, rollback, checklist))
+
+    _assert_terms(
+        development,
+        "does not provision Hindsight, Docker, a datastore, an interpreter, or a credential",
+        "Profile isolation by itself is insufficient",
+        "hindsight-client==0.8.5",
+        "BETTER_HINDSIGHT_ALLOW_DEV_WRITES=1",
+        "inherited `HINDSIGHT_*`",
+        "independently prepared destination fingerprint",
+        "bank must not exist",
+        "fails closed before create/upsert",
+        "zero mutations",
+        "public document listing",
+        "metadata-based long-source reconstruction",
+        "one byte-identical callback replay",
+        "one fresh interpreter restart that drains durably pending local work",
+        "only the two intended mission fields changed",
+        "retention disablement",
+        "completely writes, syncs, and rereads a random cleanup token",
+        "existing-bank rejection",
+        "POSIX process group",
+        "BETTER_HINDSIGHT_REQUIRE_LIVE_PROOF=1",
+        "remote ownership name match",
+        "write_attempted_outcome_unknown",
+        "exclusive writer/key rule",
+        "child never deletes the bank",
+        "stalled, partial, or unverifiable marker",
+        "exception-total",
+        "unknown launch outcome",
+        "KeyboardInterrupt",
+        "normal leader exit",
+        "one exact JSON line",
+    )
+    _assert_terms(
+        checklist,
+        "Task 6 checkpoint-only dependency-audit exception",
+        "expires on 2026-09-06",
+        "does not authorize public release",
+        "runtime/build requirement audit is clean",
+        "PYSEC-2026-3576",
+        "PYSEC-2026-3577",
+    )
+    _assert_terms(
+        task6_contract,
+        "does not activate",
+        "existing Hindsight deployment",
+        "remain running and untouched",
+        (
+            "no initial migration, deduplication, reconstruction, reconsolidation, pruning, "
+            "or deletion"
+        ),
+        "separate authorization",
+    )
+    assert "BETTER_HINDSIGHT_DEV_API_KEY='<isolated-development-api-key>'" in development
+    assert not re.search(r"better-hindsight-dev-[0-9a-f]{32}", development)
+
+
 def test_task3_sender_contract_is_frozen_before_red_tests() -> None:
     local_plan_pair = _read_local_plan_pair()
     if local_plan_pair is None:
@@ -1300,7 +1369,7 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
         router,
         ".hermes/plans/2026-07-27_071437-best-effort-plugin.md",
         "4bf8fbe88913e1adbc13d321e831a000a5c1da03d6c8d54cf554d184d3a32fa7",
-        "Tasks 0–5 complete; Task 6 pending",
+        "initial Task 6 isolated proof ran",
         "Last completed code checkpoint: `883ef6c`",
         "dedicated Hermes interpreter/profile",
     )
@@ -1319,7 +1388,13 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
     assert plan_hash == "4bf8fbe88913e1adbc13d321e831a000a5c1da03d6c8d54cf554d184d3a32fa7"
     assert plan_hash in router
     assert plan_hash in plan_index
-    _assert_terms(plan_index, "883ef6c", "Task 6 is pending", "Superseded Task 5 direction")
+    _assert_terms(
+        plan_index,
+        "883ef6c",
+        "initial Task 6 isolated proof ran",
+        "pending closure/checkpoint",
+        "Superseded Task 5 direction",
+    )
     assert "ACTIVE — CANONICAL IMPLEMENTATION PLAN" in plan[:1000]
 
     crlf_plan_bytes = plan_bytes.replace(b"\n", b"\r\n")
@@ -1485,7 +1560,7 @@ def test_task5_completed_implementation_and_task6_route_are_frozen() -> None:
     _assert_terms(
         router,
         "4bf8fbe88913e1adbc13d321e831a000a5c1da03d6c8d54cf554d184d3a32fa7",
-        "Tasks 0–5 complete; Task 6 pending",
+        "initial Task 6 isolated proof ran",
         "883ef6c",
         "The previous Task 5 specification and uncommitted RED oracle were abandoned",
         "10,144 lines and 1,928 test nodes",
@@ -1505,7 +1580,8 @@ def test_task5_completed_implementation_and_task6_route_are_frozen() -> None:
     plan_index = _read(".hermes/plans/README.md")
     _assert_terms(
         plan_index,
-        "Tasks 0–5 complete at code checkpoint `883ef6c`; Task 6 is pending",
+        "initial Task 6 isolated proof ran",
+        "pending closure/checkpoint",
         "Superseded Task 5 direction",
         "The uncommitted 10,144-line/1,928-case RED file was removed",
         "Do not reconstruct or continue that oracle",
@@ -1517,7 +1593,7 @@ def test_task5_completed_implementation_and_task6_route_are_frozen() -> None:
     _assert_terms(
         readme,
         "Tasks 0–5 are complete",
-        "Task 6 is pending",
+        "initial Task 6 proof ran once",
         "Hermes-managed plugin installation",
         "No custom installer",
         "multi-segment reconstruction metadata",
@@ -1625,7 +1701,8 @@ def test_local_task4_plan_contract_matches_completed_implementation_when_present
     _assert_terms(
         plan_index,
         "4bf8fbe88913e1adbc13d321e831a000a5c1da03d6c8d54cf554d184d3a32fa7",
-        "Tasks 0–5 complete at code checkpoint `883ef6c`; Task 6 is pending",
+        "initial Task 6 isolated proof ran",
+        "pending closure/checkpoint",
         "Superseded Task 5 direction",
         "hermes plugins install|update|remove",
         "Do not reconstruct or continue that oracle",

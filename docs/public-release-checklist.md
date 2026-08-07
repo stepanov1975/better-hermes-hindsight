@@ -61,19 +61,54 @@ candidate. Publication and production rollout require separate owner approval.
 
 ## Isolated development proof
 
-- [ ] Fake HTTP contract and fault tests pass before any live write.
-- [ ] Development writes use an isolated Hindsight instance and Hermes profile, separate datastore,
-      separate API key, and generated disposable bank.
-- [ ] The live-proof process contains no production URL, API key, bank ID, or profile state.
-- [ ] Explicit write opt-in, endpoint allowlist, independently supplied destination fingerprint, and
-      pre-upsert disposable-bank absence all fail closed before mutation.
-- [ ] Real released-Hermes callback proof observes admission only after asynchronous callback
-      execution and does not reinterpret it as inline turn-return durability.
-- [ ] Disposable resources are cleaned up in `finally`; failed cleanup reports only a sanitized
-      generated identifier.
+- [ ] Follow [development-instance.md](development-instance.md); it defines the environment but does
+      not provision Hindsight, Docker, an interpreter, a datastore, or a credential.
+- [ ] Fake HTTP, guard, sanitized-subprocess, and fault tests pass before any live write.
+- [ ] Development writes use a dedicated Hermes installation/interpreter and temporary profile plus
+      an isolated Hindsight 0.8.5 deployment, separate datastore, separate API key, and generated
+      disposable bank. Profile isolation alone is not treated as SDK isolation. The installed Better
+      distribution is attested to an independently supplied reviewed-wheel SHA-256 and its imported
+      modules resolve inside that distribution.
+- [ ] The live-proof process contains no production URL, API key, bank ID, or profile state; inherited
+      generic `HINDSIGHT_*` values are removed and only explicit development inputs are admitted.
+- [ ] `BETTER_HINDSIGHT_ALLOW_DEV_WRITES=1`, literal loopback or exact development-endpoint allowlist,
+      independently supplied destination fingerprint, generated-ID shape, and pre-create disposable-
+      bank absence all fail closed before mutation. Fake guard failures record zero mutations.
+- [ ] The separate development key and datastore remain single-writer for the complete proof because
+      Hindsight 0.8.5 exposes create-or-update without conditional creation. A host-local nonblocking
+      lock rejects concurrent local proof writers; the run is prohibited if another process can use the
+      same key and generated target ID.
+- [ ] One explicitly enabled, dedicated-marker proof exercises released-Hermes provider
+      discovery/selection,
+      first-call current-query recall and bounded fail-open, asynchronous callback admission and sender
+      drain, fixed synthetic retention including a long segmented source, public document listing and
+      digest-verified reconstruction, byte-identical replay with a positive remote-revision witness, and
+      one fresh child-process restart that drains pending work.
+- [ ] The same bounded proof performs one fixed usefulness/provenance recall check without aggregation,
+      ranking, or thresholds; changes only intended mission fields; disables retention; and proves a
+      later callback writes neither local queue rows nor remote documents.
+- [ ] The child never deletes the bank: success and failure leave the durable marker for its parent.
+      Marker writes loop to completion, are synced and reread before create, and fail closed on partial
+      or unverifiable storage.
+      Public mission outcomes `runtime_cleanup_failed` and `write_attempted_outcome_unknown` fail the
+      proof because they do not prove operator-runtime quiescence. The interval from before process
+      launch through descendant-absence proof is exception-total. Timeout and normal leader exit both
+      trigger a surviving-descendant check. Interruptions before the proof either settle the known tree
+      before propagation or become unsettled; unknown launch outcomes and failed liveness proofs always
+      suppress cleanup. After proven absence, propagated Python interrupts run ownership-gated cleanup
+      before being re-raised. Parent cleanup is independently bounded and requires a durable local token
+      claimed only after the absence guard. Cleanup sends no DELETE on authenticated 404 and deletes a
+      present bank only when its ID and public ownership witness both match, so existing-bank rejection
+      and timeout before create send no mutation even after the local marker is written. Failed cleanup
+      reports only a sanitized generated identifier. The strict one-line result protocol rejects stderr,
+      preceding output, extra fields, invalid types, and private development values. No raw endpoint,
+      key, bank, profile value, source text, transcript, ownership token, or generated identifier appears
+      in repository artifacts or test output.
 
 ## Production canary and rollback
 
+- [ ] This checklist documents the proposed production canary but does not activate it; provisioning,
+      activation, promotion, publication, and data lifecycle actions require separate authorization.
 - [ ] Production rollout uses a dedicated Hermes interpreter/profile and separate canary instance
       and bank, preserving the old deployment.
 - [ ] The existing Hindsight service, bank, provider configuration, and data remain running and
@@ -91,6 +126,24 @@ candidate. Publication and production rollout require separate owner approval.
       either bank/outbox.
 - [ ] Released `hermes plugins remove` owns only the Git plugin directory; profile configuration,
       Python packages, outbox data, and remote bank data remain outside that ownership.
+
+## Task 6 checkpoint-only dependency-audit exception
+
+The owner authorized a narrow exception on 2026-08-07 so Task 6 may receive a local code checkpoint.
+It expires on 2026-09-06, or earlier when a fixed released Hermes version is available. It does not
+authorize public release, package publication, production activation, another live proof, or bypassing
+any other gate.
+
+- The runtime/build requirement audit is clean. Findings occur only through the optional proof extra
+  required to exercise released Hermes 0.19.0.
+- `hermes-agent==0.19.0` has `PYSEC-2026-3576` and `PYSEC-2026-3577`, with no fixed released version.
+- Its exact transitive pins select `cryptography==46.0.7` (four findings; the strictest listed fix is
+  `50.0.0`) and `Pillow==12.2.0` (listed fixes require `12.3.0`). Those versions cannot be raised while
+  retaining the required released-Hermes proof boundary.
+- The proof used only fixed synthetic data in an isolated instance; the generated bank, Compose
+  project, volumes, network, profile secrets, reviewed wheel archive, and temporary files were removed.
+- Re-run the complete audit when the exception expires or a fixed Hermes release appears. Public
+  release remains blocked until the complete dependency audit passes without this exception.
 
 ## Compatibility and artifacts
 

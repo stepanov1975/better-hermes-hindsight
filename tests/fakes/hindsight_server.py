@@ -65,6 +65,14 @@ AuthorizationState: TypeAlias = Literal[
     "unexpected_bearer",
     "unsupported",
 ]
+ProfileFault: TypeAlias = Literal[
+    "not_found",
+    "http_401",
+    "http_403",
+    "http_500",
+    "malformed_json",
+    "malformed_schema",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,11 +115,13 @@ class FakeHindsightServer:
         self._expected_api_key = expected_api_key
         self._records: list[RequestRecord] = []
         self._request_count = 0
+        self._next_profile_fault: ProfileFault | None = None
         self._next_recall_fault: RecallFault | None = None
         self._next_retain_fault: RetainFault | None = None
         self._next_mission_read_fault: MissionReadFault | None = None
         self._next_mission_patch_fault: MissionPatchFault | None = None
         self._next_mission_readback_fault: MissionReadbackFault | None = None
+        self._profile_name: str | None = "Fixture bank"
         self._mission_readback_fault_ready = False
         self._last_mission_updates: tuple[str, ...] = ()
         self._mission_config: dict[str, object] = {
@@ -220,6 +230,13 @@ class FakeHindsightServer:
             self._site = None
             self._runner = None
             self._socket = None
+
+    def arm_profile_fault(self, fault: ProfileFault) -> None:
+        """Apply one fault to the next bank-profile request only."""
+
+        if self._next_profile_fault is not None:
+            raise RuntimeError("Fake Hindsight profile fault is already armed.")
+        self._next_profile_fault = fault
 
     def arm_recall_fault(self, fault: RecallFault) -> None:
         """Apply one fault to the next recall only."""
@@ -377,7 +394,26 @@ class FakeHindsightServer:
 
     async def _profile(self, request: web.Request) -> web.Response:
         await self._record(request)
-        return web.json_response(self._profile_response(self._bank_id, "Fixture bank"))
+        fault = self._next_profile_fault
+        self._next_profile_fault = None
+        if fault == "not_found":
+            return web.Response(status=404)
+        if fault == "http_401":
+            return web.Response(status=401)
+        if fault == "http_403":
+            return web.Response(status=403)
+        if fault == "http_500":
+            return web.Response(status=500, text=self._error_sentinel)
+        if fault == "malformed_json":
+            return web.Response(
+                text=f"{self._error_sentinel}{{",
+                content_type="application/json",
+            )
+        if fault == "malformed_schema":
+            return web.json_response({"bank_id": {"invalid": self._error_sentinel}})
+        if self._profile_name is None:
+            return web.Response(status=404)
+        return web.json_response(self._profile_response(self._bank_id, self._profile_name))
 
     async def _recall(self, request: web.Request) -> web.Response:
         await self._record(request)
@@ -562,12 +598,19 @@ class FakeHindsightServer:
         json_body = await self._record(request)
         if not isinstance(json_body, dict):
             raise web.HTTPBadRequest(text="Fake Hindsight expected a JSON object.")
-        return web.json_response(
-            self._profile_response(self._disposable_bank_id, "Disposable fixture bank")
-        )
+        name = json_body.get("name")
+        if name is None:
+            name = "Disposable fixture bank"
+        elif not isinstance(name, str) or not name:
+            raise web.HTTPBadRequest(text="Fake Hindsight expected a bank name.")
+        if self._bank_id == self._disposable_bank_id:
+            self._profile_name = name
+        return web.json_response(self._profile_response(self._disposable_bank_id, name))
 
     async def _delete_disposable(self, request: web.Request) -> web.Response:
         await self._record(request)
+        if self._bank_id == self._disposable_bank_id:
+            self._profile_name = None
         return web.json_response({"success": True})
 
     @staticmethod
