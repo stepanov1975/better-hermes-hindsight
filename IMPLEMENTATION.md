@@ -8,14 +8,18 @@ cannot restart abandoned work.
 
 - Canonical plan: `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
 - Canonical-plan SHA-256:
-  `4bf8fbe88913e1adbc13d321e831a000a5c1da03d6c8d54cf554d184d3a32fa7`
-- Last completed code checkpoint: `883ef6c` (`feat: add host-managed plugin installation`)
-- Plan state: Tasks 0–5 complete; the initial Task 6 isolated proof ran and its review findings are
-  pending closure/checkpoint
+  `ca25434f51ff737745cb398be1b8e5f6b8937a05a932d5e406c4303fb7cab8a9`
+- Last completed code checkpoint: `3f542d4` (`test: close Task 6 proof checkpoint`)
+- Plan state: Tasks 0–6 complete; the rolling Hermes compatibility/release rebaseline required before
+  Task 7 is in progress
 - Completed Task 5 scope: remote segment reconstruction metadata plus a thin root plugin layout for
   the released Hermes Git plugin lifecycle
-- Next action: close Task 6 findings, verify the corrected candidate, and obtain an independent clean
-  re-review; do not repeat the live node without a changed candidate and renewed explicit authorization
+- Current release blocker: Hermes `v2026.8.3` pins `cryptography==48.0.1`; its supported-host audit
+  reports `PYSEC-2026-3552`, `PYSEC-2026-3553`, and `PYSEC-2026-3554`, while Better Hindsight's
+  runtime/build manifest audit is clean
+- Next action: finish independent review and checkpoint the honest rebaseline locally without pushing;
+  do not start Task 7 or public-release work until a supported Hermes release clears the unsuppressed
+  combined-environment security gate
 
 ## Completed foundation
 
@@ -76,10 +80,15 @@ semantic change is valid.
 Task 6 uses one bounded usefulness and retained-source proof against an operator-supplied dedicated
 Hermes interpreter/profile plus isolated Hindsight 0.8.5 development instance and generated bank. The
 initial run used only synthetic data, removed its generated bank, and left an authenticated bank count
-of zero; independent review findings are being closed before checkpoint.
+of zero; its reviewed checkpoint is `3f542d4`.
 Profile isolation alone does not isolate the exact Hindsight SDK. The proof must not add repeated-run
 aggregation, a ranking framework, or release thresholds. Publication, production canary activation,
 migration, reconstruction, pruning, and deletion remain separately authorized work.
+
+Before Task 7, Hermes compatibility is a rolling CI-selected host contract. The current stable release
+is the required lifecycle/security lane; Hermes 0.19.0 remains non-blocking historical characterization.
+No published dependency group includes `hermes-agent`, and package/runtime audits are separate from
+audits of actively supported Hermes compatibility environments.
 
 ## Operational ownership
 

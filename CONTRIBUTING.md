@@ -6,22 +6,25 @@ diffs narrow, and do not claim production readiness from mocked tests alone.
 ## Development setup
 
 ```bash
-uv sync --extra dev --extra proof
+uv sync --extra dev
 ```
 
 Run before submitting changes:
 
 ```bash
 uv lock --check
-uv run --extra dev --extra proof python -m pytest
-uv run --extra dev --extra proof python -m ruff check .
-uv run --extra dev --extra proof python -m ruff format --check .
-uv run --extra dev --extra proof python -m mypy
+uv run --extra dev python -m ruff check .
+uv run --extra dev python -m ruff format --check .
+uv run --extra dev python -m mypy
 rm -rf dist
-uv run --extra dev --extra proof python -m build
-uv run --extra dev --extra proof python -m twine check dist/*
+uv run --extra dev python -m build
+uv run --extra dev python -m twine check dist/*
 git diff --check
 ```
+
+All tests require a Hermes host selected exactly as the rolling matrix in `.github/workflows/ci.yml`;
+the repository root imports the host plugin API. Hermes is not a published optional dependency of
+this package.
 
 ## Engineering rules
 

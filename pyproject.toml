@@ -23,9 +23,6 @@ classifiers = [
 dependencies = ["hindsight-client==0.8.5"]
 
 [project.optional-dependencies]
-proof = [
-  "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git@3ef6bbd201263d354fd83ec55b3c306ded2eb72a",
-]
 dev = [
   "build>=1.3,<2",
   "markdown-it-py>=4.2,<5",

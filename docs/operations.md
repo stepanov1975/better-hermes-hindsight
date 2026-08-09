@@ -3,7 +3,7 @@
 Better Hermes Hindsight is still pre-alpha. Sender delivery and host-managed installation are
 implemented and covered by deterministic fake-service and released-Hermes tests. An initial opt-in
 isolated proof ran once with synthetic data and ended with its generated bank absent; review findings
-are under closure before checkpoint. The live node in
+were closed at checkpoint `3f542d4`. The live node in
 [development-instance.md](development-instance.md) is not an operator next action and requires renewed
 explicit authorization after any candidate change. Automatic retention remains disabled by default.
 Do not enable this repository in a production Hermes profile.

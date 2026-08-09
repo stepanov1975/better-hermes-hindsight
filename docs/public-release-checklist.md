@@ -6,8 +6,8 @@ candidate. Publication and production rollout require separate owner approval.
 
 ## Best-effort product contract
 
-- [ ] The package installs and runs on unmodified released Hermes `v2026.7.20` / package 0.19.0,
-      with no Hermes core patch or patched SHA.
+- [ ] The package installs and runs on the current stable Hermes release selected by the rolling
+      compatibility policy, with no Hermes core patch or Better-owned host fork.
 - [ ] Provider identity is only `better_hindsight`; bundled `hindsight` remains selectable and
       untouched.
 - [ ] Current-query recall is bounded, fail-open, redacted, and enabled by default in the normal
@@ -22,8 +22,8 @@ candidate. Publication and production rollout require separate owner approval.
       never invokes or local admissions that fail.
 - [ ] The callback path performs only bounded local construction and one atomic SQLite transaction;
       it makes no Hindsight request and does not wait for remote drain.
-- [ ] `codex_app_server` remains unsupported for Better Hindsight memory behavior on the pinned
-      release.
+- [ ] `codex_app_server` remains explicitly unsupported for Better Hindsight memory behavior on the
+      current supported release.
 - [ ] No model-facing memory tools ship in the first prerelease.
 
 ## Queue and remote delivery
@@ -127,28 +127,28 @@ candidate. Publication and production rollout require separate owner approval.
 - [ ] Released `hermes plugins remove` owns only the Git plugin directory; profile configuration,
       Python packages, outbox data, and remote bank data remain outside that ownership.
 
-## Task 6 checkpoint-only dependency-audit exception
+## Rolling compatibility and dependency audits
 
-The owner authorized a narrow exception on 2026-08-07 so Task 6 may receive a local code checkpoint.
-It expires on 2026-09-06, or earlier when a fixed released Hermes version is available. It does not
-authorize public release, package publication, production activation, another live proof, or bypassing
-any other gate.
+The release uses a rolling compatibility policy. Hermes is a host application selected by CI, not a
+published extra and not a runtime prerequisite. The current stable Hermes release is the required lane;
+Hermes 0.19.0 remains a non-blocking historical characterization lane only. Its old audit findings
+remain historical evidence and do not block a release that supports and cleanly audits the current host.
 
-- The runtime/build requirement audit is clean. Findings occur only through the optional proof extra
-  required to exercise released Hermes 0.19.0.
-- `hermes-agent==0.19.0` has `PYSEC-2026-3576` and `PYSEC-2026-3577`, with no fixed released version.
-- Its exact transitive pins select `cryptography==46.0.7` (four findings; the strictest listed fix is
-  `50.0.0`) and `Pillow==12.2.0` (listed fixes require `12.3.0`). Those versions cannot be raised while
-  retaining the required released-Hermes proof boundary.
-- The proof used only fixed synthetic data in an isolated instance; the generated bank, Compose
-  project, volumes, network, profile secrets, reviewed wheel archive, and temporary files were removed.
-- Re-run the complete audit when the exception expires or a fixed Hermes release appears. Public
-  release remains blocked until the complete dependency audit passes without this exception.
+- [ ] The Better Hindsight runtime/package dependencies pass their own audit.
+- [ ] Every actively supported Hermes compatibility environment passes a separate full-environment
+      audit and lifecycle suite.
+- [ ] Clear the current supported-host audit blocker: Hermes `v2026.8.3` pins
+      `cryptography==48.0.1`, which reports `PYSEC-2026-3552`, `PYSEC-2026-3553`, and
+      `PYSEC-2026-3554`. Do not allowlist or override these findings for public release.
+- [ ] Historical-host findings are documented as evidence about that unsupported host and are not
+      silently waived as findings in Better's distributable package.
+- [ ] A new stable Hermes release updates the supported lane, or the documented minimum version is
+      raised, before public release.
 
 ## Compatibility and artifacts
 
-- [ ] Supported Hermes, Hindsight server/client, Python, and POSIX platform versions are documented
-      and tested.
+- [ ] The current stable Hermes release, historical characterization lanes, Hindsight server/client,
+      Python, and POSIX platform versions are documented and tested.
 - [ ] Imports, discovery, availability checks, and configuration loading perform no network call,
       package installation, bank mutation, or service restart.
 - [ ] Host-managed Git plugin installation and fresh-process provider/CLI discovery pass in a
@@ -167,7 +167,7 @@ any other gate.
 - [ ] README, design, configuration, compatibility, operations, rollback, examples, release notes,
       and generated diagnostics agree on the best-effort boundary.
 - [ ] `uv lock --check`, full pytest, Ruff lint, Ruff formatting, mypy, build, Twine, archive
-      inspection, fresh installs, released-Hermes integration, fake-server faults, explicitly enabled
+      inspection, fresh installs, the rolling compatibility matrix, fake-server faults, explicitly enabled
       isolated live proof, security scans, and `git diff --check` pass on one stable candidate.
 - [ ] CI and security workflows pass for the exact release commit.
 - [ ] Dependabot alerts and dependency review are clear or explicitly resolved.

@@ -15,9 +15,8 @@ from pathlib import Path
 import pytest
 
 import better_hermes_hindsight.hermes_plugin as packaged_plugin
+from tests.hermes_compat import EXPECTED_HERMES_COMMIT, EXPECTED_HERMES_VERSION
 
-RELEASE_COMMIT = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
-RELEASE_VERSION = "0.19.0"
 SHIM_FILES = ("__init__.py", "cli.py", "plugin.yaml")
 FIXTURE_BANK_ID = "operator-cli-fixture-bank"
 FIXTURE_API_KEY = "synthetic-operator-cli-api-key"
@@ -46,16 +45,17 @@ import sys
 import threading
 from importlib import metadata
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
-mode = sys.argv[1]
-expected_home = Path(sys.argv[2]).resolve()
+release_commit = sys.argv[1]
+release_version = sys.argv[2]
+mode = sys.argv[3]
+expected_home = Path(sys.argv[4]).resolve()
 expected_outbox = (expected_home / "better_hindsight" / "outbox.sqlite3").resolve()
-expect_discovery = sys.argv[3] == "1"
-command_argv = sys.argv[4:]
+expect_discovery = sys.argv[5] == "1"
+command_argv = sys.argv[6:]
 sys.argv = ["hermes", *command_argv]
 
-release_commit = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
-release_version = "0.19.0"
 fixture_bank_id = "operator-cli-fixture-bank"
 desired_retain = "Retain exact synthetic operator preferences."
 desired_observations = "Observe exact synthetic operator patterns."
@@ -64,8 +64,21 @@ failure_sentinel = "synthetic-cli-runtime-failure-must-not-leak"
 release = metadata.distribution("hermes-agent")
 assert release.version == release_version
 direct_url_text = release.read_text("direct_url.json")
-assert direct_url_text is not None
-assert json.loads(direct_url_text)["vcs_info"]["commit_id"] == release_commit
+if release_commit:
+    assert direct_url_text is not None
+    assert json.loads(direct_url_text).get("vcs_info", {}).get("commit_id") == release_commit
+
+
+def release_path(relative_path):
+    files = release.files or ()
+    entry = next((item for item in files if str(item) == relative_path), None)
+    if entry is not None:
+        return Path(str(release.locate_file(entry))).resolve()
+    assert direct_url_text is not None
+    direct_url = json.loads(direct_url_text)
+    assert direct_url.get("dir_info", {}).get("editable") is True
+    source_root = Path(unquote(urlsplit(direct_url["url"]).path))
+    return (source_root / relative_path).resolve()
 
 
 def forbidden_network(*_args, **_kwargs):
@@ -99,11 +112,8 @@ sys.addaudithook(audit_plugin_config)
 import hermes_cli.main as released_main
 
 main_source = inspect.getsourcefile(released_main)
-release_files = release.files
 assert main_source is not None
-assert release_files is not None
-main_entry = next(entry for entry in release_files if str(entry) == "hermes_cli/main.py")
-assert Path(main_source).resolve() == Path(str(release.locate_file(main_entry))).resolve()
+assert Path(main_source).resolve() == release_path("hermes_cli/main.py")
 assert Path(os.environ["HERMES_HOME"]).resolve() == expected_home
 
 
@@ -470,6 +480,8 @@ def _run_released_cli(
             sys.executable,
             "-c",
             _RELEASED_CLI_SCRIPT,
+            EXPECTED_HERMES_COMMIT,
+            EXPECTED_HERMES_VERSION,
             mode,
             str(expected_home),
             "1" if expect_discovery else "0",

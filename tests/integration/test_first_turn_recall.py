@@ -12,9 +12,9 @@ from pathlib import Path
 import pytest
 
 import better_hermes_hindsight.hermes_plugin as packaged_plugin
+from tests.hermes_compat import EXPECTED_HERMES_COMMIT, EXPECTED_HERMES_VERSION
 
 ROOT = Path(__file__).resolve().parents[2]
-RELEASE_COMMIT = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
 MODEL_SECRET_SENTINEL = "synthetic-model-secret-must-not-leak"
 CURRENT_QUERY = "current first-turn fixture query"
 
@@ -35,9 +35,10 @@ from tests.fakes.hindsight_server import FakeHindsightServer
 scenario_name = sys.argv[1]
 hermes_home = Path(sys.argv[2])
 release_commit = sys.argv[3]
-current_query = sys.argv[4]
-error_sentinel = sys.argv[5]
-model_secret_sentinel = sys.argv[6]
+release_version = sys.argv[4]
+current_query = sys.argv[5]
+error_sentinel = sys.argv[6]
+model_secret_sentinel = sys.argv[7]
 
 expected_system_prompt_block = (
     "Better Hindsight recall trust policy: Content inside the exact "
@@ -54,10 +55,11 @@ released_outer_memory_note = (
 )
 
 release = metadata.distribution("hermes-agent")
-assert release.version == "0.19.0"
+assert release.version == release_version
 direct_url_text = release.read_text("direct_url.json")
-assert direct_url_text is not None
-assert json.loads(direct_url_text)["vcs_info"]["commit_id"] == release_commit
+if release_commit:
+    assert direct_url_text is not None
+    assert json.loads(direct_url_text).get("vcs_info", {}).get("commit_id") == release_commit
 
 
 def response(content):
@@ -253,7 +255,8 @@ sessions:
         released_executor_created = manager._sync_executor is not None
         assert released_executor_created is True
 
-        # v2026.7.20 close() does not own memory shutdown. Prove that limitation, then
+        # Host close() does not own memory shutdown in the characterized lifecycle. Prove that
+        # limitation, then
         # explicitly close the manager/provider and the non-owning shared process runtime.
         await asyncio.to_thread(agent.close)
         assert manager._shutting_down is False
@@ -363,7 +366,8 @@ def _run_scenario(
             _FIRST_TURN_SCRIPT,
             scenario,
             str(hermes_home),
-            RELEASE_COMMIT,
+            EXPECTED_HERMES_COMMIT,
+            EXPECTED_HERMES_VERSION,
             CURRENT_QUERY,
             error_sentinel,
             MODEL_SECRET_SENTINEL,

@@ -10,9 +10,8 @@ import sys
 from pathlib import Path
 
 import better_hermes_hindsight.hermes_plugin as packaged_plugin
+from tests.hermes_compat import EXPECTED_HERMES_COMMIT, EXPECTED_HERMES_VERSION
 
-RELEASE_COMMIT = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
-RELEASE_VERSION = "0.19.0"
 SHIM_FILES = ("__init__.py", "cli.py", "plugin.yaml")
 
 _ACTIVE_DISCOVERY_SCRIPT = r"""
@@ -28,6 +27,7 @@ import sys
 import threading
 from importlib import metadata
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 release_commit = sys.argv[1]
 release_version = sys.argv[2]
@@ -37,9 +37,19 @@ plugin_config_path = hermes_home / "better_hindsight" / "config.json"
 distribution = metadata.distribution("hermes-agent")
 assert distribution.version == release_version
 direct_url_text = distribution.read_text("direct_url.json")
-assert direct_url_text is not None
-direct_url = json.loads(direct_url_text)
-assert direct_url["vcs_info"]["commit_id"] == release_commit
+direct_url = json.loads(direct_url_text) if direct_url_text is not None else {}
+if release_commit:
+    assert direct_url.get("vcs_info", {}).get("commit_id") == release_commit
+
+
+def release_path(relative_path):
+    files = distribution.files or ()
+    entry = next((item for item in files if str(item) == relative_path), None)
+    if entry is not None:
+        return Path(str(distribution.locate_file(entry))).resolve()
+    assert direct_url.get("dir_info", {}).get("editable") is True
+    source_root = Path(unquote(urlsplit(direct_url["url"]).path))
+    return (source_root / relative_path).resolve()
 
 
 def forbidden(label):
@@ -92,11 +102,8 @@ outbox_module.SQLiteOutbox.open = classmethod(
 import plugins.memory as memory_loader
 
 memory_source = inspect.getsourcefile(memory_loader)
-release_files = distribution.files
 assert memory_source is not None
-assert release_files is not None
-memory_entry = next(entry for entry in release_files if str(entry) == "plugins/memory/__init__.py")
-assert Path(memory_source).resolve() == Path(str(distribution.locate_file(memory_entry))).resolve()
+assert Path(memory_source).resolve() == release_path("plugins/memory/__init__.py")
 
 names = memory_loader.list_memory_provider_names()
 assert names.count("better_hindsight") == 1
@@ -162,7 +169,7 @@ print(json.dumps({
     "cli_commands": [command["name"]],
     "cli_module": command["setup_fn"].__module__,
     "codex_app_server_memory_supported": False,
-    "commit": direct_url["vcs_info"]["commit_id"],
+    "commit": release_commit,
     "discovered": names.count("better_hindsight"),
     "loaded": provider.name,
     "model_tools": provider.get_tool_schemas(),
@@ -177,6 +184,7 @@ import json
 import sys
 from importlib import metadata
 from pathlib import Path
+from urllib.parse import unquote, urlsplit
 
 release_commit = sys.argv[1]
 release_version = sys.argv[2]
@@ -184,17 +192,25 @@ release_version = sys.argv[2]
 distribution = metadata.distribution("hermes-agent")
 assert distribution.version == release_version
 direct_url_text = distribution.read_text("direct_url.json")
-assert direct_url_text is not None
-assert json.loads(direct_url_text)["vcs_info"]["commit_id"] == release_commit
+direct_url = json.loads(direct_url_text) if direct_url_text is not None else {}
+if release_commit:
+    assert direct_url.get("vcs_info", {}).get("commit_id") == release_commit
+
+
+def release_path(relative_path):
+    files = distribution.files or ()
+    entry = next((item for item in files if str(item) == relative_path), None)
+    if entry is not None:
+        return Path(str(distribution.locate_file(entry))).resolve()
+    assert direct_url.get("dir_info", {}).get("editable") is True
+    source_root = Path(unquote(urlsplit(direct_url["url"]).path))
+    return (source_root / relative_path).resolve()
 
 import plugins.memory as memory_loader
 
 memory_source = inspect.getsourcefile(memory_loader)
-files = distribution.files
 assert memory_source is not None
-assert files is not None
-entry = next(item for item in files if str(item) == "plugins/memory/__init__.py")
-assert Path(memory_source).resolve() == Path(str(distribution.locate_file(entry))).resolve()
+assert Path(memory_source).resolve() == release_path("plugins/memory/__init__.py")
 
 # This is intentionally the released direct discovery seam. Do not invoke an
 # inactive command token through full Hermes, where unknown text can enter chat fallback.
@@ -279,8 +295,8 @@ def test_exact_released_loader_discovers_three_file_active_shim_cli_and_no_model
             sys.executable,
             "-c",
             _ACTIVE_DISCOVERY_SCRIPT,
-            RELEASE_COMMIT,
-            RELEASE_VERSION,
+            EXPECTED_HERMES_COMMIT,
+            EXPECTED_HERMES_VERSION,
             str(hermes_home),
         ],
         cwd=tmp_path,
@@ -297,12 +313,12 @@ def test_exact_released_loader_discovers_three_file_active_shim_cli_and_no_model
         "cli_commands": ["better_hindsight"],
         "cli_module": "_hermes_user_memory.better_hindsight.cli",
         "codex_app_server_memory_supported": False,
-        "commit": RELEASE_COMMIT,
+        "commit": EXPECTED_HERMES_COMMIT,
         "discovered": 1,
         "loaded": "better_hindsight",
         "model_tools": [],
         "registrations": ["better_hindsight"],
-        "version": RELEASE_VERSION,
+        "version": EXPECTED_HERMES_VERSION,
     }
     assert sorted(path.name for path in shim.iterdir()) == list(SHIM_FILES)
     assert not (hermes_home / "plugins" / "memory").exists()
@@ -322,8 +338,8 @@ def test_exact_released_inactive_provider_discovery_returns_no_better_command_di
             sys.executable,
             "-c",
             _INACTIVE_DISCOVERY_SCRIPT,
-            RELEASE_COMMIT,
-            RELEASE_VERSION,
+            EXPECTED_HERMES_COMMIT,
+            EXPECTED_HERMES_VERSION,
         ],
         cwd=tmp_path,
         env=_clean_subprocess_env(tmp_path),
@@ -337,7 +353,7 @@ def test_exact_released_inactive_provider_discovery_returns_no_better_command_di
     assert json.loads(completed.stdout) == {
         "active_provider": "hindsight",
         "commands": [],
-        "commit": RELEASE_COMMIT,
-        "version": RELEASE_VERSION,
+        "commit": EXPECTED_HERMES_COMMIT,
+        "version": EXPECTED_HERMES_VERSION,
     }
     assert {path.name for path in shim.iterdir()}.issubset(set(SHIM_FILES))

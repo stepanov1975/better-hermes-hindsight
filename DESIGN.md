@@ -123,8 +123,9 @@ SQLite, locks, clients, or sender state.
 
 ## Supported and unsupported runtime paths
 
-The supported host path is the normal conversation loop in released Hermes `v2026.7.20` / package
-0.19.0. `codex_app_server` is unsupported on the pinned release because it bypasses normal provider
+The supported host path is the normal conversation loop in the current stable Hermes release selected
+by the rolling compatibility matrix. Hermes 0.19.0 remains historical characterization, not a runtime
+prerequisite. `codex_app_server` is unsupported because it bypasses normal provider
 context and does not expose this provider's lifecycle behavior. Windows sender election, cloud
 Hindsight, embedded-daemon management, and multi-user routing are also outside the first prerelease.
 
@@ -149,8 +150,8 @@ preserving the old deployment. The old Hermes installation, provider configurati
 bank remain intact as the rollback source. Prerelease proof does not migrate, copy, rebuild,
 deduplicate, reconsolidate, prune, or delete existing data.
 
-Rollback preserves the Better outbox plus both banks, but it is not configuration-only in released
-Hermes 0.19.0. The operator stops every process sharing the interpreter, selects bundled `hindsight`
+Rollback preserves the Better outbox plus both banks, but it is not configuration-only in the supported
+Hermes environment. The operator stops every process sharing the interpreter, selects bundled `hindsight`
 for the target named profile, removes that profile's host-owned Git plugin, uses `uv` to remove the
 Better wheel and restore exact `hindsight-client==0.6.1`, then restarts only compatible profiles and
 verifies recall without lazy installation. Returning to Better reverses the exact package/profile

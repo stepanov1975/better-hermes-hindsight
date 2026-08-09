@@ -1,8 +1,10 @@
 # Installation
 
-Better Hermes Hindsight targets released Hermes Agent 0.19.0 and an external/self-hosted Hindsight
-0.8.5 service. This is a prerelease workflow. Do not use it on a production profile before the
-isolated Task 6 proof is complete.
+Better Hermes Hindsight targets the current stable Hermes Agent release selected by the rolling
+compatibility policy (`v2026.8.3`, package metadata 0.20.0) and an external/self-hosted Hindsight
+0.8.5 service. This is a development-only prerelease workflow. The isolated Task 6 proof is complete
+at checkpoint `3f542d4`, but production use and public release remain blocked by the current
+supported-host security audit documented in [audit-findings.md](audit-findings.md).
 
 ## Ownership and isolation model
 
@@ -22,7 +24,7 @@ need an incompatible provider/SDK must remain stopped.
 
 ## Prerequisites
 
-- standard Hermes Agent 0.19.0 installation;
+- standard current stable Hermes Agent installation;
 - `uv` available on `PATH`;
 - a built Better Hermes Hindsight wheel from the reviewed commit;
 - the Git URL for that same reviewed commit;

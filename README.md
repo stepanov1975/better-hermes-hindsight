@@ -5,15 +5,17 @@
 
 Better Hermes Hindsight is an unofficial Hermes memory provider for external/self-hosted Hindsight.
 The provider ID is `better_hindsight`, deliberately distinct from bundled `hindsight` so rollback
-does not require a data migration. On released Hermes 0.19.0 it is not configuration-only: Better
+does not require a data migration. On the current supported Hermes release it is not configuration-only: Better
 requires `hindsight-client==0.8.5`, while bundled `hindsight` requires exact `0.6.1`, so switching
 providers also requires the documented stopped-process package-version transition.
 
-> **Status: pre-alpha.** Tasks 0–5 are complete. An initial Task 6 proof ran once against a dedicated
+> **Status: pre-alpha.** Tasks 0–6 are complete at checkpoint `3f542d4`. The Task 6 proof ran once against a dedicated
 > Hermes 0.19.0 interpreter and isolated Hindsight 0.8.5 instance using only synthetic data; its
-> generated bank was removed and an authenticated post-run listing found zero banks. Independent
-> findings are under closure before the Task 6 checkpoint. The live node is not an operator next action
-> and must not be rerun without a changed candidate plus renewed explicit authorization. The plugin
+> generated bank was removed and an authenticated post-run listing found zero banks. Its independent
+> findings were closed. The rolling compatibility/release rebaseline is in progress, and public
+> release is blocked by the unsuppressed current-Hermes security audit. The live node is not an operator
+> next action and must not be rerun without a changed candidate plus renewed explicit authorization.
+> The plugin
 > preserves multi-segment reconstruction metadata and installs through Hermes's released Git-plugin
 > lifecycle; no custom installer or package manager ships. Do not install or select this project in a
 > production Hermes profile. Read [IMPLEMENTATION.md](IMPLEMENTATION.md) before changing code; it
@@ -37,8 +39,10 @@ criteria. It is not universally better than official Hermes or Hindsight.
 
 ## Honest best-effort boundary
 
-The product has **no Hermes-core prerequisite**. It uses the public lifecycle in released Hermes
-`v2026.7.20` / package 0.19.0. Automatic retention uses released `sync_turn()` best-effort semantics:
+The product has **no Hermes-core prerequisite**. A rolling compatibility matrix exercises the public
+lifecycle in the current stable Hermes release while retaining 0.19.0 as historical characterization.
+Hermes is the host, not a package dependency or runtime prerequisite. Automatic retention uses
+released `sync_turn()` best-effort semantics:
 Hermes schedules the callback on its memory worker, and Better Hindsight does short local work only
 after that callback starts.
 
@@ -51,7 +55,7 @@ not claim exactly-once transport. Every remote segment also carries string metad
 schema, source digest, segment index, and segment count so a long source remains reconstructable
 after its completed local outbox rows are deleted.
 
-`codex_app_server` is unsupported on the pinned release because that runtime bypasses normal provider
+`codex_app_server` is unsupported because that runtime bypasses normal provider
 memory behavior. No model-facing memory tools in the first prerelease are registered; recall is
 automatic context and mission changes require an explicit operator command.
 
@@ -102,7 +106,7 @@ Hermes-managed plugin installation uses the released host lifecycle: the reposit
 manifest and thin provider/CLI bridges consumed by `hermes plugins install|update|remove`. No custom
 installer, transaction tree, tombstone, quarantine, or package rollback engine is part of this
 project. `uv` owns the Python wheel and exact Hindsight SDK while every Hermes process sharing the
-interpreter is stopped, because released Hermes 0.19.0 cannot run Better's
+interpreter is stopped, because the supported Hermes environment cannot run Better's
 `hindsight-client==0.8.5` and the bundled provider's exact `0.6.1` in one interpreter at the same
 time. A profile scopes config and data, not packages.
 
@@ -130,7 +134,8 @@ product-aligned Task 5 scope. Never infer implementation requirements from a ret
 proof wording, or cached review transcript. The separate Hermes-core worktree is frozen research and
 must not be imported, installed, committed, or treated as a prerequisite.
 
-The exact version/source observations are in [docs/compatibility.md](docs/compatibility.md). Sender
+The rolling compatibility policy and historical version/source observations are in
+[docs/compatibility.md](docs/compatibility.md). Sender
 recovery, retry, and shutdown semantics are in [docs/operations.md](docs/operations.md). Sanitized
 operational aggregates and their limited interpretation are in
 [docs/audit-findings.md](docs/audit-findings.md).
@@ -140,13 +145,15 @@ operational aggregates and their limited interpretation are in
 Requires Python 3.11-3.13 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-uv sync --extra dev --extra proof
-uv run --frozen --extra dev --extra proof python -m pytest
-uv run --frozen --extra dev --extra proof python -m ruff check .
-uv run --frozen --extra dev --extra proof python -m ruff format --check .
-uv run --frozen --extra dev --extra proof python -m mypy
-uv run --frozen --extra dev --extra proof python -m build
+uv sync --extra dev
+uv run --frozen --extra dev python -m ruff check .
+uv run --frozen --extra dev python -m ruff format --check .
+uv run --frozen --extra dev python -m mypy
+uv run --frozen --extra dev python -m build
 ```
+
+All tests run in CI's selected Hermes compatibility environments rather than via a published `proof`
+extra; the repository root is itself the Hermes plugin bridge and therefore imports the host API.
 
 Read [IMPLEMENTATION.md](IMPLEMENTATION.md), then [CONTRIBUTING.md](CONTRIBUTING.md) and
 [DESIGN.md](DESIGN.md), before changing code.

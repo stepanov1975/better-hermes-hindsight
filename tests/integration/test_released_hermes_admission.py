@@ -7,12 +7,11 @@ import json
 import socket
 import threading
 from collections.abc import Mapping
-from importlib import metadata
 from pathlib import Path
 from typing import Any, NoReturn
 
 import pytest
-from agent.memory_manager import MemoryManager  # type: ignore[import-untyped]
+from agent.memory_manager import MemoryManager  # type: ignore[import-not-found]
 
 from better_hermes_hindsight.client import (
     RetainConfirmation,
@@ -28,9 +27,8 @@ from better_hermes_hindsight.runtime import (
     finalize_process_runtime,
     reset_process_runtime_for_tests,
 )
+from tests.hermes_compat import assert_selected_hermes
 
-RELEASE_COMMIT = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
-RELEASE_VERSION = "0.19.0"
 RAW_MESSAGE_SENTINEL = "synthetic-raw-message-must-be-ignored"
 
 
@@ -165,11 +163,7 @@ def test_released_memory_manager_runs_callback_asynchronously_before_local_durab
     commits. A callback cancelled, never run, or lost before commit remains outside the guarantee.
     """
 
-    release = metadata.distribution("hermes-agent")
-    assert release.version == RELEASE_VERSION
-    direct_url_text = release.read_text("direct_url.json")
-    assert direct_url_text is not None
-    assert json.loads(direct_url_text)["vcs_info"]["commit_id"] == RELEASE_COMMIT
+    assert_selected_hermes()
 
     reset_process_runtime_for_tests()
     hermes_home = tmp_path / "hermes-home"

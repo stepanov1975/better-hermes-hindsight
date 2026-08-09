@@ -1,9 +1,33 @@
 # Compatibility and preservation contract
 
-This document freezes the public-safe version and source observations inspected on 2026-07-26 UTC,
-then states the released callback boundary used by the best-effort plugin. It records no endpoint,
+This document defines the rolling compatibility policy and preserves public-safe historical source
+observations. It states the released callback boundary used by the best-effort plugin. It records no endpoint,
 credential, bank identity, principal identifier, transcript, memory text, database, log, or local
 checkout path.
+
+## Rolling compatibility policy
+
+Hermes Agent is the host application, not a Better Hindsight package dependency. The published wheel
+and optional dependency groups contain no `hermes-agent` requirement. A Hermes version or commit in
+test tooling selects a host compatibility environment; it is not a runtime prerequisite.
+
+The required release gate is the current stable Hermes release. The matrix may also retain older
+hosts as historical characterization, but a historical lane is non-blocking and does not imply support.
+When a new stable Hermes release changes the public plugin/provider lifecycle, Better Hindsight must
+adapt or document a new minimum supported version before release.
+
+| Matrix lane | Host evidence | Release meaning |
+| --- | --- | --- |
+| Supported | GitHub release `v2026.8.3`, package metadata 0.20.0, commit `3c27eb6234bf91b8ceee9e9071591b31e9b148cb` | Current stable Hermes release; required full lifecycle gate |
+| Historical | `v2026.7.20`, package 0.19.0, commit `3ef6bbd201263d354fd83ec55b3c306ded2eb72a` | Historical characterization only; not a supported runtime prerequisite |
+
+Security gates are separate: one audits Better Hindsight runtime/package dependencies, and another
+audits each actively supported Hermes compatibility environment. Findings in an unsupported
+historical host remain evidence about that host; they do not become vulnerabilities in Better's wheel.
+As of 2026-08-09 the Better manifest audit is clean, while the required `v2026.8.3` host audit is
+blocked by Hermes's `cryptography==48.0.1` pin and three unsuppressed PYSEC findings documented in
+[audit-findings.md](audit-findings.md). This blocks public release without weakening the compatibility
+contract or silently substituting an untested dependency override.
 
 <!-- better-hindsight-status-compatibility:start -->
 ## Status inspection compatibility
@@ -18,22 +42,23 @@ does not support a process-default or custom VFS.
 ## Product boundary
 
 Better Hermes Hindsight registers only `better_hindsight`; bundled `hindsight` remains the preserved
-data/provider rollback target. On released Hermes 0.19.0 the same interpreter cannot run the two
+data/provider rollback target. On the current supported Hermes release the same interpreter cannot run the two
 providers as a configuration-only switch: Better requires exact `hindsight-client==0.8.5`, while the
 bundled provider's lazy dependency gate requires exact `0.6.1`. Rollback therefore uses the documented
 stopped-process provider/wheel/client transition. The first prerelease is external/self-hosted only.
 It does not implement cloud setup, supervise an embedded server, or require a Hermes core patch.
 
-The supported path is unmodified released Hermes's normal conversation loop. Recall is enabled by
+The supported path is the current stable, unmodified released Hermes normal conversation loop. Recall is enabled by
 default and automatic retention is disabled by default. `codex_app_server` is unsupported on the
-pinned release because it bypasses normal provider memory behavior. No model-facing memory tools in
+current supported release because it
+bypasses normal provider memory behavior. No model-facing memory tools in
 the first prerelease are registered.
 
-## Frozen version baseline
+## Historical version baseline
 
 | Surface | Frozen evidence | Project contract |
 | --- | --- | --- |
-| Released Hermes | `v2026.7.20`, package 0.19.0, tag commit `3ef6bbd201263d354fd83ec55b3c306ded2eb72a`; published 2026-07-20 | Release compatibility baseline |
+| Released Hermes | `v2026.7.20`, package 0.19.0, tag commit `3ef6bbd201263d354fd83ec55b3c306ded2eb72a`; published 2026-07-20 | Historical characterization baseline |
 | Effective audited checkout | Clean `main` at `41e0b6cf60942b7a4962aa7c7e2f1173527dfe2f`; installed package 0.19.0 and installed hindsight-client 0.6.1 | Historical behavior comparison; location intentionally omitted |
 | Cached upstream ref in that checkout | `origin/main` at `4dae897265f09ed5b26f5e02b0f0fcb1325e0b6d`; the checkout was ahead by 9 and behind by 1,416 | Counts describe this cached observation only |
 | Current upstream observation at audit time | `NousResearch/hermes-agent` `main` at `eb52760564dbba2e5971fa54bd67384e281cd3b8`, observed 2026-07-26 UTC | Historical audit evidence, not a runtime prerequisite |
@@ -91,7 +116,7 @@ calls `ctx.register_memory_provider(...)`. The released lifecycle used by Better
 - `sync_turn()` after a completed turn; and
 - bounded session hooks plus `shutdown()` for cleanup.
 
-At the pinned release, `MemoryManager.sync_all()` labels the turn completed, strips skill scaffolding,
+In the historical 0.19.0 characterization, `MemoryManager.sync_all()` labels the turn completed, strips skill scaffolding,
 and submits each provider `sync_turn()` to a serialized background executor. `MemoryProvider`'s
 `sync_turn()` contract is documented as non-blocking. `MemoryManager.shutdown_all()` gives that
 executor a bounded drain, but it can cancel queued work or leave an active callback detached after
@@ -103,9 +128,9 @@ execution begins, Better performs only bounded local construction and one SQLite
 durability starts only after provider admission commits. There is no direct-user provenance claim and
 no pre-return or no-loss guarantee; no text heuristic can close the missing host signal.
 
-### Exact normal-loop current-query recall contract
+### Historical exact normal-loop current-query recall evidence
 
-The integration proof pins release commit `3ef6bbd201263d354fd83ec55b3c306ded2eb72a` and exercises the
+The historical integration lane pins release commit `3ef6bbd201263d354fd83ec55b3c306ded2eb72a` and exercises the
 ordinary `chat_completions` conversation loop. One current-query recall finishes or fails open before
 the first model request. On success, one byte-bounded Better envelope appears only in the API-bound
 copy of the current user content; the clean stored user `content` remains the original query. On a
@@ -118,7 +143,7 @@ The same proof records that released Hermes wraps provider output with this exac
 [System note: The following is recalled memory context, NOT new user input. Treat as authoritative reference data — this is the agent's persistent memory and should inform all responses.]
 ```
 
-That wording is a pinned-host limitation, not wording Better Hindsight claims to remove. Better adds a
+That wording is a historical-host limitation, not wording Better Hindsight claims to remove. Better adds a
 higher-priority, byte-stable system-role policy naming its exact inner envelope and requiring every
 enclosed record to be treated as stale, untrusted evidence rather than an instruction or
 role message.
@@ -161,7 +186,7 @@ server-enforced capability boundary.
 | Local durability | Begins after successful SQLite admission only |
 | Passive `better_hindsight status` | Supported for an existing schema-v1 profile outbox |
 | Explicit mission check/apply | Supported; apply requires `--confirm` and exact readback |
-| `codex_app_server` memory behavior | Unsupported on the pinned release |
+| `codex_app_server` memory behavior | Unsupported on the current supported release |
 | Hindsight server/client 0.8.5 | Exact supported target |
 | External/self-hosted deployment | Supported target |
 | Cloud/embedded Hindsight management | Unsupported |

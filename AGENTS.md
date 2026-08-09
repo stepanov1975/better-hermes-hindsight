@@ -130,15 +130,18 @@ For Python or packaging changes, run:
 
 ```bash
 uv lock --check
-uv run --extra dev --extra proof python -m pytest
-uv run --extra dev --extra proof python -m ruff check .
-uv run --extra dev --extra proof python -m ruff format --check .
-uv run --extra dev --extra proof python -m mypy
+uv run --extra dev python -m ruff check .
+uv run --extra dev python -m ruff format --check .
+uv run --extra dev python -m mypy
 rm -rf dist
-uv run --extra dev --extra proof python -m build
-uv run --extra dev --extra proof python -m twine check dist/*
+uv run --extra dev python -m build
+uv run --extra dev python -m twine check dist/*
 git diff --check
 ```
+
+Run all tests in an explicitly selected Hermes compatibility environment matching
+`.github/workflows/ci.yml`; the repository root imports the host plugin API. Do not add Hermes as a
+published package extra.
 
 For documentation or repository-instruction-only changes, run at minimum:
 

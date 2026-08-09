@@ -41,6 +41,19 @@ A small relevance trial found `min_scores.final = 0.10` removed every tested neg
 result set while preserving every tested initial positive operational case. This is a promising
 project-specific candidate to evaluate, not a justified universal default.
 
+## Current supported-host security gate
+
+A fresh 2026-08-09 `pip-audit` of Better Hindsight's runtime/build manifest found no known
+vulnerabilities. The separate combined environment for current Hermes release `v2026.8.3`
+(package 0.20.0) did not pass: Hermes pins `cryptography==48.0.1`, and the audit reports
+`PYSEC-2026-3552`, `PYSEC-2026-3553`, and `PYSEC-2026-3554`. The reported fixes require
+cryptography 49.0.0 or 50.0.0, outside that released host's exact dependency pin.
+
+This is an upstream supported-host release blocker, not a Better Hindsight wheel finding. There is
+no allowlist, dependency override, or checkpoint exception: public release remains blocked until a
+supported Hermes release resolves the findings and the combined-environment audit passes. The
+failing audit does not invalidate the passing provider-lifecycle compatibility tests.
+
 ## Active product disposition
 
 1. Preserve current-query first-turn recall with a bounded fail-open deadline. Recall is enabled by
@@ -80,7 +93,7 @@ Two former requirements are retained here only as design history:
   guarantee at its own successful admission after released Hermes executes the callback.
 
 These are superseded ideal requirements, not active release gates. The plugin has no Hermes-core
-prerequisite, `codex_app_server` is unsupported on the pinned release, and the product makes no
+prerequisite, `codex_app_server` is unsupported on the characterized host lifecycle, and the product makes no
 pre-callback losslessness claim.
 
 The active dispositions are requirements, not evidence that every planned retention component is

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 import pytest
-from agent.memory_manager import MemoryManager  # type: ignore[import-untyped]
+from agent.memory_manager import MemoryManager  # type: ignore[import-not-found]
 
 from better_hermes_hindsight.client import HINDSIGHT_SDK_VERSION
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
@@ -27,9 +27,8 @@ from better_hermes_hindsight.runtime import (
     reset_process_runtime_for_tests,
 )
 from tests.fakes.hindsight_server import FakeHindsightServer, RequestRecord
+from tests.hermes_compat import assert_selected_hermes, selected_distribution_file
 
-RELEASE_COMMIT = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
-RELEASE_VERSION = "0.19.0"
 FIXTURE_BANK_ID = "released-retention-fixture-bank"
 FIXTURE_API_KEY = "synthetic-released-retention-api-key"
 FIXTURE_ERROR_SENTINEL = "synthetic-released-retention-error"
@@ -138,19 +137,12 @@ async def _close_server(server: FakeHindsightServer) -> None:
 
 
 def _assert_pinned_release_identity() -> None:
-    release = metadata.distribution("hermes-agent")
-    assert release.version == RELEASE_VERSION
-    direct_url_text = release.read_text("direct_url.json")
-    assert direct_url_text is not None
-    assert json.loads(direct_url_text)["vcs_info"]["commit_id"] == RELEASE_COMMIT
+    release = assert_selected_hermes()
     assert MemoryManager.__module__ == "agent.memory_manager"
 
     source = inspect.getsourcefile(MemoryManager)
-    files = release.files
     assert source is not None
-    assert files is not None
-    source_entry = next(entry for entry in files if str(entry) == "agent/memory_manager.py")
-    assert Path(source).resolve() == Path(str(release.locate_file(source_entry))).resolve()
+    assert Path(source).resolve() == selected_distribution_file(release, "agent/memory_manager.py")
     assert metadata.version("hindsight-client") == HINDSIGHT_SDK_VERSION
 
 

@@ -50,7 +50,7 @@ HTTP mutation ledger, parent-timeout cleanup fallback, and sanitized subprocess 
 contacting a real service:
 
 ```bash
-uv run --extra dev --extra proof python -m pytest \
+<dedicated-hermes-python> -m pytest \
   tests/integration/test_isolated_hindsight.py -m 'not isolated_hindsight_live'
 ```
 
