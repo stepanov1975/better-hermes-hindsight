@@ -131,19 +131,23 @@ candidate. Publication and production rollout require separate owner approval.
 
 The release uses a rolling compatibility policy. Hermes is a host application selected by CI, not a
 published extra and not a runtime prerequisite. The current stable Hermes release is the required lane;
-Hermes 0.19.0 remains a non-blocking historical characterization lane only. Its old audit findings
-remain historical evidence and do not block a release that supports and cleanly audits the current host.
+Hermes 0.19.0 remains a non-blocking historical characterization lane only. Host findings remain
+upstream evidence and do not become vulnerabilities in Better Hindsight's distributable package.
 
-- [ ] The Better Hindsight runtime/package dependencies pass their own audit.
-- [ ] Every actively supported Hermes compatibility environment passes a separate full-environment
-      audit and lifecycle suite.
-- [ ] Clear the current supported-host audit blocker: Hermes `v2026.8.3` pins
-      `cryptography==48.0.1`, which reports `PYSEC-2026-3552`, `PYSEC-2026-3553`, and
-      `PYSEC-2026-3554`. Do not allowlist or override these findings for public release.
-- [ ] Historical-host findings are documented as evidence about that unsupported host and are not
-      silently waived as findings in Better's distributable package.
-- [ ] A new stable Hermes release updates the supported lane, or the documented minimum version is
-      raised, before public release.
+- [ ] Better Hindsight code, artifacts, and the complete runtime dependency closure rooted at
+      `hindsight-client==0.8.5` pass their blocking security checks.
+- [ ] Build or publication tooling findings are resolved when they can compromise the candidate
+      artifact or publication process.
+- [ ] Every actively supported Hermes compatibility environment passes its required lifecycle suite.
+- [ ] A host finding blocks only when the plugin imports or invokes the affected component, exposes
+      the affected path, or materially aggravates its risk.
+- [ ] Hermes `v2026.8.3`'s `cryptography==48.0.1` findings (`PYSEC-2026-3552`,
+      `PYSEC-2026-3553`, and `PYSEC-2026-3554`) remain documented informational upstream evidence:
+      they are absent from the plugin runtime closure, and no allowlist or dependency override is used.
+- [ ] The complete supported-host audit remains visible as a non-blocking advisory observation;
+      failures to execute or collect that audit still fail its diagnostic job.
+- [ ] A new stable Hermes release updates the required lifecycle lane, or the documented minimum
+      compatible version is raised, before public release.
 
 ## Compatibility and artifacts
 

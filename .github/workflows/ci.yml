@@ -120,6 +120,7 @@ jobs:
           uv pip install --python .venv/bin/python \
             "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git@${HERMES_COMPAT_COMMIT}"
           uv pip install --python .venv/bin/python "hindsight-client==0.8.5"
+          uv pip check --python .venv/bin/python
 
       - name: Install current supported Hermes host
         if: matrix.historical != true
@@ -128,6 +129,7 @@ jobs:
             "3c27eb6234bf91b8ceee9e9071591b31e9b148cb"
           uv pip install --python .venv/bin/python -e .compat/hermes-current
           uv pip install --python .venv/bin/python "hindsight-client==0.8.5"
+          uv pip check --python .venv/bin/python
 
       - name: Run full compatibility suite
         run: .venv/bin/python -m pytest

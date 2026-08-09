@@ -13,7 +13,9 @@ providers also requires the documented stopped-process package-version transitio
 > Hermes 0.19.0 interpreter and isolated Hindsight 0.8.5 instance using only synthetic data; its
 > generated bank was removed and an authenticated post-run listing found zero banks. Its independent
 > findings were closed. The rolling compatibility/release rebaseline is complete at checkpoint
-> `2a05a10`, but public release is blocked by the unsuppressed current-Hermes security audit. The live
+> `2a05a10`; Task 7 and publication remain separately authorized work. The current-Hermes
+> `cryptography` findings remain visible in the supported-host audit as upstream observations, not
+> plugin release blockers. The live
 > node is not an operator next action and must not be rerun without a changed candidate plus renewed
 > explicit authorization.
 > The plugin

@@ -53,8 +53,8 @@ jobs:
             docker.io/rhysd/actionlint@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 \
             -color
 
-  python-security:
-    name: Python static/security checks
+  python-static-security:
+    name: Python static security checks
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -69,10 +69,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install scanners
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install semgrep==1.168.0 zizmor==1.26.1 pip-audit==2.10.1
+      - name: Install static scanners
+        run: python -m pip install semgrep==1.168.0 zizmor==1.26.1
 
       - name: Run Semgrep
         run: semgrep scan --config p/ci --config p/secrets --error --metrics=off .
@@ -80,10 +78,35 @@ jobs:
       - name: Run zizmor
         run: zizmor .github/workflows
 
-      - name: Prepare Better Hindsight runtime/build dependencies
-        id: dependencies
+  project-dependency-security:
+    name: Project-owned dependency closure (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - name: Check out repository
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        # actions/setup-python v6.3.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependency audit tools
+        run: python -m pip install pip-audit==2.10.1 uv==0.11.4
+
+      - name: Verify project lock is current
+        run: uv lock --check
+
+      - name: Prepare Better Hindsight runtime/build dependency roots
         run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
+          python - <<'PY'
           import os
           import tomllib
           from pathlib import Path
@@ -94,15 +117,24 @@ jobs:
           dependencies.extend(project.get("dependencies", []))
           output = Path(os.environ["RUNNER_TEMP"]) / "project-dependencies.txt"
           output.write_text(chr(10).join(dependencies), encoding="utf-8")
-          print(f"present={str(bool(dependencies)).lower()}")
           PY
 
-      - name: Run pip-audit
-        if: steps.dependencies.outputs.present == 'true'
+      - name: Audit Better Hindsight runtime/build dependency closure
         run: pip-audit --progress-spinner off -r "${RUNNER_TEMP}/project-dependencies.txt"
 
-  supported-hermes-security:
-    name: Supported Hermes compatibility environment (current-v2026.8.3)
+      - name: Export locked project-owned dependency closure
+        run: |
+          uv export --quiet --frozen --all-extras --no-emit-project \
+            --format requirements-txt \
+            --output-file "${RUNNER_TEMP}/locked-project-dependencies.txt"
+
+      - name: Audit locked project-owned dependency closure
+        run: |
+          pip-audit --progress-spinner off --no-deps --disable-pip \
+            -r "${RUNNER_TEMP}/locked-project-dependencies.txt"
+
+  supported-hermes-observation:
+    name: Supported Hermes environment observation (current-v2026.8.3)
     runs-on: ubuntu-latest
     steps:
       - name: Check out Better Hindsight
@@ -136,11 +168,137 @@ jobs:
           uv venv --python 3.12 "${RUNNER_TEMP}/supported-host"
           uv pip install --python "${RUNNER_TEMP}/supported-host/bin/python" \
             -e .compat/hermes-current -e .
+          uv pip check --python "${RUNNER_TEMP}/supported-host/bin/python"
 
-      - name: Audit supported compatibility environment
+      - name: Record supported-host dependency observations
+        shell: bash
         run: |
-          pip-audit --progress-spinner off \
-            --path "${RUNNER_TEMP}/supported-host/lib/python3.12/site-packages"
+          set -euo pipefail
+          audit_report="${RUNNER_TEMP}/supported-host-audit.json"
+          if pip-audit --progress-spinner off --format json --output "${audit_report}" \
+            --path "${RUNNER_TEMP}/supported-host/lib/python3.12/site-packages"; then
+            audit_exit=0
+          else
+            audit_exit=$?
+          fi
+          AUDIT_EXIT="${audit_exit}" AUDIT_REPORT="${audit_report}" \
+            HOST_SITE_PACKAGES="${RUNNER_TEMP}/supported-host/lib/python3.12/site-packages" \
+            python - <<'PY'
+          import importlib.metadata
+          import json
+          import os
+          import re
+          from pathlib import Path
+
+          def canonical_name(value: str) -> str:
+              return re.sub(r"[-_.]+", "-", value).lower()
+
+          report = Path(os.environ["AUDIT_REPORT"])
+          data = json.loads(report.read_text(encoding="utf-8"))
+          if not isinstance(data, dict):
+              raise ValueError("supported-host audit report must be a JSON object")
+          dependencies = data.get("dependencies")
+          if not isinstance(dependencies, list) or not dependencies:
+              raise ValueError("supported-host audit report has no dependency collection")
+          if not isinstance(data.get("fixes"), list):
+              raise ValueError("supported-host audit report has an invalid fixes collection")
+
+          reported_names: set[str] = set()
+          reported_versions: dict[str, str] = {}
+          skip_reasons: dict[str, str] = {}
+          allowed_skip_names = {"better-hermes-hindsight", "hermes-agent"}
+          vulnerability_count = 0
+          for dependency in dependencies:
+              if not isinstance(dependency, dict):
+                  raise ValueError("supported-host audit dependency entry is not an object")
+              name = dependency.get("name")
+              if not isinstance(name, str) or not name:
+                  raise ValueError("supported-host audit dependency entry has no name")
+              normalized_name = canonical_name(name)
+              if normalized_name in reported_names:
+                  raise ValueError(f"duplicate supported-host audit entry: {normalized_name}")
+              reported_names.add(normalized_name)
+              skip_reason = dependency.get("skip_reason")
+              if skip_reason is not None:
+                  if not isinstance(skip_reason, str) or not skip_reason:
+                      raise ValueError(f"invalid skip reason for {normalized_name}")
+                  if normalized_name not in allowed_skip_names:
+                      raise ValueError(f"unexpected unaudited host package: {normalized_name}")
+                  skip_reasons[normalized_name] = skip_reason
+                  continue
+              version = dependency.get("version")
+              vulnerabilities = dependency.get("vulns")
+              if not isinstance(version, str) or not version:
+                  raise ValueError(f"missing audited version for {normalized_name}")
+              reported_versions[normalized_name] = version
+              if not isinstance(vulnerabilities, list):
+                  raise ValueError(f"invalid vulnerability collection for {normalized_name}")
+              for vulnerability in vulnerabilities:
+                  if not isinstance(vulnerability, dict):
+                      raise ValueError(f"invalid advisory entry for {normalized_name}")
+                  advisory_id = vulnerability.get("id")
+                  aliases = vulnerability.get("aliases")
+                  fix_versions = vulnerability.get("fix_versions")
+                  description = vulnerability.get("description")
+                  if not isinstance(advisory_id, str) or not advisory_id:
+                      raise ValueError(f"missing advisory id for {normalized_name}")
+                  if not isinstance(aliases, list) or not all(
+                      isinstance(alias, str) and alias for alias in aliases
+                  ):
+                      raise ValueError(f"invalid advisory aliases for {normalized_name}")
+                  if not isinstance(fix_versions, list) or not all(
+                      isinstance(version, str) and version for version in fix_versions
+                  ):
+                      raise ValueError(f"invalid advisory fixes for {normalized_name}")
+                  if not isinstance(description, str) or not description:
+                      raise ValueError(f"missing advisory description for {normalized_name}")
+              vulnerability_count += len(vulnerabilities)
+
+          host_site = Path(os.environ["HOST_SITE_PACKAGES"])
+          installed_versions = {
+              canonical_name(name): distribution.version
+              for distribution in importlib.metadata.distributions(path=[str(host_site)])
+              if (name := distribution.metadata["Name"])
+          }
+          installed_names = set(installed_versions)
+          if reported_names != installed_names:
+              missing = sorted(installed_names - reported_names)
+              extra = sorted(reported_names - installed_names)
+              raise ValueError(f"incomplete supported-host audit: missing={missing}, extra={extra}")
+          for normalized_name, installed_version in installed_versions.items():
+              if normalized_name in skip_reasons:
+                  if f"({installed_version})" not in skip_reasons[normalized_name]:
+                      raise ValueError(
+                          f"skip reason version mismatch for {normalized_name}: {installed_version}"
+                      )
+              elif reported_versions.get(normalized_name) != installed_version:
+                  raise ValueError(
+                      f"reported version mismatch for {normalized_name}: {installed_version}"
+                  )
+
+          audit_exit = int(os.environ["AUDIT_EXIT"])
+          expected_exit = 1 if vulnerability_count else 0
+          if audit_exit != expected_exit:
+              raise SystemExit(audit_exit or 1)
+          audit_status = "findings" if vulnerability_count else "clean"
+          print(report.read_text(encoding="utf-8"))
+          if vulnerability_count:
+              print(
+                  "::warning title=Supported Hermes dependency observations::"
+                  f"{vulnerability_count} advisory finding(s); see the audit output and reachability policy."
+              )
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary.open("a", encoding="utf-8") as handle:
+              handle.write("### Supported Hermes dependency observation\n\n")
+              handle.write(
+                  f"Audit status: {audit_status}; {vulnerability_count} advisory finding(s) "
+                  f"(pip-audit exit {audit_exit}).\n\n"
+              )
+              handle.write(
+                  "Host findings are informational unless Better Hindsight invokes, exposes, "
+                  "or aggravates the affected path.\n"
+              )
+          PY
 
   shellcheck:
     name: ShellCheck

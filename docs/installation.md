@@ -3,8 +3,9 @@
 Better Hermes Hindsight targets the current stable Hermes Agent release selected by the rolling
 compatibility policy (`v2026.8.3`, package metadata 0.20.0) and an external/self-hosted Hindsight
 0.8.5 service. This is a development-only prerelease workflow. The isolated Task 6 proof is complete
-at checkpoint `3f542d4`, but production use and public release remain blocked by the current
-supported-host security audit documented in [audit-findings.md](audit-findings.md).
+at checkpoint `3f542d4`; Task 7, production use, and publication remain separately authorized. The
+current Hermes `cryptography` findings are documented upstream host observations rather than plugin
+release blockers; see [audit-findings.md](audit-findings.md).
 
 ## Ownership and isolation model
 
@@ -70,9 +71,10 @@ fi
 ## Install into the selected profile
 
 ```bash
-uv pip install --python "$HERMES_PYTHON" --upgrade \
+uv pip install --python "$HERMES_PYTHON" \
   dist/better_hermes_hindsight-0.0.0-py3-none-any.whl \
   'hindsight-client==0.8.5'
+uv pip check --python "$HERMES_PYTHON"
 
 hermes --profile "$PROFILE" plugins install <reviewed-git-url> --enable
 hermes --profile "$PROFILE" config set memory.provider better_hindsight
@@ -105,9 +107,10 @@ Upgrade the wheel and exact SDK with `uv pip --python`, and update only the sele
 checkout:
 
 ```bash
-uv pip install --python "$HERMES_PYTHON" --upgrade \
+uv pip install --python "$HERMES_PYTHON" \
   dist/better_hermes_hindsight-0.0.0-py3-none-any.whl \
   'hindsight-client==0.8.5'
+uv pip check --python "$HERMES_PYTHON"
 hermes --profile "$PROFILE" plugins update better_hindsight
 ```
 

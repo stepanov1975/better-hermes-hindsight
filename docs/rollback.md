@@ -48,6 +48,7 @@ hermes --profile "$PROFILE" config set memory.provider hindsight
 hermes --profile "$PROFILE" plugins remove better_hindsight
 uv pip uninstall --python "$HERMES_PYTHON" better-hermes-hindsight hindsight-client
 uv pip install --python "$HERMES_PYTHON" 'hindsight-client==0.6.1'
+uv pip check --python "$HERMES_PYTHON"
 "$HERMES_PYTHON" -c \
   'from importlib.metadata import version; assert version("hindsight-client") == "0.6.1"'
 ```
@@ -70,9 +71,10 @@ reviewed Better wheel and exact `hindsight-client==0.8.5`, install the reviewed 
 named profile, and select Better:
 
 ```bash
-uv pip install --python "$HERMES_PYTHON" --upgrade \
+uv pip install --python "$HERMES_PYTHON" \
   dist/better_hermes_hindsight-0.0.0-py3-none-any.whl \
   'hindsight-client==0.8.5'
+uv pip check --python "$HERMES_PYTHON"
 hermes --profile "$PROFILE" plugins install <reviewed-git-url> --enable
 hermes --profile "$PROFILE" config set memory.provider better_hindsight
 hermes --profile "$PROFILE" better_hindsight status

@@ -21,13 +21,23 @@ adapt or document a new minimum supported version before release.
 | Supported | GitHub release `v2026.8.3`, package metadata 0.20.0, commit `3c27eb6234bf91b8ceee9e9071591b31e9b148cb` | Current stable Hermes release; required full lifecycle gate |
 | Historical | `v2026.7.20`, package 0.19.0, commit `3ef6bbd201263d354fd83ec55b3c306ded2eb72a` | Historical characterization only; not a supported runtime prerequisite |
 
-Security gates are separate: one audits Better Hindsight runtime/package dependencies, and another
-audits each actively supported Hermes compatibility environment. Findings in an unsupported
-historical host remain evidence about that host; they do not become vulnerabilities in Better's wheel.
-As of 2026-08-09 the Better manifest audit is clean, while the required `v2026.8.3` host audit is
-blocked by Hermes's `cryptography==48.0.1` pin and three unsuppressed PYSEC findings documented in
-[audit-findings.md](audit-findings.md). This blocks public release without weakening the compatibility
-contract or silently substituting an untested dependency override.
+Security release gates cover Better Hindsight code, artifacts, and the complete runtime dependency
+closure rooted at `hindsight-client==0.8.5`. The current Hermes release remains a required lifecycle
+compatibility lane, but Better Hindsight does not certify the host application's full dependency graph.
+An upstream host finding becomes blocking here only when the plugin imports or invokes the affected
+component, exposes the affected path, or materially aggravates its risk.
+
+As of 2026-08-09 both the Better runtime/build closure audit and the frozen project-owned tooling audit
+are clean. The project lock selects `cryptography==50.0.0` only through Twine's Linux keyring tooling.
+Hermes `v2026.8.3` separately pins `cryptography==48.0.1`, with three PYSEC findings recorded in
+[audit-findings.md](audit-findings.md). Better Hindsight neither declares nor imports that package, and
+its Hindsight client runtime closure does not contain it, so those findings are informational upstream
+host evidence rather than plugin release blockers. No dependency override is installed.
+
+The security workflow retains a complete supported-host dependency audit as an informational
+observation. Advisory exit code 1 is reported in the job log and step summary without blocking the
+plugin; collection, resolver, or tooling failures still fail the job so the diagnostic cannot silently
+disappear.
 
 <!-- better-hindsight-status-compatibility:start -->
 ## Status inspection compatibility

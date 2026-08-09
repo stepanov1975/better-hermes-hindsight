@@ -8,17 +8,17 @@ cannot restart abandoned work.
 
 - Canonical plan: `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
 - Canonical-plan SHA-256:
-  `85aac897b11a8004c66b9c9f0662259b27beea847b25b5c38aa40ef2521af4f3`
+  `ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31`
 - Last completed code checkpoint: `2a05a10` (`ci: rebaseline Hermes compatibility gates`)
 - Plan state: Tasks 0–6 and the rolling Hermes compatibility/release rebaseline are complete; Task 7
-  remains blocked
+  is pending separate authorization
 - Completed Task 5 scope: remote segment reconstruction metadata plus a thin root plugin layout for
   the released Hermes Git plugin lifecycle
-- Current release blocker: Hermes `v2026.8.3` pins `cryptography==48.0.1`; its supported-host audit
-  reports `PYSEC-2026-3552`, `PYSEC-2026-3553`, and `PYSEC-2026-3554`, while Better Hindsight's
-  runtime/build manifest audit is clean
-- Next action: wait for a supported Hermes release that resolves the unsuppressed host audit findings,
-  then update and re-run the compatibility/security lanes before requesting Task 7 authorization
+- Security scope: Better Hindsight code, artifacts, its complete runtime dependency closure, and the
+  locked project-owned build/publication tooling are release gates. Hermes `v2026.8.3`'s unrelated
+  `cryptography==48.0.1` findings remain upstream host observations because the plugin neither depends
+  on that package nor invokes the affected paths.
+- Next action: request separate authorization for Task 7 against the reviewed stable candidate
 
 ## Completed foundation
 
@@ -85,9 +85,11 @@ aggregation, a ranking framework, or release thresholds. Publication, production
 migration, reconstruction, pruning, and deletion remain separately authorized work.
 
 Before Task 7, Hermes compatibility is a rolling CI-selected host contract. The current stable release
-is the required lifecycle/security lane; Hermes 0.19.0 remains non-blocking historical characterization.
-No published dependency group includes `hermes-agent`, and package/runtime audits are separate from
-audits of actively supported Hermes compatibility environments.
+is the required lifecycle lane; Hermes 0.19.0 remains non-blocking historical characterization. No
+published dependency group includes `hermes-agent`. Security audits block on Better Hindsight's code,
+artifacts, complete runtime dependency closure, and locked project-owned tooling; unrelated host
+findings remain visible in a separate informational audit and become blocking only when the plugin
+invokes, exposes, or aggravates the affected path.
 
 ## Operational ownership
 

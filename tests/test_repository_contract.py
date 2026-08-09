@@ -4,19 +4,26 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import json
+import os
 import re
+import shlex
+import subprocess
+import sys
 import tomllib
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
 
 import pytest
+import yaml
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_PLAN_PATH = ROOT / ".hermes/plans/2026-07-27_071437-best-effort-plugin.md"
 LOCAL_PLAN_INDEX_PATH = ROOT / ".hermes/plans/README.md"
-LOCAL_PLAN_INDEX_SHA256 = "274b8def89103a5961b6564c7f6528b0954ddd023c7413e0459659e4330e80ca"
+LOCAL_PLAN_INDEX_SHA256 = "92c25c6c48a551050dc53f6d06a9138b1e3dd0645b5667553c9357cceec89119"
 
 _STATUS_COMPATIBILITY_START = b"<!-- better-hindsight-status-compatibility:start -->"
 _STATUS_COMPATIBILITY_END = b"<!-- better-hindsight-status-compatibility:end -->"
@@ -84,18 +91,18 @@ TASK4_FROZEN_AUTHORITY_PATHS = (
 )
 
 _TASK4_FROZEN_AUTHORITY_SHA256 = {
-    "IMPLEMENTATION.md": "87ae2cfa9a3a22df4714d4098cecaf8d3126c402f8ee3765fe6a5c68f4326d52",
-    "README.md": "87dc77d53ecdf3d0ad2e2d65e92429267e5d8cbf0b7c5464419262a3836f3a0f",
+    "IMPLEMENTATION.md": "41930cc850e57d074d1327c809de5bf7d66dd2e0fe03a734de3f7c93865be2c6",
+    "README.md": "cf0ea735e6453489551c92310d4af2bf907715500ad48db795fd7a5915012cd8",
     "DESIGN.md": "2396953c390dc8fe51c40dd81d62c182752dd1610b228a1d0438890ba1586c34",
-    "docs/audit-findings.md": "a80d1a8839df199c1fc77ab95e2228375cf9ff75886f1292222071639169a2eb",
-    "docs/compatibility.md": "758b7a7a8306b31655042a56fd5c0b06235495914a3bb8c97fa896885714b235",
+    "docs/audit-findings.md": "6968809d0860ee5418414f74e2cecff74745c0b9972a1a0aec0a67b085859b92",
+    "docs/compatibility.md": "bcfb3597c553e56ce090615d794253177af2f892f6bc9b327e69737715f0d1da",
     "docs/configuration.md": "08f660c7e8f311640a26b495ef160e187137156fc6632b37d7bb180b64a975d5",
     "docs/development-instance.md": (
         "6ee5b3cd960fab6fee52c569c54d7578683c9ba0b6a242578a367f408be87d10"
     ),
     "docs/operations.md": "5b8f41b06836ac23dddcf74ffa8352fb97a149637503c5384a94a71cf7396f3e",
     "docs/public-release-checklist.md": (
-        "4884a21eec09762f32d12684051ed5cff73d4bd23ecd46cb89d58ac558940992"
+        "f2e0669dd30370d378547eef1b8021f7a01bb7ae83be932c3816bcdd5701e642"
     ),
     "src/better_hermes_hindsight/config.py": (
         "ce310b60359d34c6e2c30fcc46592d43ecc0b2ad36a6731ae87743b21a733621"
@@ -122,6 +129,47 @@ def _assert_terms(text: str, *terms: str) -> None:
     normalized = _normalized(text)
     missing = [term for term in terms if term.casefold() not in normalized]
     assert not missing, f"missing repository contract terms: {missing}"
+
+
+def _workflow_job(
+    name: str, *, workflow: str = ".github/workflows/security.yml"
+) -> dict[str, object]:
+    document = cast(object, yaml.safe_load(_read(workflow)))
+    assert isinstance(document, dict)
+    jobs = document.get("jobs")
+    assert isinstance(jobs, dict)
+    job = jobs.get(name)
+    assert isinstance(job, dict)
+    return cast(dict[str, object], job)
+
+
+def _workflow_step(job: dict[str, object], name: str) -> dict[str, object]:
+    steps = job.get("steps")
+    assert isinstance(steps, list)
+    for raw_step in steps:
+        assert isinstance(raw_step, dict)
+        step = cast(dict[str, object], raw_step)
+        if step.get("name") == name:
+            return step
+    raise AssertionError(f"missing workflow step: {name}")
+
+
+def _shell_tokens(step: dict[str, object]) -> list[str]:
+    command = step.get("run")
+    assert isinstance(command, str)
+    return shlex.split(command.replace("\\\n", " "))
+
+
+def _host_audit_validator_script() -> str:
+    host_job = _workflow_job("supported-hermes-observation")
+    host_audit = _workflow_step(host_job, "Record supported-host dependency observations")
+    script = host_audit.get("run")
+    assert isinstance(script, str)
+    marker = "python - <<'PY'\n"
+    assert marker in script
+    validator = script.split(marker, maxsplit=1)[1]
+    assert validator.endswith("\nPY\n")
+    return validator.removesuffix("\nPY\n")
 
 
 def _assert_terms_in_order(text: str, *terms: str) -> None:
@@ -1292,9 +1340,10 @@ def test_task6_live_proof_and_non_activation_contract_are_explicit() -> None:
         "Rolling compatibility and dependency audits",
         "current stable Hermes release",
         "historical characterization lane",
-        "Better Hindsight runtime/package dependencies",
+        "complete runtime dependency closure",
         "actively supported Hermes compatibility environment",
-        "old audit findings remain historical evidence",
+        "required lifecycle suite",
+        "Host findings remain upstream evidence",
     )
     _assert_terms(
         task6_contract,
@@ -1370,7 +1419,7 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
     _assert_terms(
         router,
         ".hermes/plans/2026-07-27_071437-best-effort-plugin.md",
-        "85aac897b11a8004c66b9c9f0662259b27beea847b25b5c38aa40ef2521af4f3",
+        "ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31",
         "Tasks 0–6 and the rolling Hermes compatibility/release rebaseline are complete",
         "Last completed code checkpoint: `2a05a10`",
         "dedicated Hermes interpreter/profile",
@@ -1386,7 +1435,7 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
     plan_index = plan_index_bytes.decode("utf-8", errors="strict")
     plan_hash = hashlib.sha256(plan_bytes).hexdigest()
 
-    assert plan_hash == "85aac897b11a8004c66b9c9f0662259b27beea847b25b5c38aa40ef2521af4f3"
+    assert plan_hash == "ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31"
     assert plan_hash in router
     assert plan_hash in plan_index
     _assert_terms(
@@ -1560,7 +1609,7 @@ def test_task5_completed_implementation_and_task6_route_are_frozen() -> None:
     router = _read("IMPLEMENTATION.md")
     _assert_terms(
         router,
-        "85aac897b11a8004c66b9c9f0662259b27beea847b25b5c38aa40ef2521af4f3",
+        "ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31",
         "ci: rebaseline Hermes compatibility gates",
         "2a05a10",
         "The previous Task 5 specification and uncommitted RED oracle were abandoned",
@@ -1702,7 +1751,7 @@ def test_local_task4_plan_contract_matches_completed_implementation_when_present
 
     _assert_terms(
         plan_index,
-        "85aac897b11a8004c66b9c9f0662259b27beea847b25b5c38aa40ef2521af4f3",
+        "ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31",
         "Tasks 0–6 and the rolling Hermes compatibility/release rebaseline are complete",
         "rolling Hermes compatibility/release rebaseline",
         "Superseded Task 5 direction",
@@ -1779,6 +1828,7 @@ def test_task5_docs_use_host_lifecycle_and_explicit_sdk_transition() -> None:
             'hermes --profile "$PROFILE" plugins install',
             "Stop every process sharing the interpreter",
             'uv pip install --python "$HERMES_PYTHON"',
+            'uv pip check --python "$HERMES_PYTHON"',
             "hindsight-client==0.8.5",
             'hermes --profile "$PROFILE" config set memory.provider better_hindsight',
             "A Hermes profile scopes configuration, the outbox, and plugin checkout",
@@ -1786,6 +1836,7 @@ def test_task5_docs_use_host_lifecycle_and_explicit_sdk_transition() -> None:
         "docs/rollback.md": (
             'hermes --profile "$PROFILE" plugins remove better_hindsight',
             'uv pip uninstall --python "$HERMES_PYTHON"',
+            'uv pip check --python "$HERMES_PYTHON"',
             "restore exact `hindsight-client==0.6.1`",
             "Better's outbox and both banks",
             "Every Hermes gateway, TUI, CLI, and worker sharing the interpreter must be stopped",
@@ -1819,6 +1870,10 @@ def test_task5_docs_use_host_lifecycle_and_explicit_sdk_transition() -> None:
     assert "no custom installer" in retired
     assert '"$hermes_python" -m pip' not in retired
     assert "better_hindsight_profile" not in retired
+    assert "--upgrade" not in _read("docs/installation.md")
+    assert "--upgrade" not in _read("docs/rollback.md")
+    assert _read("docs/installation.md").count('uv pip check --python "$HERMES_PYTHON"') == 2
+    assert _read("docs/rollback.md").count('uv pip check --python "$HERMES_PYTHON"') == 2
 
 
 def test_task4_owned_docs_describe_current_operator_commands_without_stale_negatives() -> None:
@@ -1905,16 +1960,171 @@ def test_hermes_host_is_selected_by_a_rolling_compatibility_matrix() -> None:
         "BETTER_HINDSIGHT_EXPECT_HERMES_COMMIT",
         "continue-on-error: ${{ matrix.historical }}",
     )
+    compatibility = _workflow_job("compatibility", workflow=".github/workflows/ci.yml")
+    for step_name in (
+        "Install historical Hermes characterization host",
+        "Install current supported Hermes host",
+    ):
+        install_step = _workflow_step(compatibility, step_name)
+        script = install_step.get("run")
+        assert isinstance(script, str)
+        assert script.count("uv pip check --python .venv/bin/python") == 1
+        assert "--upgrade" not in script
 
 
-def test_release_contract_separates_package_and_supported_host_audits() -> None:
+def test_release_contract_audits_plugin_dependency_closure_and_tests_hosts() -> None:
     security = _read(".github/workflows/security.yml")
     _assert_terms(
         security,
-        "Better Hindsight runtime/build dependencies",
-        "Supported Hermes compatibility environment",
-        "current-v2026.8.3",
+        "Better Hindsight runtime/build dependency roots",
+        "Better Hindsight runtime/build dependency closure",
+        "uv==0.11.4",
+        "Export locked project-owned dependency closure",
+        "uv export --quiet --frozen --all-extras --no-emit-project",
+        "Audit locked project-owned dependency closure",
+        "pip-audit --progress-spinner off --no-deps --disable-pip",
+        'dependencies.extend(project.get("dependencies", []))',
+        'pip-audit --progress-spinner off -r "${RUNNER_TEMP}/project-dependencies.txt"',
+        "supported-hermes-observation:",
+        "Supported Hermes environment observation (current-v2026.8.3)",
         "3c27eb6234bf91b8ceee9e9071591b31e9b148cb",
+        "Record supported-host dependency observations",
+    )
+    static_job = _workflow_job("python-static-security")
+    static_install = _workflow_step(static_job, "Install static scanners")
+    assert _shell_tokens(static_install) == [
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "semgrep==1.168.0",
+        "zizmor==1.26.1",
+    ]
+
+    plugin_job = _workflow_job("project-dependency-security")
+    assert "if" not in plugin_job
+    assert "continue-on-error" not in plugin_job
+    strategy = plugin_job.get("strategy")
+    assert isinstance(strategy, dict)
+    assert strategy.get("fail-fast") is False
+    matrix = strategy.get("matrix")
+    assert isinstance(matrix, dict)
+    assert matrix.get("python-version") == ["3.11", "3.12", "3.13"]
+    dependency_roots = _workflow_step(
+        plugin_job, "Prepare Better Hindsight runtime/build dependency roots"
+    )
+    install_audit_tools = _workflow_step(plugin_job, "Install dependency audit tools")
+    verify_lock = _workflow_step(plugin_job, "Verify project lock is current")
+    export_lock = _workflow_step(plugin_job, "Export locked project-owned dependency closure")
+    audit_roots = _workflow_step(
+        plugin_job, "Audit Better Hindsight runtime/build dependency closure"
+    )
+    audit_lock = _workflow_step(plugin_job, "Audit locked project-owned dependency closure")
+    for step in (dependency_roots, verify_lock, export_lock, audit_roots, audit_lock):
+        assert "if" not in step
+        assert "continue-on-error" not in step
+
+    assert _shell_tokens(install_audit_tools) == [
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "pip-audit==2.10.1",
+        "uv==0.11.4",
+    ]
+    assert _shell_tokens(verify_lock) == ["uv", "lock", "--check"]
+
+    dependency_script = dependency_roots.get("run")
+    assert isinstance(dependency_script, str)
+    _assert_terms(
+        dependency_script,
+        'dependencies.extend(project.get("dependencies", []))',
+        'output.write_text(chr(10).join(dependencies), encoding="utf-8")',
+    )
+    assert "GITHUB_OUTPUT" not in dependency_script
+
+    assert _shell_tokens(audit_roots) == [
+        "pip-audit",
+        "--progress-spinner",
+        "off",
+        "-r",
+        "${RUNNER_TEMP}/project-dependencies.txt",
+    ]
+    assert _shell_tokens(export_lock) == [
+        "uv",
+        "export",
+        "--quiet",
+        "--frozen",
+        "--all-extras",
+        "--no-emit-project",
+        "--format",
+        "requirements-txt",
+        "--output-file",
+        "${RUNNER_TEMP}/locked-project-dependencies.txt",
+    ]
+    assert _shell_tokens(audit_lock) == [
+        "pip-audit",
+        "--progress-spinner",
+        "off",
+        "--no-deps",
+        "--disable-pip",
+        "-r",
+        "${RUNNER_TEMP}/locked-project-dependencies.txt",
+    ]
+
+    assert "supported-hermes-security:" not in security
+    host_job = _workflow_job("supported-hermes-observation")
+    assert "if" not in host_job
+    assert "continue-on-error" not in host_job
+    host_checkout = _workflow_step(host_job, "Check out current Hermes release source")
+    checkout_with = host_checkout.get("with")
+    assert isinstance(checkout_with, dict)
+    assert checkout_with.get("repository") == "NousResearch/hermes-agent"
+    assert checkout_with.get("ref") == "3c27eb6234bf91b8ceee9e9071591b31e9b148cb"
+    host_build = _workflow_step(host_job, "Build supported compatibility environment")
+    host_build_script = host_build.get("run")
+    assert isinstance(host_build_script, str)
+    assert (
+        host_build_script.count('uv pip check --python "${RUNNER_TEMP}/supported-host/bin/python"')
+        == 1
+    )
+    assert "--upgrade" not in host_build_script
+    host_audit = _workflow_step(host_job, "Record supported-host dependency observations")
+    assert "if" not in host_audit
+    assert "continue-on-error" not in host_audit
+    host_script = host_audit.get("run")
+    assert isinstance(host_script, str)
+    host_audit_command = (
+        'if pip-audit --progress-spinner off --format json --output "${audit_report}" \\\n'
+        '  --path "${RUNNER_TEMP}/supported-host/lib/python3.12/site-packages"; then\n'
+    )
+    parser_boundary = (
+        'AUDIT_EXIT="${audit_exit}" AUDIT_REPORT="${audit_report}" \\\n'
+        '  HOST_SITE_PACKAGES="${RUNNER_TEMP}/supported-host/lib/python3.12/site-packages" \\\n'
+        "  python - <<'PY'\nimport importlib.metadata\n"
+    )
+    assert host_audit_command in host_script
+    assert parser_boundary in host_script
+    assert host_script.rstrip().endswith("PY")
+    for soft_failure in ("|| true", "; true", "set +e", "exit 0"):
+        assert soft_failure not in host_script
+    _assert_terms(
+        host_script,
+        "if pip-audit --progress-spinner off --format json --output",
+        '--path "${RUNNER_TEMP}/supported-host/lib/python3.12/site-packages"',
+        'data = json.loads(report.read_text(encoding="utf-8"))',
+        "if not isinstance(dependencies, list) or not dependencies:",
+        "if normalized_name in reported_names:",
+        'allowed_skip_names = {"better-hermes-hindsight", "hermes-agent"}',
+        "unexpected unaudited host package",
+        "if not isinstance(advisory_id, str) or not advisory_id:",
+        "if reported_names != installed_names:",
+        "reported version mismatch for",
+        "expected_exit = 1 if vulnerability_count else 0",
+        "if audit_exit != expected_exit:",
+        "raise SystemExit(audit_exit or 1)",
+        "::warning title=Supported Hermes dependency observations",
+        "GITHUB_STEP_SUMMARY",
     )
 
     compatibility = _read("docs/compatibility.md")
@@ -1926,13 +2136,126 @@ def test_release_contract_separates_package_and_supported_host_audits() -> None:
             "current stable Hermes release",
             "historical characterization",
             "not a runtime prerequisite",
-            "Better Hindsight runtime/package dependencies",
-            "actively supported Hermes compatibility environment",
+            "complete runtime dependency closure",
+            "required lifecycle",
         )
 
 
-def test_current_supported_host_security_blocker_is_unsuppressed() -> None:
-    security = _read(".github/workflows/security.yml")
+def test_supported_host_observation_validates_complete_audit_reports(tmp_path: Path) -> None:
+    site_packages = tmp_path / "site-packages"
+    metadata = site_packages / "better_hermes_hindsight-1.2.3.dist-info"
+    metadata.mkdir(parents=True)
+    (metadata / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: better-hermes-hindsight\nVersion: 1.2.3\n",
+        encoding="utf-8",
+    )
+    validator = _host_audit_validator_script()
+    clean_dependency = {"name": "better-hermes-hindsight", "version": "1.2.3", "vulns": []}
+    advisory = {
+        "id": "TEST-1",
+        "aliases": ["CVE-TEST"],
+        "fix_versions": ["1.2.4"],
+        "description": "synthetic advisory",
+    }
+
+    def run_case(
+        name: str, payload: object, *, audit_exit: int
+    ) -> subprocess.CompletedProcess[str]:
+        report = tmp_path / f"{name}.json"
+        summary = tmp_path / f"{name}.summary"
+        report.write_text(json.dumps(payload), encoding="utf-8")
+        environment = {
+            **os.environ,
+            "AUDIT_EXIT": str(audit_exit),
+            "AUDIT_REPORT": str(report),
+            "HOST_SITE_PACKAGES": str(site_packages),
+            "GITHUB_STEP_SUMMARY": str(summary),
+        }
+        return subprocess.run(
+            [sys.executable, "-c", validator],
+            check=False,
+            capture_output=True,
+            env=environment,
+            text=True,
+        )
+
+    clean = run_case(
+        "clean",
+        {"dependencies": [clean_dependency], "fixes": []},
+        audit_exit=0,
+    )
+    assert clean.returncode == 0
+    assert "::warning" not in clean.stdout
+
+    finding = run_case(
+        "finding",
+        {
+            "dependencies": [{**clean_dependency, "vulns": [advisory]}],
+            "fixes": [],
+        },
+        audit_exit=1,
+    )
+    assert finding.returncode == 0
+    assert "::warning title=Supported Hermes dependency observations" in finding.stdout
+
+    skipped = run_case(
+        "skipped",
+        {
+            "dependencies": [
+                {
+                    "name": "better-hermes-hindsight",
+                    "skip_reason": "Dependency not found on PyPI: better-hermes-hindsight (1.2.3)",
+                }
+            ],
+            "fixes": [],
+        },
+        audit_exit=0,
+    )
+    assert skipped.returncode == 0
+
+    rejected = {
+        "empty": ({"dependencies": [], "fixes": []}, 0),
+        "invalid-advisory": (
+            {"dependencies": [{**clean_dependency, "vulns": [{}]}], "fixes": []},
+            1,
+        ),
+        "incomplete": (
+            {
+                "dependencies": [{"name": "other", "version": "1", "vulns": []}],
+                "fixes": [],
+            },
+            0,
+        ),
+        "wrong-version": (
+            {
+                "dependencies": [{"name": "better-hermes-hindsight", "version": "9", "vulns": []}],
+                "fixes": [],
+            },
+            0,
+        ),
+        "wrong-skip-version": (
+            {
+                "dependencies": [
+                    {
+                        "name": "better-hermes-hindsight",
+                        "skip_reason": "not on PyPI (9)",
+                    }
+                ],
+                "fixes": [],
+            },
+            0,
+        ),
+        "tool-error": (
+            {"dependencies": [{**clean_dependency, "vulns": [advisory]}], "fixes": []},
+            2,
+        ),
+    }
+    for name, (payload, audit_exit) in rejected.items():
+        result = run_case(name, payload, audit_exit=audit_exit)
+        assert result.returncode != 0, name
+
+
+def test_unrelated_host_findings_are_informational_without_plugin_reachability() -> None:
     contract = "\n".join(
         _read(path)
         for path in (
@@ -1951,15 +2274,35 @@ def test_current_supported_host_security_blocker_is_unsuppressed() -> None:
         "PYSEC-2026-3552",
         "PYSEC-2026-3553",
         "PYSEC-2026-3554",
-        "public release remains blocked",
-        "no allowlist, dependency override, or checkpoint exception",
+        "informational upstream",
+        "do not block Task 7 or public release",
+        "does not declare or import `cryptography`",
+        "no allowlist or dependency override",
         "development-only prerelease workflow",
-        "production use and public release remain blocked",
+        "Task 7, production use, and publication remain separately authorized",
     )
-    _assert_terms(
-        security,
-        "Supported Hermes compatibility environment (current-v2026.8.3)",
-        "pip-audit --progress-spinner off",
-        "--path",
+    plugin_job = _workflow_job("project-dependency-security")
+    for name in (
+        "Audit Better Hindsight runtime/build dependency closure",
+        "Audit locked project-owned dependency closure",
+    ):
+        step = _workflow_step(plugin_job, name)
+        assert "if" not in step
+        assert "continue-on-error" not in step
+        assert "--ignore-vuln" not in _shell_tokens(step)
+    host_audit = _workflow_step(
+        _workflow_job("supported-hermes-observation"),
+        "Record supported-host dependency observations",
     )
-    assert "--ignore-vuln" not in security
+    host_script = host_audit.get("run")
+    assert isinstance(host_script, str)
+    assert "--ignore-vuln" not in host_script
+    project = tomllib.loads(_read("pyproject.toml"))["project"]
+    assert project["dependencies"] == ["hindsight-client==0.8.5"]
+    lock = tomllib.loads(_read("uv.lock"))
+    cryptography_versions = [
+        package["version"] for package in lock["package"] if package["name"] == "cryptography"
+    ]
+    assert cryptography_versions == ["50.0.0"]
+    source = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "src").rglob("*.py"))
+    assert "cryptography" not in source.casefold()

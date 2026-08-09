@@ -41,18 +41,29 @@ A small relevance trial found `min_scores.final = 0.10` removed every tested neg
 result set while preserving every tested initial positive operational case. This is a promising
 project-specific candidate to evaluate, not a justified universal default.
 
-## Current supported-host security gate
+## Plugin security scope and current upstream host observation
 
-A fresh 2026-08-09 `pip-audit` of Better Hindsight's runtime/build manifest found no known
-vulnerabilities. The separate combined environment for current Hermes release `v2026.8.3`
-(package 0.20.0) did not pass: Hermes pins `cryptography==48.0.1`, and the audit reports
-`PYSEC-2026-3552`, `PYSEC-2026-3553`, and `PYSEC-2026-3554`. The reported fixes require
-cryptography 49.0.0 or 50.0.0, outside that released host's exact dependency pin.
+A fresh 2026-08-09 `pip-audit` of Better Hindsight's runtime/build dependency closure found no known
+vulnerabilities. A second blocking audit verifies that `uv.lock` is current, exports the frozen
+project lock with all extras, and checks the exact project-owned development, build, test, and
+publication tooling closure. Both audits run on
+every supported Python minor (3.11, 3.12, and 3.13), and both are clean. The lock selects
+`cryptography==50.0.0` through Twine's Linux keyring tooling. Both blocking audits carry
+no `--ignore-vuln`, allowlist, or soft-failure path. A host finding is blocking only when the plugin
+imports or invokes the affected component, exposes the affected path, or materially aggravates its
+risk.
 
-This is an upstream supported-host release blocker, not a Better Hindsight wheel finding. There is
-no allowlist, dependency override, or checkpoint exception: public release remains blocked until a
-supported Hermes release resolves the findings and the combined-environment audit passes. The
-failing audit does not invalidate the passing provider-lifecycle compatibility tests.
+The separate combined environment for current Hermes release `v2026.8.3` (package 0.20.0) contains
+Hermes's exact `cryptography==48.0.1` pin. A whole-environment observation reports
+`PYSEC-2026-3552`, `PYSEC-2026-3553`, and `PYSEC-2026-3554`; the reported fixes require cryptography
+49.0.0 or 50.0.0. Better Hindsight does not declare or import `cryptography`, and
+`hindsight-client==0.8.5` plus its runtime transitives do not contain it. These findings remain
+documented upstream host evidence, but they do not block Task 7 or public release. No allowlist or
+dependency override is used, and current-Hermes lifecycle compatibility remains a required gate.
+The complete supported-host audit remains in CI as a visible diagnostic: advisory findings produce a
+warning and step-summary status, while audit execution failures still fail the observation job.
+Its report validator permits `skip_reason` only for the source-selected Better Hindsight and Hermes
+distributions; every installed third-party distribution must have a matching audited version.
 
 ## Active product disposition
 
