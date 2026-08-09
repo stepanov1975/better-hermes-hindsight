@@ -61,6 +61,10 @@ files = ["src", "tests"]
 mypy_path = "src"
 explicit_package_bases = true
 
+[[tool.mypy.overrides]]
+module = ["agent.*", "plugins.memory"]
+ignore_missing_imports = true
+
 [tool.ruff]
 target-version = "py311"
 line-length = 100

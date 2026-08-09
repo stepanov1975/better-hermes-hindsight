@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import NoReturn
 
 import pytest
-from agent.memory_provider import MemoryProvider  # type: ignore[import-untyped]
+from agent.memory_provider import MemoryProvider
 from hindsight_client_api.models.recall_response import RecallResponse
 from hindsight_client_api.models.recall_result import RecallResult
 from hindsight_client_api.models.recall_scores import RecallScores

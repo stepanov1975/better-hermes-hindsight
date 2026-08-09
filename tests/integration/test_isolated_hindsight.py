@@ -657,8 +657,8 @@ def _install_temporary_bridge(home: Path) -> None:
 
 
 def _start_released_manager(home: Path) -> tuple[Any, Any]:
-    from agent.memory_manager import MemoryManager  # type: ignore[import-untyped]
-    from plugins.memory import load_memory_provider  # type: ignore[import-untyped]
+    from agent.memory_manager import MemoryManager
+    from plugins.memory import load_memory_provider
 
     os.environ["HERMES_HOME"] = os.fspath(home)
     provider = load_memory_provider("better_hindsight")

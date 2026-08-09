@@ -16,7 +16,7 @@ from markdown_it.token import Token
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_PLAN_PATH = ROOT / ".hermes/plans/2026-07-27_071437-best-effort-plugin.md"
 LOCAL_PLAN_INDEX_PATH = ROOT / ".hermes/plans/README.md"
-LOCAL_PLAN_INDEX_SHA256 = "b9bf70e3d6c3f54421580034d17a25a6850082c9bd4cdbc61d249d0b9968c700"
+LOCAL_PLAN_INDEX_SHA256 = "274b8def89103a5961b6564c7f6528b0954ddd023c7413e0459659e4330e80ca"
 
 _STATUS_COMPATIBILITY_START = b"<!-- better-hindsight-status-compatibility:start -->"
 _STATUS_COMPATIBILITY_END = b"<!-- better-hindsight-status-compatibility:end -->"
@@ -84,8 +84,8 @@ TASK4_FROZEN_AUTHORITY_PATHS = (
 )
 
 _TASK4_FROZEN_AUTHORITY_SHA256 = {
-    "IMPLEMENTATION.md": "35f7b803d1411fd3a81eb2bbe6bb058c486fe73922bf57fe4ec591a09aa0ad7c",
-    "README.md": "553233677b7543e7024d039b7549eee2b76a55e69eba25660436f007e63c28a0",
+    "IMPLEMENTATION.md": "87ae2cfa9a3a22df4714d4098cecaf8d3126c402f8ee3765fe6a5c68f4326d52",
+    "README.md": "87dc77d53ecdf3d0ad2e2d65e92429267e5d8cbf0b7c5464419262a3836f3a0f",
     "DESIGN.md": "2396953c390dc8fe51c40dd81d62c182752dd1610b228a1d0438890ba1586c34",
     "docs/audit-findings.md": "a80d1a8839df199c1fc77ab95e2228375cf9ff75886f1292222071639169a2eb",
     "docs/compatibility.md": "758b7a7a8306b31655042a56fd5c0b06235495914a3bb8c97fa896885714b235",
@@ -1070,7 +1070,7 @@ def test_task3_delivery_and_task4_operator_contract_are_documented_without_rollo
         "Task 6 proof ran once",
         "Automatic retention is disabled by default",
         "Hermes-managed plugin installation",
-        "must not be rerun without a changed candidate plus renewed explicit authorization",
+        "must not be rerun without a changed candidate plus renewed",
     )
 
     delivery_contract = _read("docs/configuration.md") + _read("docs/operations.md")
@@ -1168,7 +1168,7 @@ def test_callback_boundary_and_retired_plan_precedence_are_explicit() -> None:
         "The previous Task 5 specification and uncommitted RED oracle were abandoned",
         "do not recover or continue it",
         "stale proof wording",
-        "test: close Task 6 proof checkpoint",
+        "ci: rebaseline Hermes compatibility gates",
     )
 
 
@@ -1370,9 +1370,9 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
     _assert_terms(
         router,
         ".hermes/plans/2026-07-27_071437-best-effort-plugin.md",
-        "ca25434f51ff737745cb398be1b8e5f6b8937a05a932d5e406c4303fb7cab8a9",
-        "Tasks 0–6 complete",
-        "Last completed code checkpoint: `3f542d4`",
+        "85aac897b11a8004c66b9c9f0662259b27beea847b25b5c38aa40ef2521af4f3",
+        "Tasks 0–6 and the rolling Hermes compatibility/release rebaseline are complete",
+        "Last completed code checkpoint: `2a05a10`",
         "dedicated Hermes interpreter/profile",
     )
     normalized_router = _normalized(router)
@@ -1386,13 +1386,13 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
     plan_index = plan_index_bytes.decode("utf-8", errors="strict")
     plan_hash = hashlib.sha256(plan_bytes).hexdigest()
 
-    assert plan_hash == "ca25434f51ff737745cb398be1b8e5f6b8937a05a932d5e406c4303fb7cab8a9"
+    assert plan_hash == "85aac897b11a8004c66b9c9f0662259b27beea847b25b5c38aa40ef2521af4f3"
     assert plan_hash in router
     assert plan_hash in plan_index
     _assert_terms(
         plan_index,
-        "3f542d4",
-        "Tasks 0–6 complete",
+        "2a05a10",
+        "Tasks 0–6 and the rolling Hermes compatibility/release rebaseline are complete",
         "rolling Hermes compatibility/release rebaseline",
         "Superseded Task 5 direction",
     )
@@ -1560,9 +1560,9 @@ def test_task5_completed_implementation_and_task6_route_are_frozen() -> None:
     router = _read("IMPLEMENTATION.md")
     _assert_terms(
         router,
-        "ca25434f51ff737745cb398be1b8e5f6b8937a05a932d5e406c4303fb7cab8a9",
-        "test: close Task 6 proof checkpoint",
-        "3f542d4",
+        "85aac897b11a8004c66b9c9f0662259b27beea847b25b5c38aa40ef2521af4f3",
+        "ci: rebaseline Hermes compatibility gates",
+        "2a05a10",
         "The previous Task 5 specification and uncommitted RED oracle were abandoned",
         "10,144 lines and 1,928 test nodes",
         "Hermes 0.19.0 already owns Git plugin install",
@@ -1578,17 +1578,18 @@ def test_task5_completed_implementation_and_task6_route_are_frozen() -> None:
     assert "retry/dead-letter accounting" not in router
     assert "operator `status`, `missions`, retry, and dead-letter controls" not in router
 
-    plan_index = _read(".hermes/plans/README.md")
-    _assert_terms(
-        plan_index,
-        "Tasks 0–6 complete",
-        "rolling Hermes compatibility/release rebaseline",
-        "Superseded Task 5 direction",
-        "The uncommitted 10,144-line/1,928-case RED file was removed",
-        "Do not reconstruct or continue that oracle",
-        "Multi-segment remote documents must carry",
-        "released `hermes plugins install|update|remove`",
-    )
+    if LOCAL_PLAN_INDEX_PATH.is_file():
+        plan_index = _read(".hermes/plans/README.md")
+        _assert_terms(
+            plan_index,
+            "Tasks 0–6 and the rolling Hermes compatibility/release rebaseline are complete",
+            "rolling Hermes compatibility/release rebaseline",
+            "Superseded Task 5 direction",
+            "The uncommitted 10,144-line/1,928-case RED file was removed",
+            "Do not reconstruct or continue that oracle",
+            "Multi-segment remote documents must carry",
+            "released `hermes plugins install|update|remove`",
+        )
 
     readme = _read("README.md")
     _assert_terms(
@@ -1701,8 +1702,8 @@ def test_local_task4_plan_contract_matches_completed_implementation_when_present
 
     _assert_terms(
         plan_index,
-        "ca25434f51ff737745cb398be1b8e5f6b8937a05a932d5e406c4303fb7cab8a9",
-        "Tasks 0–6 complete",
+        "85aac897b11a8004c66b9c9f0662259b27beea847b25b5c38aa40ef2521af4f3",
+        "Tasks 0–6 and the rolling Hermes compatibility/release rebaseline are complete",
         "rolling Hermes compatibility/release rebaseline",
         "Superseded Task 5 direction",
         "hermes plugins install|update|remove",

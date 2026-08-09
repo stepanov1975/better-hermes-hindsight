@@ -12,9 +12,10 @@ providers also requires the documented stopped-process package-version transitio
 > **Status: pre-alpha.** Tasks 0–6 are complete at checkpoint `3f542d4`. The Task 6 proof ran once against a dedicated
 > Hermes 0.19.0 interpreter and isolated Hindsight 0.8.5 instance using only synthetic data; its
 > generated bank was removed and an authenticated post-run listing found zero banks. Its independent
-> findings were closed. The rolling compatibility/release rebaseline is in progress, and public
-> release is blocked by the unsuppressed current-Hermes security audit. The live node is not an operator
-> next action and must not be rerun without a changed candidate plus renewed explicit authorization.
+> findings were closed. The rolling compatibility/release rebaseline is complete at checkpoint
+> `2a05a10`, but public release is blocked by the unsuppressed current-Hermes security audit. The live
+> node is not an operator next action and must not be rerun without a changed candidate plus renewed
+> explicit authorization.
 > The plugin
 > preserves multi-segment reconstruction metadata and installs through Hermes's released Git-plugin
 > lifecycle; no custom installer or package manager ships. Do not install or select this project in a

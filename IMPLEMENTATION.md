@@ -8,18 +8,17 @@ cannot restart abandoned work.
 
 - Canonical plan: `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
 - Canonical-plan SHA-256:
-  `ca25434f51ff737745cb398be1b8e5f6b8937a05a932d5e406c4303fb7cab8a9`
-- Last completed code checkpoint: `3f542d4` (`test: close Task 6 proof checkpoint`)
-- Plan state: Tasks 0–6 complete; the rolling Hermes compatibility/release rebaseline required before
-  Task 7 is in progress
+  `85aac897b11a8004c66b9c9f0662259b27beea847b25b5c38aa40ef2521af4f3`
+- Last completed code checkpoint: `2a05a10` (`ci: rebaseline Hermes compatibility gates`)
+- Plan state: Tasks 0–6 and the rolling Hermes compatibility/release rebaseline are complete; Task 7
+  remains blocked
 - Completed Task 5 scope: remote segment reconstruction metadata plus a thin root plugin layout for
   the released Hermes Git plugin lifecycle
 - Current release blocker: Hermes `v2026.8.3` pins `cryptography==48.0.1`; its supported-host audit
   reports `PYSEC-2026-3552`, `PYSEC-2026-3553`, and `PYSEC-2026-3554`, while Better Hindsight's
   runtime/build manifest audit is clean
-- Next action: finish independent review and checkpoint the honest rebaseline locally without pushing;
-  do not start Task 7 or public-release work until a supported Hermes release clears the unsuppressed
-  combined-environment security gate
+- Next action: wait for a supported Hermes release that resolves the unsuppressed host audit findings,
+  then update and re-run the compatibility/security lanes before requesting Task 7 authorization
 
 ## Completed foundation
 

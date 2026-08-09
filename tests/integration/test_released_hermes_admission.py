@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 import pytest
-from agent.memory_manager import MemoryManager  # type: ignore[import-not-found]
+from agent.memory_manager import MemoryManager
 
 from better_hermes_hindsight.client import (
     RetainConfirmation,

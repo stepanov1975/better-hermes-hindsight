@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, TypeVar
 
 import pytest
-from agent.memory_manager import MemoryManager  # type: ignore[import-not-found]
+from agent.memory_manager import MemoryManager
 
 from better_hermes_hindsight.client import HINDSIGHT_SDK_VERSION
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config

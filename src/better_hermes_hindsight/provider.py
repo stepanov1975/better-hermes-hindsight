@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from agent.memory_provider import MemoryProvider  # type: ignore[import-untyped]
+from agent.memory_provider import MemoryProvider
 
 from better_hermes_hindsight import PROVIDER_ID
 from better_hermes_hindsight.client import is_available as is_hindsight_available
