@@ -121,6 +121,19 @@ def _read(relative_path: str) -> str:
     return content.decode("utf-8", errors="strict")
 
 
+def _iter_public_source_text_paths(root: Path) -> Iterator[Path]:
+    """Yield repository source text while excluding generated and external roots."""
+    text_suffixes = {".in", ".md", ".py", ".toml", ".yaml", ".yml"}
+    ignored_roots = {".compat", ".git", ".hermes", ".venv", "build", "dist"}
+    for path in root.rglob("*"):
+        relative = path.relative_to(root)
+        if not path.is_file() or not relative.parts:
+            continue
+        if relative.parts[0] in ignored_roots or path.suffix not in text_suffixes:
+            continue
+        yield path
+
+
 def _normalized(text: str) -> str:
     return re.sub(r"\s+", " ", text).casefold()
 
@@ -2352,16 +2365,25 @@ def test_first_prerelease_metadata_and_operator_paths_are_consistent() -> None:
     )
 
 
+def test_public_source_scan_excludes_external_compatibility_checkouts(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("public\n", encoding="utf-8")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src/plugin.py").write_text("public\n", encoding="utf-8")
+    external = tmp_path / ".compat/hermes-current"
+    external.mkdir(parents=True)
+    (external / "upstream.py").write_text("external\n", encoding="utf-8")
+
+    relative_paths = {
+        path.relative_to(tmp_path) for path in _iter_public_source_text_paths(tmp_path)
+    }
+
+    assert relative_paths == {Path("README.md"), Path("src/plugin.py")}
+
+
 def test_public_source_has_no_tool_truncation_artifacts() -> None:
     truncation_artifact = "..." + "[truncated]"
-    text_suffixes = {".in", ".md", ".py", ".toml", ".yaml", ".yml"}
-    ignored_roots = {".git", ".hermes", ".venv", "build", "dist"}
-    for path in ROOT.rglob("*"):
+    for path in _iter_public_source_text_paths(ROOT):
         relative = path.relative_to(ROOT)
-        if not path.is_file() or not relative.parts:
-            continue
-        if relative.parts[0] in ignored_roots or path.suffix not in text_suffixes:
-            continue
         assert truncation_artifact not in path.read_text(encoding="utf-8"), relative
 
 
