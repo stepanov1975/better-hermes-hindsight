@@ -2,7 +2,8 @@
 
 ## Status and authority
 
-Better Hermes Hindsight `0.1.0a1` is a development prerelease candidate for exter...[truncated]
+Better Hermes Hindsight `0.1.0a1` is a development prerelease candidate for
+external/self-hosted-only use. The tracked
 [IMPLEMENTATION.md](IMPLEMENTATION.md) router names the only active implementation plan. Two earlier
 plans are retired historical records and cannot supply active requirements.
 

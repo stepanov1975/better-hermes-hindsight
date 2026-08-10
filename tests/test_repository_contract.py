@@ -93,7 +93,7 @@ TASK4_FROZEN_AUTHORITY_PATHS = (
 _TASK4_FROZEN_AUTHORITY_SHA256 = {
     "IMPLEMENTATION.md": "d60d89a2055877788592bc163a89c03242c00b76bf4b9da1c9040996ac265751",
     "README.md": "bf826b3d1dee922cba7474f550bd7cf04819d09625f7ded944d69ca851bfa72f",
-    "DESIGN.md": "d53bf8d71d7ea3c0c280deb4851be79c2d76a915ec23bb0c2d51d7f147d8354a",
+    "DESIGN.md": "a2392ca297d46aea5085e1ef6ee5b433e7d33bb0c9eaf4632503a9cf54208200",
     "docs/audit-findings.md": "6968809d0860ee5418414f74e2cecff74745c0b9972a1a0aec0a67b085859b92",
     "docs/compatibility.md": "bcfb3597c553e56ce090615d794253177af2f892f6bc9b327e69737715f0d1da",
     "docs/configuration.md": "08f660c7e8f311640a26b495ef160e187137156fc6632b37d7bb180b64a975d5",
@@ -2340,6 +2340,19 @@ def test_first_prerelease_metadata_and_operator_paths_are_consistent() -> None:
         "recursive-include docs *.md",
         "recursive-include tests *.py",
     )
+
+
+def test_public_source_has_no_tool_truncation_artifacts() -> None:
+    truncation_artifact = "..." + "[truncated]"
+    text_suffixes = {".in", ".md", ".py", ".toml", ".yaml", ".yml"}
+    ignored_roots = {".git", ".hermes", ".venv", "build", "dist"}
+    for path in ROOT.rglob("*"):
+        relative = path.relative_to(ROOT)
+        if not path.is_file() or not relative.parts:
+            continue
+        if relative.parts[0] in ignored_roots or path.suffix not in text_suffixes:
+            continue
+        assert truncation_artifact not in path.read_text(encoding="utf-8"), relative
 
 
 def test_prerelease_publication_is_manual_tag_bound_and_environment_gated() -> None:
