@@ -133,6 +133,12 @@ executor a bounded drain, but it can cancel queued work or leave an active callb
 the deadline. Hermes may fail before Better Hindsight receives the callback, and the process can
 exit before queued callback execution begins.
 
+On the supported Hermes 0.20.0 normal path, the same serialized background scheduling applies. If
+executor creation fails or submission raises `RuntimeError` outside shutdown, released Hermes invokes
+the callback inline; shutdown rejects late work. Better remains network-free and bounded in that
+callback, but the host caller can spend the local-admission time before returning. This exceptional
+fallback does not establish guaranteed pre-return admission.
+
 Automatic retention therefore uses released `sync_turn()` best-effort semantics. Once callback
 execution begins, Better performs only bounded local construction and one SQLite admission. Local
 durability starts only after provider admission commits. There is no direct-user provenance claim and

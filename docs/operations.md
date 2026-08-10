@@ -36,9 +36,12 @@ retention remains disabled by default. Do not enable this repository in a produc
 
 ## Delivery boundary
 
-Released Hermes schedules the provider's `sync_turn()` callback on its serialized background executor.
-That callback performs redaction, deterministic segmentation, and one bounded SQLite admission only; it
-neither calls Hindsight nor waits for remote delivery. Local durability begins after the complete turn's
+Released Hermes normally schedules the provider's `sync_turn()` callback on its serialized background
+executor. If executor creation fails or submission raises `RuntimeError` outside shutdown, Hermes runs
+the callback inline; shutdown rejects late work. That callback performs redaction, deterministic
+segmentation, and one bounded SQLite admission only; it neither calls Hindsight nor waits for remote
+delivery. The inline fallback can add that bounded local work to caller latency but does not guarantee
+pre-return admission. Local durability begins after the complete turn's
 admission transaction commits. A callback that never runs or an admission that fails is outside that
 guarantee.
 

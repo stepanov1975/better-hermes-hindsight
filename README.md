@@ -74,9 +74,10 @@ automatic context and mission changes require an explicit operator command.
   infer authoritative human-versus-synthetic origin from text, platform names, or transcript shape.
 - The callback path performs bounded redaction, segmentation, and one atomic SQLite admission. It
   performs no Hindsight request and does not wait for remote drain.
-- Hermes normally schedules this callback on its retention executor. If that executor rejects work
-  during shutdown, Hermes may invoke the same callback inline; Better's bounded local-only behavior
-  is unchanged, but the host caller can then spend that local admission time before returning.
+- Hermes normally schedules this callback on its retention executor. If executor creation fails or
+  submission raises `RuntimeError` outside shutdown, released Hermes invokes the same callback
+  inline. Better's bounded local-only behavior is unchanged, but the host caller can then spend that
+  local admission time before returning. During shutdown, Hermes rejects late work instead.
 - One profile-wide POSIX advisory lock elects the sender. Bounded SQLite polling lets that owner see
   rows admitted by another process.
 - Pending rows are matched to a credential-free destination fingerprint and replay the same stable

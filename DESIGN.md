@@ -53,13 +53,16 @@ Bundled `hindsight` remains selectable and untouched.
 2. **Current-query recall.** `prefetch()` recalls against the current projected user query before a
    model call. It is the only remote or potentially long-running memory operation on that path and
    fails open within a configured deadline. `queue_prefetch()` remains inert for this provider.
-3. **Best-effort callback.** Released Hermes labels a turn complete and submits provider
-   `sync_turn()` to its serialized background memory executor. Better accepts non-empty
-   user/final-assistant text from that callback on an authorized primary handle. It does not infer
-   human versus synthetic origin.
+3. **Best-effort callback.** On its normal path, released Hermes labels a turn complete and submits
+   provider `sync_turn()` to its serialized background memory executor. If executor creation fails
+   or submission raises `RuntimeError` outside shutdown, Hermes invokes the callback inline; late
+   work during shutdown is rejected. Better accepts non-empty user/final-assistant text from that
+   callback on an authorized primary handle. It does not infer human versus synthetic origin.
 4. **Short local admission.** After the callback starts, Better redacts, segments, derives stable
    IDs, and attempts one bounded atomic SQLite transaction. The callback performs no Hindsight
-   request and does not wait for remote delivery.
+   request and does not wait for remote delivery. The rare inline fallback can make the host caller
+   spend this bounded local-admission time before returning, but it creates no guaranteed pre-return
+   admission.
 5. **Background delivery.** A profile-wide POSIX advisory lock elects one sender. The lock owner uses
    bounded SQLite polling to observe cross-process admissions, claims only rows matching the current
    credential-free destination fingerprint and payload schema, and retries with bounded backoff.

@@ -92,15 +92,15 @@ TASK4_FROZEN_AUTHORITY_PATHS = (
 
 _TASK4_FROZEN_AUTHORITY_SHA256 = {
     "IMPLEMENTATION.md": "d60d89a2055877788592bc163a89c03242c00b76bf4b9da1c9040996ac265751",
-    "README.md": "bf826b3d1dee922cba7474f550bd7cf04819d09625f7ded944d69ca851bfa72f",
-    "DESIGN.md": "a2392ca297d46aea5085e1ef6ee5b433e7d33bb0c9eaf4632503a9cf54208200",
+    "README.md": "898749a47393c467cf4503c578ed26a200527bbb9f97b555904abe6964cb372c",
+    "DESIGN.md": "332295589aacb6fd0e1e61a26fdde8179e30f2c0cf587a45014042b81cf5d27f",
     "docs/audit-findings.md": "6968809d0860ee5418414f74e2cecff74745c0b9972a1a0aec0a67b085859b92",
-    "docs/compatibility.md": "bcfb3597c553e56ce090615d794253177af2f892f6bc9b327e69737715f0d1da",
-    "docs/configuration.md": "08f660c7e8f311640a26b495ef160e187137156fc6632b37d7bb180b64a975d5",
+    "docs/compatibility.md": "5b125f4d546d930664e82aad92a5d71fc475d72ebb6d2c975eb3cc716e676a59",
+    "docs/configuration.md": "b60acfb20c468a9bddb5e489a382c6dd676f5fc1fd081af4225d1dc2e9a64380",
     "docs/development-instance.md": (
         "6ee5b3cd960fab6fee52c569c54d7578683c9ba0b6a242578a367f408be87d10"
     ),
-    "docs/operations.md": "df2f4c26d32280b32df7269e41a56cb31f894093d19d50af482ad5956be07d6f",
+    "docs/operations.md": "4635ea77853448e4a32f4b34c94d0fe5bbd82c8bcb4691818f88a9da80269f18",
     "docs/public-release-checklist.md": (
         "27189b7f86fe6c7ed2dbf5239467a2c9ef1aecfc2ba35dcf04662a560b35d77b"
     ),
@@ -1092,6 +1092,10 @@ def test_best_effort_provider_scope_and_lifecycle_are_explicit() -> None:
         "automatic retention is disabled by default",
         "released `sync_turn()`",
         "best-effort",
+        "executor creation fails",
+        "submission raises `RuntimeError` outside shutdown",
+        "callback inline",
+        "shutdown rejects late work",
         "local durability starts only after provider admission",
         "no direct-user provenance claim",
         "no pre-return or no-loss guarantee",
@@ -1179,6 +1183,12 @@ def test_compatibility_baseline_and_released_callback_boundary_are_frozen() -> N
         "sync_turn()",
         "serialized background executor",
         "documented as non-blocking",
+        "On the supported Hermes 0.20.0 normal path",
+        "executor creation fails",
+        "submission raises `RuntimeError` outside shutdown",
+        "invokes the callback inline",
+        "shutdown rejects late work",
+        "does not establish guaranteed pre-return admission",
         "may fail before Better Hindsight receives the callback",
         "arecall()",
         "aretain_batch()",

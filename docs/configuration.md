@@ -200,10 +200,12 @@ different users to different banks.
 ## Retention construction and local admission
 
 Enabling `retain.enabled` opts into completed-turn callbacks released Hermes actually supplies. It
-does not establish direct-user provenance. Released Hermes schedules `sync_turn()` on its background
-executor after a completed turn; the provider does not run local admission inline before returning
-the answer. A callback that is cancelled, never runs, or is lost before its SQLite transaction commits
-remains outside the durability guarantee.
+does not establish direct-user provenance. Released Hermes normally schedules `sync_turn()` on its
+background executor after a completed turn. If executor creation fails or submission raises
+`RuntimeError` outside shutdown, the host invokes the callback inline; shutdown rejects late work.
+That rare fallback can make the caller spend Better's bounded local-admission time before returning,
+but it does not provide guaranteed pre-return admission. A callback that is cancelled, never runs, or
+is lost before its SQLite transaction commits remains outside the durability guarantee.
 
 The callback ignores the raw `messages` transcript and uses only its direct non-empty user and
 assistant text arguments. Before hashing, segmentation, or SQLite admission, both role texts and the

@@ -153,11 +153,11 @@ def _forbid_network(_socket: socket.socket, _address: object) -> NoReturn:
     raise AssertionError("Task 2 callback attempted a network connection")
 
 
-def test_released_memory_manager_runs_callback_asynchronously_before_local_durability(
+def test_released_memory_manager_normally_runs_callback_asynchronously_before_local_durability(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Released Hermes invokes ``sync_turn`` from its own background executor.
+    """Released Hermes normally invokes ``sync_turn`` from its background executor.
 
     Better Hindsight durability begins only after that callback's complete SQLite transaction
     commits. A callback cancelled, never run, or lost before commit remains outside the guarantee.
@@ -265,6 +265,68 @@ def test_released_memory_manager_runs_callback_asynchronously_before_local_durab
         callback_release.set()
         caller.join(timeout=2.0)
         manager.flush_pending(timeout=2.0)
+        manager.shutdown_all()
+        bootstrap.close()
+        finalize_process_runtime()
+
+    assert client_factory.clients[0].operation_calls == []
+    assert client_factory.clients[0].close_calls == 1
+
+
+def test_released_memory_manager_inline_fallback_performs_only_local_admission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Executor creation failure invokes the bounded network-free callback inline."""
+
+    assert_selected_hermes()
+
+    reset_process_runtime_for_tests()
+    hermes_home = tmp_path / "hermes-home"
+    config = _write_retain_only_profile(hermes_home)
+    client_factory = _NoNetworkClientFactory()
+    bootstrap = acquire_process_runtime(
+        config,
+        client_factory=client_factory,
+        sender_factory=_inert_sender_factory,
+    )
+    monkeypatch.setattr(socket.socket, "connect", _forbid_network)
+
+    provider = BetterHindsightMemoryProvider()
+    manager = MemoryManager()
+    manager.add_provider(provider)
+    manager.initialize_all(
+        "initial-session",
+        hermes_home=str(hermes_home),
+        platform="cli",
+        agent_context="primary",
+    )
+    monkeypatch.setattr(manager, "_get_sync_executor", lambda: None)
+
+    try:
+        manager.sync_all(
+            "inline fallback user",
+            "inline fallback assistant",
+            session_id="released-inline-fallback-session",
+            messages=[
+                {"role": "user", "content": RAW_MESSAGE_SENTINEL},
+                {"role": "assistant", "content": RAW_MESSAGE_SENTINEL},
+            ],
+        )
+
+        rows = _read_rows(config)
+        assert rows
+        ordered = sorted(rows, key=lambda row: row.segment_index)
+        assert len(ordered) == ordered[0].segment_count
+        canonical_source = "".join(row.content for row in ordered)
+        decoded = json.loads(canonical_source)
+        assert decoded["roles"] == [
+            {"content": "inline fallback user", "role": "user"},
+            {"content": "inline fallback assistant", "role": "assistant"},
+        ]
+        assert RAW_MESSAGE_SENTINEL not in canonical_source
+        assert client_factory.clients[0].operation_calls == []
+    finally:
         manager.shutdown_all()
         bootstrap.close()
         finalize_process_runtime()
