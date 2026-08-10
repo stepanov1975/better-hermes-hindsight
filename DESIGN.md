@@ -102,9 +102,10 @@ identity requires an exact configured `(platform, identifier_kind, identifier)` 
 `single_principal=true` is required, and only `agent_context="primary"` may retain. A secondary
 context may recall when its exact identity is authorized.
 
-Hindsight OSS 0.8.5 uses a shared write-capable API key. Environment-only key loading, absent model
-memory tools, and confirmation-gated operator commands reduce accidents but are not a server-enforced
-read/write boundary against a process with terminal access and the key.
+Hindsight OSS 0.8.5 uses a shared write-capable API key. Environment-only key loading, a sole bounded
+read-only recall tool with no model-directed write path, and confirmation-gated operator commands
+reduce accidents but are not a server-enforced read/write boundary against a process with terminal
+access and the key.
 
 ## Missions
 
@@ -169,7 +170,8 @@ Before prerelease, prove all of the following against one stable candidate:
 - temporary-profile discovery and selection of only `better_hindsight`;
 - no Hermes core patch or patched SHA requirement;
 - bounded fail-open current-query recall before the first model request;
-- untrusted, compact, redacted context and no model-facing memory tools;
+- untrusted, compact, redacted context and no model-facing memory tools in released `v0.1.0a1`;
+- one bounded read-only `better_hindsight_recall` tool in the current unreleased follow-up;
 - retention disabled by default and enabled only on an authorized primary handle;
 - released `sync_turn()` best-effort callback behavior without origin inference;
 - all-or-none local admission after callback execution, with no network request in the callback;
@@ -198,7 +200,7 @@ These may be useful platform improvements, but they are not prerelease defects o
 - exactly-once transport or global FIFO;
 - operation-scoped Hindsight credentials or a proxy/control plane;
 - `codex_app_server` memory support;
-- model-facing recall, retain, or mission tools;
+- model-facing retain, reflect, mission, or configuration tools;
 - Windows/non-POSIX sender election;
 - multi-user/per-user bank routing;
 - cloud or embedded Hindsight supervision;

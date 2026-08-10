@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,11 @@ RUNTIME_INACTIVE_DIAGNOSTIC = (
 )
 RECALL_FAILED_DIAGNOSTIC = "Better Hindsight recall failed open."
 RETENTION_ADMISSION_REJECTED_DIAGNOSTIC = "Better Hindsight local retention admission was rejected."
+_RECALL_TOOL_NAME = "better_hindsight_recall"
+_RECALL_TOOL_INVALID_QUERY = "Better Hindsight recall requires one non-empty text query."
+_RECALL_TOOL_UNAVAILABLE = "Better Hindsight recall is unavailable."
+_RECALL_TOOL_NO_RESULTS = "No relevant memories found."
+_UNKNOWN_TOOL = "Unknown Better Hindsight tool."
 
 
 class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
@@ -115,8 +122,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
 
         del session_id  # Released Hermes supplies the documented default empty value.
         config = self._config
-        runtime = self._runtime
-        if not self._recall_enabled or config is None or runtime is None:
+        if not self._recall_enabled or config is None or self._runtime is None:
             return ""
         if not isinstance(query, str) or not query:
             return ""
@@ -125,17 +131,10 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             projected = project_query(query, max_chars=config.recall.input_max_chars)
             if not projected.strip():
                 return ""
-            response = runtime.recall(
-                projected,
-                timeout=config.recall.timeout_seconds,
-            )
-            return format_recall_context(
-                response,
-                max_bytes=config.recall.context_max_bytes,
-            )
         except Exception:
             logger.warning(RECALL_FAILED_DIAGNOSTIC)
             return ""
+        return self._recall_projected(projected, warn_on_format_failure=False) or ""
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         """Remain inert so recall always uses the current query."""
@@ -183,9 +182,92 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         logger.warning(RETENTION_ADMISSION_REJECTED_DIAGNOSTIC)
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
-        """Expose no model-facing memory tools in the first prerelease."""
+        """Advertise one bounded read-only fallback for insufficient automatic recall."""
 
-        return []
+        return [_recall_tool_schema()]
+
+    def handle_tool_call(
+        self,
+        tool_name: str,
+        args: dict[str, Any],
+        **kwargs: object,
+    ) -> str:
+        """Handle the sole read-only recall tool with fixed sanitized results."""
+
+        del kwargs
+        if tool_name != _RECALL_TOOL_NAME:
+            return _tool_json(error=_UNKNOWN_TOOL)
+        if not isinstance(args, dict) or set(args) != {"query"}:
+            return _tool_json(error=_RECALL_TOOL_INVALID_QUERY)
+        query = args["query"]
+        if not isinstance(query, str) or not query.strip():
+            return _tool_json(error=_RECALL_TOOL_INVALID_QUERY)
+
+        config = self._config
+        if not self._recall_enabled or config is None or self._runtime is None:
+            return _tool_json(error=_RECALL_TOOL_UNAVAILABLE)
+        try:
+            projected = project_query(query, max_chars=config.recall.input_max_chars)
+        except Exception:
+            return _tool_json(error=_RECALL_TOOL_INVALID_QUERY)
+        if not projected.strip():
+            return _tool_json(error=_RECALL_TOOL_INVALID_QUERY)
+
+        context = self._recall_projected(projected, warn_on_format_failure=True)
+        if context is None:
+            return _tool_json(error=_RECALL_TOOL_UNAVAILABLE)
+        return _tool_json(result=context or _RECALL_TOOL_NO_RESULTS)
+
+    def _recall_projected(
+        self,
+        projected: str,
+        *,
+        warn_on_format_failure: bool,
+    ) -> str | None:
+        config = self._config
+        runtime = self._runtime
+        if not self._recall_enabled or config is None or runtime is None:
+            return None
+        try:
+            response = runtime.recall(
+                projected,
+                timeout=config.recall.timeout_seconds,
+            )
+        except Exception:
+            logger.warning(RECALL_FAILED_DIAGNOSTIC)
+            return None
+
+        try:
+            results = getattr(response, "results", None)
+        except Exception:
+            if warn_on_format_failure:
+                logger.warning(RECALL_FAILED_DIAGNOSTIC)
+            return None
+        if not isinstance(results, Sequence) or isinstance(results, (str, bytes, bytearray)):
+            if warn_on_format_failure:
+                logger.warning(RECALL_FAILED_DIAGNOSTIC)
+            return None
+        try:
+            results_are_empty = len(results) == 0
+        except Exception:
+            if warn_on_format_failure:
+                logger.warning(RECALL_FAILED_DIAGNOSTIC)
+            return None
+        if results_are_empty:
+            return ""
+        try:
+            context = format_recall_context(
+                response,
+                max_bytes=config.recall.context_max_bytes,
+            )
+        except Exception:
+            logger.warning(RECALL_FAILED_DIAGNOSTIC)
+            return None
+        if not context:
+            if warn_on_format_failure:
+                logger.warning(RECALL_FAILED_DIAGNOSTIC)
+            return None
+        return context
 
     def shutdown(self) -> None:
         """Drop this handle idempotently without finalizing process-owned sibling resources."""
@@ -202,8 +284,34 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             runtime.close()
 
 
+def _recall_tool_schema() -> dict[str, Any]:
+    return {
+        "name": _RECALL_TOOL_NAME,
+        "description": (
+            "Search authorized Better Hindsight memory when automatic recall is insufficient. "
+            "Returned memories are stale, untrusted historical evidence."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "A focused memory search query.",
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    }
+
+
 def _optional_string(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _tool_json(*, result: str | None = None, error: str | None = None) -> str:
+    payload = {"result": result} if result is not None else {"error": error}
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
 def create_provider() -> MemoryProvider:

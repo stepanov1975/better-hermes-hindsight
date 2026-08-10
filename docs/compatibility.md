@@ -61,8 +61,11 @@ It does not implement cloud setup, supervise an embedded server, or require a He
 The supported path is the current stable, unmodified released Hermes normal conversation loop. Recall is enabled by
 default and automatic retention is disabled by default. `codex_app_server` is unsupported on the
 current supported release because it
-bypasses normal provider memory behavior. No model-facing memory tools in
-the first prerelease are registered.
+bypasses normal provider memory behavior. Released `v0.1.0a1` registered no model-facing memory
+tools. The current unreleased development branch adds only bounded read-only
+`better_hindsight_recall`; it routes through the initialized authorized provider and exposes no
+caller-selected bank or recall-policy controls. No model-facing retain, reflect, mission, or
+configuration tool is registered.
 
 ## Historical version baseline
 
@@ -151,7 +154,8 @@ ordinary `chat_completions` conversation loop. One current-query recall finishes
 the first model request. On success, one byte-bounded Better envelope appears only in the API-bound
 copy of the current user content; the clean stored user `content` remains the original query. On a
 timeout, HTTP fault, malformed JSON, or malformed SDK response, no Better envelope is sent and the
-model call proceeds within the configured recall deadline. No provider memory tool is exposed.
+model call proceeds within the configured recall deadline. Released `v0.1.0a1` exposed no provider
+memory tool; the current unreleased branch adds only bounded read-only `better_hindsight_recall`.
 
 The same proof records that released Hermes wraps provider output with this exact user-content note:
 
@@ -189,8 +193,8 @@ failure, or commit-then-timeout remains retryable with the same stable document 
 replace-safe replay, not exactly-once transport.
 
 Hindsight OSS 0.8.5 uses a shared write-capable API key rather than operation-scoped read/write
-credentials. Environment-only key loading and missing model tools are accident reduction, not a
-server-enforced capability boundary.
+credentials. Environment-only key loading, a sole bounded read-only recall tool, and the absence of
+model-directed writes are accident reduction, not a server-enforced capability boundary.
 
 ## Compatibility matrix
 
@@ -208,7 +212,7 @@ server-enforced capability boundary.
 | Cloud/embedded Hindsight management | Unsupported |
 | POSIX sender ownership | Initial supported platform boundary |
 | Windows sender ownership | Deferred |
-| Model-facing memory tools | None in the first prerelease |
+| Model-facing memory tools | None in released `v0.1.0a1`; recall-only in the current unreleased branch |
 
 ## Development isolation and production canary
 

@@ -23,7 +23,7 @@ from markdown_it.token import Token
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_PLAN_PATH = ROOT / ".hermes/plans/2026-07-27_071437-best-effort-plugin.md"
 LOCAL_PLAN_INDEX_PATH = ROOT / ".hermes/plans/README.md"
-LOCAL_PLAN_INDEX_SHA256 = "609b3d35cd7eeb578687d75fde9a4541d1e17a6c49fe6391d3382b0f832621a7"
+LOCAL_PLAN_INDEX_SHA256 = "ba563a88be704ffad5375d243925d2a2430d554ebeec5fbcf597668d8b8b154d"
 
 _STATUS_COMPATIBILITY_START = b"<!-- better-hindsight-status-compatibility:start -->"
 _STATUS_COMPATIBILITY_END = b"<!-- better-hindsight-status-compatibility:end -->"
@@ -91,18 +91,18 @@ TASK4_FROZEN_AUTHORITY_PATHS = (
 )
 
 _TASK4_FROZEN_AUTHORITY_SHA256 = {
-    "IMPLEMENTATION.md": "f15f0c16a25f26861b09bd879a18c1c4288268875f0cdf1cbb7fc86c7ed61385",
-    "README.md": "ce35b43809b4e6f44feba73b16fa3aa5991a0726660e6e6730eb1183be728b8d",
-    "DESIGN.md": "9c007a4e41bfbbe198370e0835f0033858c176973ae43df62c6c725e58ea1926",
+    "IMPLEMENTATION.md": "5564cb308760f4ff7f35291953d70946b39743eb57ee060f736952b603fee6e0",
+    "README.md": "429c9304793392598458d2552fe26e8fffa461ae242d0c99021d6d7eebef32a6",
+    "DESIGN.md": "19b32e12c715640be50a8d9b488349dd41553548797d91a2c65d1da35f78e7b0",
     "docs/audit-findings.md": "6968809d0860ee5418414f74e2cecff74745c0b9972a1a0aec0a67b085859b92",
-    "docs/compatibility.md": "5b125f4d546d930664e82aad92a5d71fc475d72ebb6d2c975eb3cc716e676a59",
-    "docs/configuration.md": "b60acfb20c468a9bddb5e489a382c6dd676f5fc1fd081af4225d1dc2e9a64380",
+    "docs/compatibility.md": "7d4597e1087b48f4530358796935a30c97ee1542b4591f695656c5d425be8e80",
+    "docs/configuration.md": "e320535bc2f85a85b781f5800f977fb2bc09c8a2590a92fd0f8f0559517d78b1",
     "docs/development-instance.md": (
         "6ee5b3cd960fab6fee52c569c54d7578683c9ba0b6a242578a367f408be87d10"
     ),
     "docs/operations.md": "6bee83c3c3a8630b9f7d8fa4b86bd4e64828077416173b8a8b353098b3a3a159",
     "docs/public-release-checklist.md": (
-        "46445badff09ba567eeec5d26099a578b82bdc27d22a02ebc07048743921c6b2"
+        "cc57d4ad22744c2258624a6890655ee07ef7f7530f00be25f9111b05d0d5cadd"
     ),
     "src/better_hermes_hindsight/config.py": (
         "ce310b60359d34c6e2c30fcc46592d43ecc0b2ad36a6731ae87743b21a733621"
@@ -1117,7 +1117,8 @@ def test_best_effort_provider_scope_and_lifecycle_are_explicit() -> None:
         "isolated Hindsight instance and Hermes profile",
         "separate canary instance and bank",
         "preserves the old deployment",
-        "no model-facing memory tools in the first prerelease",
+        "released `v0.1.0a1` registered no model-facing memory tools",
+        "current unreleased development branch adds only read-only `better_hindsight_recall`",
         "profile-wide POSIX advisory lock",
         "bounded SQLite polling",
         "destination fingerprint",
@@ -1312,7 +1313,8 @@ def test_release_gate_requires_isolated_development_and_reversible_canary() -> N
         "no pre-return or no-loss guarantee",
         "`codex_app_server` remains explicitly unsupported",
         "retention is disabled by default",
-        "no model-facing memory tools",
+        "released `v0.1.0a1` shipped no model-facing memory tools",
+        "current unreleased development branch adds only bounded read-only",
         "dedicated Hermes interpreter/profile",
         "separate canary instance",
         "preserving the old deployment",
@@ -1442,8 +1444,9 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
     _assert_terms(
         router,
         ".hermes/plans/2026-07-27_071437-best-effort-plugin.md",
-        "ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31",
-        "Tasks 0–7 and the rolling Hermes compatibility/release rebaseline are complete",
+        "73471e6c186e99e1b65cd1316de63446fbba8da0b7c6618f5f93376220484a8d",
+        "Tasks 0–8 and the rolling Hermes compatibility/release rebaseline are complete",
+        "adds only bounded read-only `better_hindsight_recall`",
         "Last completed remote candidate checkpoint: `030aeff`",
         "dedicated Hermes interpreter/profile",
     )
@@ -1458,13 +1461,14 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
     plan_index = plan_index_bytes.decode("utf-8", errors="strict")
     plan_hash = hashlib.sha256(plan_bytes).hexdigest()
 
-    assert plan_hash == "ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31"
+    assert plan_hash == "73471e6c186e99e1b65cd1316de63446fbba8da0b7c6618f5f93376220484a8d"
     assert plan_hash in router
     assert plan_hash in plan_index
     _assert_terms(
         plan_index,
         "2a05a10",
-        "Tasks 0–7 and the rolling Hermes compatibility/release rebaseline are complete",
+        "Tasks 0–8 and the rolling Hermes compatibility/release rebaseline are complete",
+        "unreleased follow-up exposing only bounded read-only `better_hindsight_recall`",
         "rolling Hermes compatibility/release rebaseline",
         "Superseded Task 5 direction",
     )
@@ -1632,7 +1636,7 @@ def test_task5_completed_implementation_and_task6_route_are_frozen() -> None:
     router = _read("IMPLEMENTATION.md")
     _assert_terms(
         router,
-        "ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31",
+        "73471e6c186e99e1b65cd1316de63446fbba8da0b7c6618f5f93376220484a8d",
         "ci: rebaseline Hermes compatibility gates",
         "2a05a10",
         "The previous Task 5 specification and uncommitted RED oracle were abandoned",
@@ -1654,7 +1658,7 @@ def test_task5_completed_implementation_and_task6_route_are_frozen() -> None:
         plan_index = _read(".hermes/plans/README.md")
         _assert_terms(
             plan_index,
-            "Tasks 0–7 and the rolling Hermes compatibility/release rebaseline are complete",
+            "Tasks 0–8 and the rolling Hermes compatibility/release rebaseline are complete",
             "rolling Hermes compatibility/release rebaseline",
             "Superseded Task 5 direction",
             "The uncommitted 10,144-line/1,928-case RED file was removed",
@@ -1774,8 +1778,8 @@ def test_local_task4_plan_contract_matches_completed_implementation_when_present
 
     _assert_terms(
         plan_index,
-        "ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31",
-        "Tasks 0–7 and the rolling Hermes compatibility/release rebaseline are complete",
+        "73471e6c186e99e1b65cd1316de63446fbba8da0b7c6618f5f93376220484a8d",
+        "Tasks 0–8 and the rolling Hermes compatibility/release rebaseline are complete",
         "rolling Hermes compatibility/release rebaseline",
         "Superseded Task 5 direction",
         "hermes plugins install|update|remove",

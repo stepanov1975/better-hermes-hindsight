@@ -6,6 +6,12 @@ semantic prerelease versions while its public compatibility contract is proven.
 
 ## [Unreleased]
 
+### Added
+
+- Bounded read-only `better_hindsight_recall` model tool that reuses the authorized automatic-recall
+  policy and untrusted-evidence formatter without exposing writes or caller-selected bank/policy
+  controls.
+
 ## [0.1.0a1] - 2026-08-10
 
 ### Added

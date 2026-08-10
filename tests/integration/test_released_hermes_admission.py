@@ -212,7 +212,7 @@ def test_released_memory_manager_normally_runs_callback_asynchronously_before_lo
     )
     assert [registered.name for registered in manager.providers] == ["better_hindsight"]
     assert provider.prefetch("retain-only provider has no recall") == ""
-    assert provider.get_tool_schemas() == []
+    assert [schema["name"] for schema in provider.get_tool_schemas()] == ["better_hindsight_recall"]
 
     caller_errors: list[BaseException] = []
 

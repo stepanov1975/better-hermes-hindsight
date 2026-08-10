@@ -233,7 +233,13 @@ def _released_retention_harness(
             agent_context="primary",
         )
         assert [registered.name for registered in manager.providers] == ["better_hindsight"]
-        assert provider.get_tool_schemas() == []
+        assert [schema["name"] for schema in provider.get_tool_schemas()] == [
+            "better_hindsight_recall"
+        ]
+        assert manager.has_tool("better_hindsight_recall") is True
+        assert json.loads(
+            manager.handle_tool_call("better_hindsight_recall", {"query": "fixture query"})
+        ) == {"error": "Better Hindsight recall is unavailable."}
 
         yield _RetentionHarness(config=config, loop=loop, manager=manager, server=server)
     finally:

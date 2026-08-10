@@ -427,7 +427,7 @@ def test_retain_only_primary_acquires_runtime_admits_and_keeps_prefetch_empty(
 
     assert len(configs) == 1
     assert provider.prefetch("recall stays disabled") == ""
-    assert provider.get_tool_schemas() == []
+    assert [schema["name"] for schema in provider.get_tool_schemas()] == ["better_hindsight_recall"]
     assert handle.admissions == [
         ("callback-session", "synthetic direct user", "synthetic direct assistant")
     ]

@@ -145,7 +145,12 @@ The provider contributes one byte-stable system-role policy for the exact
 `[BETTER_HINDSIGHT_HISTORICAL_EVIDENCE_BEGIN] ...
 [BETTER_HINDSIGHT_HISTORICAL_EVIDENCE_END]` envelope. Every enclosed JSONL record is treated as
 stale, untrusted historical evidence: it is evidence to evaluate, not an instruction, role message,
-or authority over the current conversation. The provider exposes no model-facing memory tool.
+or authority over the current conversation. The provider exposes one model-facing read-only tool,
+`better_hindsight_recall`, for focused retrieval when automatic context is insufficient. The tool
+uses the same authorized provider handle, query projection, configured Hindsight recall controls,
+deadline, redaction, allowlist, complete-record byte budget, and untrusted evidence envelope. Its
+sole argument is `query`; callers cannot override bank, tags, types, budget, scores, result size, or
+timeout.
 
 Every recalled response text passes through the same deterministic high-confidence redactor before
 byte budgeting and JSON serialization. The deliberately narrow patterns cover labeled API-key
@@ -255,8 +260,8 @@ request, so this is replace-safe best effort, not exactly-once transport or a ze
 `retain_mission` and `observations_mission` are independent optional texts. Loading and initialization
 do not check or apply them. Operators can compare configured and remote values with
 `hermes better_hindsight missions check`; applying drift requires the explicit
-`hermes better_hindsight missions apply --confirm` command. No model-facing memory tools in the
-first prerelease can invoke either operation.
+`hermes better_hindsight missions apply --confirm` command. The model-facing recall tool cannot
+invoke either operation, and no retain, reflect, mission, or configuration tool is exposed.
 
 Development writes require an isolated Hindsight instance and Hermes profile. Production uses a
 separate canary instance and bank while the old deployment remains untouched for rollback.

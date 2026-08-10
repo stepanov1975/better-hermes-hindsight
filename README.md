@@ -62,8 +62,12 @@ schema, source digest, segment index, and segment count so a long source remains
 after its completed local outbox rows are deleted.
 
 `codex_app_server` is unsupported because that runtime bypasses normal provider
-memory behavior. No model-facing memory tools in the first prerelease are registered; recall is
-automatic context and mission changes require an explicit operator command.
+memory behavior. Released `v0.1.0a1` registered no model-facing memory tools. The current unreleased
+development branch adds only read-only `better_hindsight_recall`, a bounded fallback when automatic
+context is insufficient. It reuses the authorized provider's configured recall policy and
+untrusted-evidence formatter; the model cannot select another bank or override recall policy. Retain,
+reflect, configuration, and mission tools are not exposed, and mission changes require an explicit
+operator command.
 
 ## Initial scope
 
@@ -71,6 +75,8 @@ automatic context and mission changes require an explicit operator command.
 - Exact initial target: `hindsight-client==0.8.5` with Hindsight server 0.8.5.
 - Current-query recall is the only remote or potentially long-running memory work before the first
   model call. It has a bounded fail-open deadline.
+- `better_hindsight_recall` can deliberately repeat that same bounded, read-only retrieval path with
+  a focused query. It adds no model-directed write or caller-selected recall controls.
 - Retention accepts non-empty user/final-assistant text from the released callback as-is. It does not
   infer authoritative human-versus-synthetic origin from text, platform names, or transcript shape.
 - The callback path performs bounded redaction, segmentation, and one atomic SQLite admission. It

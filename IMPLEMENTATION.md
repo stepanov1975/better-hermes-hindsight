@@ -8,11 +8,13 @@ cannot restart abandoned work.
 
 - Canonical plan: `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
 - Canonical-plan SHA-256:
-  `ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31`
+  `73471e6c186e99e1b65cd1316de63446fbba8da0b7c6618f5f93376220484a8d`
 - Last completed remote candidate checkpoint: `030aeff` (`ci: remove prerelease bootstrap dependency`)
 - Released GitHub prerelease checkpoint: `3404516` (`docs: close prerelease candidate evidence`)
 - Compatibility rebaseline checkpoint: `2a05a10` (`ci: rebaseline Hermes compatibility gates`)
-- Plan state: Tasks 0–7 and the rolling Hermes compatibility/release rebaseline are complete. The
+- Plan state: Tasks 0–8 and the rolling Hermes compatibility/release rebaseline are complete. Task 8
+  is the current unreleased follow-up and adds only bounded read-only `better_hindsight_recall`; it
+  does not add model-facing retain, reflect, mission, or configuration tools. The first-prerelease
   functional candidate is `030aeff`; evidence-only closure `3404516` is tagged `v0.1.0a1` and published
   as a GitHub-only development prerelease. Initial focused review found a non-portable checksum manifest
   and an incomplete source distribution; both fixes passed exact-candidate re-review. Later reviews
@@ -34,7 +36,8 @@ cannot restart abandoned work.
 - Publication boundary: GitHub prerelease `v0.1.0a1` contains the exact workflow-built wheel, sdist,
   and checksum manifest. Trusted PyPI publishing is deferred. The `pypi` environment is restricted to
   exact tag `v0.1.0a1`, while `PYPI_RELEASE_CONFIGURED` remains absent and no PyPI project exists, so
-  PyPI publication remains fail-closed. No production or canary deployment occurred.
+  PyPI publication remains fail-closed. Task 8 is unreleased, and no production or canary deployment
+  occurred.
 
 ## Completed foundation
 

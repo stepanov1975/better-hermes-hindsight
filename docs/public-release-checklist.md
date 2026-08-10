@@ -31,7 +31,10 @@ Dependabot alerts. The `pypi` environment is restricted to exact tag `v0.1.0a1`,
       it makes no Hindsight request and does not wait for remote drain.
 - [x] `codex_app_server` remains explicitly unsupported for Better Hindsight memory behavior on the
       current supported release.
-- [x] No model-facing memory tools ship in the first prerelease.
+- [x] Released `v0.1.0a1` shipped no model-facing memory tools.
+- [x] The current unreleased development branch adds only bounded read-only
+      `better_hindsight_recall`; it reuses the authorized automatic-recall policy and exposes no bank
+      or policy overrides. No retain, reflect, mission, or configuration tool is added.
 
 ## Queue and remote delivery
 
