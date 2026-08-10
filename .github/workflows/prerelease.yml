@@ -63,13 +63,11 @@ jobs:
           python - <<'PY'
           import os
           import tomllib
-          from packaging.version import Version
 
           with open("pyproject.toml", "rb") as stream:
               version = tomllib.load(stream)["project"]["version"]
-          parsed = Version(version)
-          if not parsed.is_prerelease:
-              raise SystemExit("release workflow accepts prerelease versions only")
+          if version != "0.1.0a1":
+              raise SystemExit("release workflow accepts version 0.1.0a1 only")
           if os.environ["GITHUB_REF_NAME"] != f"v{version}":
               raise SystemExit("tag does not match package version")
           PY

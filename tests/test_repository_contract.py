@@ -2403,6 +2403,15 @@ def test_prerelease_publication_is_manual_tag_bound_and_environment_gated() -> N
     build_if = build.get("if")
     assert isinstance(build_if, str)
     _assert_terms(build_if, "github.ref_type == 'tag'", "inputs.expected_commit == github.sha")
+    identity = _workflow_step(build, "Verify immutable prerelease identity")
+    identity_script = identity.get("run")
+    assert isinstance(identity_script, str)
+    _assert_terms(
+        identity_script,
+        'version != "0.1.0a1"',
+        'os.environ["GITHUB_REF_NAME"] != f"v{version}"',
+    )
+    assert "packaging" not in identity_script
     upload = _workflow_step(build, "Upload immutable candidate artifacts")
     assert upload["uses"] == ("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a")
     build_step = _workflow_step(build, "Run release gates and build distributions")
