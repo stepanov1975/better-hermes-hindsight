@@ -11,19 +11,20 @@ cannot restart abandoned work.
   `ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31`
 - Last completed code checkpoint: `2a941a9` (`release: prepare 0.1.0a1 prerelease candidate`)
 - Compatibility rebaseline checkpoint: `2a05a10` (`ci: rebaseline Hermes compatibility gates`)
-- Plan state: Tasks 0–6 and the rolling Hermes compatibility/release rebaseline are complete. Task 7
-  is authorized. Initial focused review found a non-portable checksum manifest and an incomplete
-  source distribution; both fixes are implemented locally and await exact-candidate re-review.
-  Repository push, publication, production canary activation, and visibility changes remain pending
-  separate authorization.
+- Plan state: Tasks 0–7 and the rolling Hermes compatibility/release rebaseline are complete for
+  local prerelease candidate `3f7f94b`. Initial focused review found a non-portable checksum
+  manifest and an incomplete source distribution; both fixes passed the final exact-candidate
+  re-review with no unresolved Blocking or Important findings. Repository push, exact-commit CI,
+  publication, production canary activation, and visibility changes remain pending separate
+  authorization.
 - Completed Task 5 scope: remote segment reconstruction metadata plus a thin root plugin layout for
   the released Hermes Git plugin lifecycle
 - Security scope: Better Hindsight code, artifacts, its complete runtime dependency closure, and the
   locked project-owned build/publication tooling are release gates. Hermes `v2026.8.3`'s unrelated
   `cryptography==48.0.1` findings remain upstream host observations because the plugin neither depends
   on that package nor invokes the affected paths.
-- Next action: commit the focused review fixes, rebuild and verify the exact commit from a clean
-  checkout, and obtain the final re-review before closing the local Task 7 checkpoint
+- Next action: request separate authorization to push the candidate, run exact-commit GitHub checks,
+  resolve the remote default-branch Dependabot state, and configure publication protections
 
 ## Completed foundation
 

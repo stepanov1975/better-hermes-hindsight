@@ -181,15 +181,16 @@ upstream evidence and do not become vulnerabilities in Better Hindsight's distri
       compatibility/security policy, documentation, package version metadata, and release automation.
 - [ ] CI and security workflows pass for the exact release commit after the separately authorized push.
 - [ ] Dependabot alerts and dependency review are clear or explicitly resolved on the pushed candidate.
-- [ ] Independent contract/architecture and implementation/operations re-reviews report no unresolved
-      Blocking or Important finding within the agreed best-effort scope.
+- [x] Independent contract/architecture and implementation/operations re-reviews report no unresolved
+      Blocking or Important finding within the agreed best-effort scope; candidate `3f7f94b` passed
+      the final focused re-review.
 
 ## Release
 
 - [x] Replace version `0.0.0` with an explicit prerelease version.
 - [x] Update `CHANGELOG.md` and prepare release notes naming limitations and rollback.
 - [x] Build artifacts from a clean checkout and verify them in fresh environments.
-- [ ] Add a guarded release workflow only after relea...[truncated]
+- [x] Add a guarded release workflow and independently review its release behavior and fixes.
 - [x] Change repository visibility or publish only after explicit owner approval.
 - [ ] Read back visibility, tag, assets, checks, package metadata, and security settings after the
       separately authorized publication.
