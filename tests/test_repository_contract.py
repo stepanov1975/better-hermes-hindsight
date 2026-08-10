@@ -91,9 +91,9 @@ TASK4_FROZEN_AUTHORITY_PATHS = (
 )
 
 _TASK4_FROZEN_AUTHORITY_SHA256 = {
-    "IMPLEMENTATION.md": "825afd4bd2389982661a3a2904b7d427420084c7d3a71c122d82afe99189cff1",
+    "IMPLEMENTATION.md": "9610a5c7daf7072dbb0a870bc37f7b7a0066cf958569beedab6b8ad5cc74a42f",
     "README.md": "bf826b3d1dee922cba7474f550bd7cf04819d09625f7ded944d69ca851bfa72f",
-    "DESIGN.md": "62d5657a8ddec54e0d12ebf5e1276e7a9339e3923cabf5d97fb9d7222fb5ab74",
+    "DESIGN.md": "d53bf8d71d7ea3c0c280deb4851be79c2d76a915ec23bb0c2d51d7f147d8354a",
     "docs/audit-findings.md": "6968809d0860ee5418414f74e2cecff74745c0b9972a1a0aec0a67b085859b92",
     "docs/compatibility.md": "bcfb3597c553e56ce090615d794253177af2f892f6bc9b327e69737715f0d1da",
     "docs/configuration.md": "08f660c7e8f311640a26b495ef160e187137156fc6632b37d7bb180b64a975d5",
@@ -102,7 +102,7 @@ _TASK4_FROZEN_AUTHORITY_SHA256 = {
     ),
     "docs/operations.md": "df2f4c26d32280b32df7269e41a56cb31f894093d19d50af482ad5956be07d6f",
     "docs/public-release-checklist.md": (
-        "f2e0669dd30370d378547eef1b8021f7a01bb7ae83be932c3816bcdd5701e642"
+        "05854cf8fd24b3a36c2e7427b30d4f74682261be470520e43f01a983301f682b"
     ),
     "src/better_hermes_hindsight/config.py": (
         "ce310b60359d34c6e2c30fcc46592d43ecc0b2ad36a6731ae87743b21a733621"
@@ -1421,7 +1421,7 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
         ".hermes/plans/2026-07-27_071437-best-effort-plugin.md",
         "ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31",
         "Tasks 0–6 and the rolling Hermes compatibility/release rebaseline are complete",
-        "Last completed code checkpoint: `f637367`",
+        "Last completed code checkpoint: `2a941a9`",
         "dedicated Hermes interpreter/profile",
     )
     normalized_router = _normalized(router)
@@ -2330,6 +2330,17 @@ def test_first_prerelease_metadata_and_operator_paths_are_consistent() -> None:
     assert "better_hermes_hindsight-0.0.0" not in installation
     assert installation.count("better_hermes_hindsight-0.1.0a1-py3-none-any.whl") == 2
 
+    sdist_manifest = _read("MANIFEST.in")
+    _assert_terms(
+        sdist_manifest,
+        "include *.md",
+        "include *.py",
+        "include uv.lock",
+        "recursive-include .github *.yml",
+        "recursive-include docs *.md",
+        "recursive-include tests *.py",
+    )
+
 
 def test_prerelease_publication_is_manual_tag_bound_and_environment_gated() -> None:
     workflow_path = ".github/workflows/prerelease.yml"
@@ -2349,9 +2360,14 @@ def test_prerelease_publication_is_manual_tag_bound_and_environment_gated() -> N
     _assert_terms(build_if, "github.ref_type == 'tag'", "inputs.expected_commit == github.sha")
     upload = _workflow_step(build, "Upload immutable candidate artifacts")
     assert upload["uses"] == ("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a")
+    build_step = _workflow_step(build, "Run release gates and build distributions")
+    build_script = build_step.get("run")
+    assert isinstance(build_script, str)
+    _assert_terms(build_script, "cd dist", "sha256sum ./*.whl ./*.tar.gz > SHA256SUMS")
+    assert "sha256sum dist/" not in build_script
 
     publish = _workflow_job("publish-pypi", workflow=workflow_path)
-    assert publish.get("needs") == "build-candidate"
+    assert publish.get("needs") == ["build-candidate", "validate-publish-configuration"]
     publish_if = publish.get("if")
     assert isinstance(publish_if, str)
     assert "inputs.publish_pypi == true" in publish_if
@@ -2360,4 +2376,26 @@ def test_prerelease_publication_is_manual_tag_bound_and_environment_gated() -> N
     publish_step = _workflow_step(publish, "Publish exact candidate to PyPI")
     assert publish_step["uses"] == (
         "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33"
+    )
+    checksum_step = _workflow_step(publish, "Verify candidate checksums")
+    checksum_script = checksum_step.get("run")
+    assert isinstance(checksum_script, str)
+    assert "cd candidate && sha256sum --check SHA256SUMS" in checksum_script
+
+    validation = _workflow_job("validate-publish-configuration", workflow=workflow_path)
+    assert validation.get("needs") == "build-candidate"
+    validation_if = validation.get("if")
+    assert isinstance(validation_if, str)
+    assert "inputs.publish_pypi == true" in validation_if
+    validation_step = _workflow_step(
+        validation,
+        "Fail closed until PyPI and environment protections are configured",
+    )
+    validation_script = validation_step.get("run")
+    assert isinstance(validation_script, str)
+    _assert_terms(
+        validation_script,
+        "PYPI_RELEASE_CONFIGURED",
+        "protecting the pypi environment",
+        "PyPI trusted publishing",
     )

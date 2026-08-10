@@ -95,7 +95,10 @@ jobs:
           rm -rf dist
           .venv/bin/python -m build
           .venv/bin/python -m twine check dist/*
-          sha256sum dist/* > dist/SHA256SUMS
+          (
+            cd dist
+            sha256sum ./*.whl ./*.tar.gz > SHA256SUMS
+          )
 
       - name: Smoke-test wheel in a fresh environment
         run: |
@@ -117,9 +120,9 @@ jobs:
           retention-days: 14
 
   publish-pypi:
-    name: Publish approved candidate to PyPI
-    needs: build-candidate
-    if: inputs.publish_pypi == true
+    name: Publish exact candidate to PyPI
+    needs: [build-candidate, validate-publish-configuration]
+    if: ${{ inputs.publish_pypi == true }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment:
@@ -137,7 +140,7 @@ jobs:
 
       - name: Verify candidate checksums
         run: |
-          sha256sum --check candidate/SHA256SUMS
+          (cd candidate && sha256sum --check SHA256SUMS)
           rm candidate/SHA256SUMS
 
       - name: Publish exact candidate to PyPI
@@ -145,3 +148,21 @@ jobs:
         with:
           packages-dir: candidate/
           print-hash: true
+
+  validate-publish-configuration:
+    name: Require explicit repository publication configuration
+    needs: build-candidate
+    if: ${{ inputs.publish_pypi == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      PYPI_RELEASE_CONFIGURED: ${{ vars.PYPI_RELEASE_CONFIGURED }}
+    steps:
+      - name: Fail closed until PyPI and environment protections are configured
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${PYPI_RELEASE_CONFIGURED}" != "true" ]]; then
+            echo "Set PYPI_RELEASE_CONFIGURED=true only after protecting the pypi environment and configuring PyPI trusted publishing." >&2
+            exit 1
+          fi

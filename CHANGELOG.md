@@ -24,8 +24,11 @@ semantic prerelease versions while its public compatibility contract is proven.
 - High-confidence credential patterns are redacted before formatting or retention admission.
 - Automatic retention is disabled by default; development writes require explicit opt-in and an
   isolated interpreter, profile, Hindsight 0.8.5 service, and disposable bank.
-- Release publication requires an exact prerelease tag and commit, a manual publish input, and the
-  protected `pypi` GitHub environment.
+- Release publication requires an exact prerelease tag and commit, a manual publish input, the
+  operator-protected `pypi` GitHub environment, trusted-publishing configuration, and the
+  `PYPI_RELEASE_CONFIGURED=true` repository variable set only after both protections exist.
+- The source distribution includes the root Hermes bridge, operator documentation, workflows, and
+  tests needed to inspect and exercise the source artifact independently.
 
 ### Known limitations
 
