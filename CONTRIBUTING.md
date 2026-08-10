@@ -1,7 +1,8 @@
 # Contributing
 
-The project is pre-alpha. Discuss architectural changes before implementing them, keep
-diffs narrow, and do not claim production readiness from mocked tests alone.
+Version `0.1.0a1` is a development prerelease candidate, not a production release. Discuss
+architectural changes before implementing them, keep diffs narrow, and do not claim production
+readiness from mocked tests alone.
 
 ## Development setup
 

@@ -91,16 +91,16 @@ TASK4_FROZEN_AUTHORITY_PATHS = (
 )
 
 _TASK4_FROZEN_AUTHORITY_SHA256 = {
-    "IMPLEMENTATION.md": "41930cc850e57d074d1327c809de5bf7d66dd2e0fe03a734de3f7c93865be2c6",
-    "README.md": "cf0ea735e6453489551c92310d4af2bf907715500ad48db795fd7a5915012cd8",
-    "DESIGN.md": "2396953c390dc8fe51c40dd81d62c182752dd1610b228a1d0438890ba1586c34",
+    "IMPLEMENTATION.md": "825afd4bd2389982661a3a2904b7d427420084c7d3a71c122d82afe99189cff1",
+    "README.md": "bf826b3d1dee922cba7474f550bd7cf04819d09625f7ded944d69ca851bfa72f",
+    "DESIGN.md": "62d5657a8ddec54e0d12ebf5e1276e7a9339e3923cabf5d97fb9d7222fb5ab74",
     "docs/audit-findings.md": "6968809d0860ee5418414f74e2cecff74745c0b9972a1a0aec0a67b085859b92",
     "docs/compatibility.md": "bcfb3597c553e56ce090615d794253177af2f892f6bc9b327e69737715f0d1da",
     "docs/configuration.md": "08f660c7e8f311640a26b495ef160e187137156fc6632b37d7bb180b64a975d5",
     "docs/development-instance.md": (
         "6ee5b3cd960fab6fee52c569c54d7578683c9ba0b6a242578a367f408be87d10"
     ),
-    "docs/operations.md": "5b8f41b06836ac23dddcf74ffa8352fb97a149637503c5384a94a71cf7396f3e",
+    "docs/operations.md": "df2f4c26d32280b32df7269e41a56cb31f894093d19d50af482ad5956be07d6f",
     "docs/public-release-checklist.md": (
         "f2e0669dd30370d378547eef1b8021f7a01bb7ae83be932c3816bcdd5701e642"
     ),
@@ -1421,7 +1421,7 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
         ".hermes/plans/2026-07-27_071437-best-effort-plugin.md",
         "ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31",
         "Tasks 0–6 and the rolling Hermes compatibility/release rebaseline are complete",
-        "Last completed code checkpoint: `2a05a10`",
+        "Last completed code checkpoint: `f637367`",
         "dedicated Hermes interpreter/profile",
     )
     normalized_router = _normalized(router)
@@ -2278,8 +2278,8 @@ def test_unrelated_host_findings_are_informational_without_plugin_reachability()
         "do not block Task 7 or public release",
         "does not declare or import `cryptography`",
         "no allowlist or dependency override",
-        "development-only prerelease workflow",
-        "Task 7, production use, and publication remain separately authorized",
+        "0.1.0a1` is a reviewed development prerelease candidate",
+        "publication remain separately authorized",
     )
     plugin_job = _workflow_job("project-dependency-security")
     for name in (
@@ -2306,3 +2306,58 @@ def test_unrelated_host_findings_are_informational_without_plugin_reachability()
     assert cryptography_versions == ["50.0.0"]
     source = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "src").rglob("*.py"))
     assert "cryptography" not in source.casefold()
+
+
+def test_first_prerelease_metadata_and_operator_paths_are_consistent() -> None:
+    version = tomllib.loads(_read("pyproject.toml"))["project"]["version"]
+    assert version == "0.1.0a1"
+
+    for manifest_path in (
+        "plugin.yaml",
+        "src/better_hermes_hindsight/hermes_plugin/plugin.yaml",
+    ):
+        manifest = yaml.safe_load(_read(manifest_path))
+        assert isinstance(manifest, dict)
+        assert manifest["version"] == version
+
+    release_notes = _read("docs/releases/0.1.0a1.md")
+    changelog = _read("CHANGELOG.md")
+    installation = _read("docs/installation.md")
+    security = _read("SECURITY.md")
+    _assert_terms(release_notes, "0.1.0a1", "limitations", "rollback", "Hindsight 0.8.5")
+    _assert_terms(changelog, "[0.1.0a1] - 2026-08-10", "Added", "Security")
+    _assert_terms(security, "0.1.0a1", "prerelease", "not supported for production")
+    assert "better_hermes_hindsight-0.0.0" not in installation
+    assert installation.count("better_hermes_hindsight-0.1.0a1-py3-none-any.whl") == 2
+
+
+def test_prerelease_publication_is_manual_tag_bound_and_environment_gated() -> None:
+    workflow_path = ".github/workflows/prerelease.yml"
+    raw_workflow = cast(object, yaml.safe_load(_read(workflow_path)))
+    assert isinstance(raw_workflow, dict)
+    workflow = cast(dict[object, object], raw_workflow)
+
+    trigger = workflow.get(True)  # PyYAML 1.1 parses the unquoted `on` key as true.
+    assert isinstance(trigger, dict)
+    assert set(trigger) == {"workflow_dispatch"}
+    permissions = workflow.get("permissions")
+    assert permissions == {"contents": "read"}
+
+    build = _workflow_job("build-candidate", workflow=workflow_path)
+    build_if = build.get("if")
+    assert isinstance(build_if, str)
+    _assert_terms(build_if, "github.ref_type == 'tag'", "inputs.expected_commit == github.sha")
+    upload = _workflow_step(build, "Upload immutable candidate artifacts")
+    assert upload["uses"] == ("actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a")
+
+    publish = _workflow_job("publish-pypi", workflow=workflow_path)
+    assert publish.get("needs") == "build-candidate"
+    publish_if = publish.get("if")
+    assert isinstance(publish_if, str)
+    assert "inputs.publish_pypi == true" in publish_if
+    assert publish.get("environment") == {"name": "pypi"}
+    assert publish.get("permissions") == {"contents": "read", "id-token": "write"}
+    publish_step = _workflow_step(publish, "Publish exact candidate to PyPI")
+    assert publish_step["uses"] == (
+        "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33"
+    )

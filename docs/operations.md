@@ -1,12 +1,13 @@
 # Operations
 
-Better Hermes Hindsight is still pre-alpha. Sender delivery and host-managed installation are
-implemented and covered by deterministic fake-service and released-Hermes tests. An initial opt-in
-isolated proof ran once with synthetic data and ended with its generated bank absent; review findings
-were closed at checkpoint `3f542d4`. The live node in
-[development-instance.md](development-instance.md) is not an operator next action and requires renewed
-explicit authorization after any candidate change. Automatic retention remains disabled by default.
-Do not enable this repository in a production Hermes profile.
+Better Hermes Hindsight `0.1.0a1` is a development prerelease candidate. Sender delivery and
+host-managed installation are implemented and covered by deterministic fake-service and
+released-Hermes tests. An initial opt-in isolated proof ran once with synthetic data and ended with
+its generated bank absent; review findings were closed at checkpoint `3f542d4`. Task 7's bounded
+independent reviews are complete. Publication and production canary activation remain separately
+authorized. The live node in [development-instance.md](development-instance.md) is not an operator
+next action and requires renewed explicit authorization after any candidate change. Automatic
+retention remains disabled by default. Do not enable this repository in a production Hermes profile.
 
 <!-- better-hindsight-status-storage:start -->
 ## Status storage contract

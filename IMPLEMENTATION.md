@@ -9,16 +9,20 @@ cannot restart abandoned work.
 - Canonical plan: `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
 - Canonical-plan SHA-256:
   `ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31`
-- Last completed code checkpoint: `2a05a10` (`ci: rebaseline Hermes compatibility gates`)
-- Plan state: Tasks 0–6 and the rolling Hermes compatibility/release rebaseline are complete; Task 7
-  is pending separate authorization
+- Last completed code checkpoint: `f637367` (`ci: scope security gates to plugin closure`)
+- Compatibility rebaseline checkpoint: `2a05a10` (`ci: rebaseline Hermes compatibility gates`)
+- Plan state: Tasks 0–6 and the rolling Hermes compatibility/release rebaseline are complete. Task 7
+  is authorized; the `0.1.0a1` local candidate is prepared and its clean-commit artifact gate plus
+  focused final re-review remain pending.
 - Completed Task 5 scope: remote segment reconstruction metadata plus a thin root plugin layout for
   the released Hermes Git plugin lifecycle
 - Security scope: Better Hindsight code, artifacts, its complete runtime dependency closure, and the
   locked project-owned build/publication tooling are release gates. Hermes `v2026.8.3`'s unrelated
   `cryptography==48.0.1` findings remain upstream host observations because the plugin neither depends
   on that package nor invokes the affected paths.
-- Next action: request separate authorization for Task 7 against the reviewed stable candidate
+- Next action: commit the local candidate, build and verify it from a clean checkout, then obtain a
+  focused final re-review before the Task 7 checkpoint; repository push and publication remain
+  separately authorized
 
 ## Completed foundation
 

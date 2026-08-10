@@ -72,7 +72,7 @@ named profile, and select Better:
 
 ```bash
 uv pip install --python "$HERMES_PYTHON" \
-  dist/better_hermes_hindsight-0.0.0-py3-none-any.whl \
+  dist/better_hermes_hindsight-0.1.0a1-py3-none-any.whl \
   'hindsight-client==0.8.5'
 uv pip check --python "$HERMES_PYTHON"
 hermes --profile "$PROFILE" plugins install <reviewed-git-url> --enable

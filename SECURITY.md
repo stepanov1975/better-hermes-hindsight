@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-There are no supported production releases yet. The `0.0.0` scaffold and proof branches
-must not be installed in production.
+There are no supported production releases yet. Version `0.1.0a1` is a development prerelease
+candidate and is not supported for production. Proof branches must not be installed in production.
 
 ## Reporting a vulnerability
 

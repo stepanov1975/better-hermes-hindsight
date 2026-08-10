@@ -2,8 +2,9 @@
 
 Better Hermes Hindsight targets the current stable Hermes Agent release selected by the rolling
 compatibility policy (`v2026.8.3`, package metadata 0.20.0) and an external/self-hosted Hindsight
-0.8.5 service. This is a development-only prerelease workflow. The isolated Task 6 proof is complete
-at checkpoint `3f542d4`; Task 7, production use, and publication remain separately authorized. The
+0.8.5 service. Version `0.1.0a1` is a reviewed development prerelease candidate, not a production
+release. The isolated Task 6 proof is complete at checkpoint `3f542d4`; production canary use and
+publication remain separately authorized. The
 current Hermes `cryptography` findings are documented upstream host observations rather than plugin
 release blockers; see [audit-findings.md](audit-findings.md).
 
@@ -72,7 +73,7 @@ fi
 
 ```bash
 uv pip install --python "$HERMES_PYTHON" \
-  dist/better_hermes_hindsight-0.0.0-py3-none-any.whl \
+  dist/better_hermes_hindsight-0.1.0a1-py3-none-any.whl \
   'hindsight-client==0.8.5'
 uv pip check --python "$HERMES_PYTHON"
 
@@ -108,7 +109,7 @@ checkout:
 
 ```bash
 uv pip install --python "$HERMES_PYTHON" \
-  dist/better_hermes_hindsight-0.0.0-py3-none-any.whl \
+  dist/better_hermes_hindsight-0.1.0a1-py3-none-any.whl \
   'hindsight-client==0.8.5'
 uv pip check --python "$HERMES_PYTHON"
 hermes --profile "$PROFILE" plugins update better_hindsight

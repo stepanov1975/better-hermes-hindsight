@@ -2,7 +2,7 @@
 
 ## Status and authority
 
-Better Hermes Hindsight is a pre-alpha external/self-hosted-only provider. The tracked
+Better Hermes Hindsight `0.1.0a1` is a development prerelease candidate for exter...[truncated]
 [IMPLEMENTATION.md](IMPLEMENTATION.md) router names the only active implementation plan. Two earlier
 plans are retired historical records and cannot supply active requirements.
 
@@ -205,7 +205,9 @@ product goal.
 
 ## Publication policy
 
-No automated release workflow is present during proof work. Before publication, complete
-[docs/public-release-checklist.md](docs/public-release-checklist.md), verify the supported version
-matrix and artifacts in fresh environments, and cut an explicit prerelease rather than publishing
-from every main-branch commit.
+A manual, tag-bound prerelease workflow is present for candidate build and optional publication. It
+requires an exact prerelease tag/commit match; PyPI publication additionally requires an explicit
+boolean input, the protected `pypi` environment, and trusted-publishing OIDC. Before publication,
+complete [docs/public-release-checklist.md](docs/public-release-checklist.md), verify the supported
+version matrix and artifacts in fresh environments, and cut an explicit prerelease rather than
+publishing from every main-branch commit.

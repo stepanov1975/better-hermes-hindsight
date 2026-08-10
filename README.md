@@ -9,11 +9,13 @@ does not require a data migration. On the current supported Hermes release it is
 requires `hindsight-client==0.8.5`, while bundled `hindsight` requires exact `0.6.1`, so switching
 providers also requires the documented stopped-process package-version transition.
 
-> **Status: pre-alpha.** Tasks 0–6 are complete at checkpoint `3f542d4`. The Task 6 proof ran once against a dedicated
+> **Status: `0.1.0a1` development prerelease candidate.** Tasks 0–6 are complete at checkpoint `3f542d4`.
+> The Task 6 proof ran once against a dedicated
 > Hermes 0.19.0 interpreter and isolated Hindsight 0.8.5 instance using only synthetic data; its
 > generated bank was removed and an authenticated post-run listing found zero banks. Its independent
 > findings were closed. The rolling compatibility/release rebaseline is complete at checkpoint
-> `2a05a10`; Task 7 and publication remain separately authorized work. The current-Hermes
+> `2a05a10`; Task 7's bounded independent reviews are complete, while publication and production
+> canary activation remain separately authorized. The current-Hermes
 > `cryptography` findings remain visible in the supported-host audit as upstream observations, not
 > plugin release blockers. The live
 > node is not an operator next action and must not be rerun without a changed candidate plus renewed
@@ -72,6 +74,9 @@ automatic context and mission changes require an explicit operator command.
   infer authoritative human-versus-synthetic origin from text, platform names, or transcript shape.
 - The callback path performs bounded redaction, segmentation, and one atomic SQLite admission. It
   performs no Hindsight request and does not wait for remote drain.
+- Hermes normally schedules this callback on its retention executor. If that executor rejects work
+  during shutdown, Hermes may invoke the same callback inline; Better's bounded local-only behavior
+  is unchanged, but the host caller can then spend that local admission time before returning.
 - One profile-wide POSIX advisory lock elects the sender. Bounded SQLite polling lets that owner see
   rows admitted by another process.
 - Pending rows are matched to a credential-free destination fingerprint and replay the same stable
