@@ -4,9 +4,10 @@ Do not change repository visibility, publish a package, install into an active H
 activate a production canary until every applicable item is verified against one stable release
 candidate. Publication and production rollout require separate owner approval.
 
-Unchecked items require a separately authorized repository push or publication action. The current
-private default branch still has one historical `cryptography` Dependabot alert; the exact local
-candidate's blocking runtime/build and locked-tooling audits are clean.
+Unchecked items require a separately authorized publication or deployment action. Private default
+branch `main` is at reviewed candidate `030aeff`; its exact-commit CI and security workflows pass, and
+the repository reports no open Dependabot alerts. The `pypi` environment and
+`PYPI_RELEASE_CONFIGURED` Actions variable are not configured, so publication remains fail-closed.
 
 ## Best-effort product contract
 
@@ -179,13 +180,14 @@ upstream evidence and do not become vulnerabilities in Better Hindsight's distri
       scans, and `git diff --check` pass on the exact local release candidate. The explicitly enabled
       isolated live proof passed at stable behavior checkpoint `3f542d4`; later changes are limited to
       compatibility/security policy, documentation, package version metadata, and release automation.
-- [ ] CI and security workflows pass for the exact release commit after the separately authorized push.
-- [ ] Dependabot alerts and dependency review are clear or explicitly resolved on the pushed candidate.
+- [x] CI run `31390417755` and security run `31390417898` pass for pushed candidate `030aeff`.
+- [x] The pushed default branch reports no open Dependabot alerts after its dependency graph update.
 - [x] Independent contract/architecture and implementation/operations re-reviews report no unresolved
       Blocking or Important finding within the agreed best-effort scope. Release-behavior candidate
       `3f7f94b` passed its final focused re-review; documentation-fix candidate `8c571c1` then passed
-      exact focused re-review with no Blocking, Important, or Minor findings. The subsequent local
-      metadata closure only records those completed results.
+      exact focused re-review with no Blocking, Important, or Minor findings. Remote-gate candidate
+      `030aeff` subsequently passed independent exact review after closing nested-checkout scanning,
+      prerelease Ruff ownership, and stdlib-only identity-bootstrap defects.
 
 ## Release
 
@@ -194,5 +196,9 @@ upstream evidence and do not become vulnerabilities in Better Hindsight's distri
 - [x] Build artifacts from a clean checkout and verify them in fresh environments.
 - [x] Add a guarded release workflow and independently review its release behavior and fixes.
 - [x] Change repository visibility or publish only after explicit owner approval.
+- [ ] Create and protect the `pypi` environment, configure the PyPI trusted publisher, and set
+      `PYPI_RELEASE_CONFIGURED=true` only after those protections are read back.
+- [ ] With separate authorization, create `v0.1.0a1`, run the manual prerelease workflow against its
+      exact commit, and create the GitHub prerelease/PyPI release only if every gate passes.
 - [ ] Read back visibility, tag, assets, checks, package metadata, and security settings after the
       separately authorized publication.

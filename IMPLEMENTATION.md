@@ -9,24 +9,27 @@ cannot restart abandoned work.
 - Canonical plan: `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
 - Canonical-plan SHA-256:
   `ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31`
-- Last completed local candidate checkpoint: `8c571c1` (`docs: qualify released Hermes inline fallback`)
+- Last completed remote candidate checkpoint: `030aeff` (`ci: remove prerelease bootstrap dependency`)
 - Compatibility rebaseline checkpoint: `2a05a10` (`ci: rebaseline Hermes compatibility gates`)
 - Plan state: Tasks 0–7 and the rolling Hermes compatibility/release rebaseline are complete through
-  reviewed local prerelease candidate `8c571c1`. Initial focused review found a non-portable checksum
-  manifest and an incomplete source distribution; both fixes passed exact-candidate re-review. Two
-  later documentation-only reviews found and closed literal truncation artifacts and an over-absolute
-  description of released Hermes callback scheduling. Candidate `8c571c1` passed focused independent
-  re-review with no Blocking, Important, or Minor findings. This metadata closure changes no
-  executable, package, or release-workflow behavior. Repository push, exact-commit CI, publication,
-  production canary activation, and visibility changes remain pending separate authorization.
+  pushed prerelease candidate `030aeff`. Initial focused review found a non-portable checksum manifest
+  and an incomplete source distribution; both fixes passed exact-candidate re-review. Later reviews
+  closed literal truncation artifacts, corrected released-Hermes callback scheduling prose, scoped
+  recursive gates away from the nested compatibility checkout, and removed a pre-sync packaging import
+  from prerelease identity validation. Candidate `030aeff` passed independent exact-candidate review,
+  exact-commit GitHub CI run `31390417755`, and security run `31390417898`; the pushed default branch
+  then reported no open Dependabot alerts. This status closure changes no executable, package, or
+  release-workflow behavior. Tagging, publication, production canary activation, and visibility changes
+  remain pending separate authorization.
 - Completed Task 5 scope: remote segment reconstruction metadata plus a thin root plugin layout for
   the released Hermes Git plugin lifecycle
 - Security scope: Better Hindsight code, artifacts, its complete runtime dependency closure, and the
   locked project-owned build/publication tooling are release gates. Hermes `v2026.8.3`'s unrelated
   `cryptography==48.0.1` findings remain upstream host observations because the plugin neither depends
   on that package nor invokes the affected paths.
-- Next action: request separate authorization to push the candidate, run exact-commit GitHub checks,
-  resolve the remote default-branch Dependabot state, and configure publication protections
+- Next action: decide whether to configure publication protections and separately authorize a
+  `v0.1.0a1` tag/publication. The private repository currently has no `pypi` environment and no
+  `PYPI_RELEASE_CONFIGURED` Actions variable, so publication remains fail-closed.
 
 ## Completed foundation
 
