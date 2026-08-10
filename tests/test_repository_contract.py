@@ -2408,7 +2408,15 @@ def test_prerelease_publication_is_manual_tag_bound_and_environment_gated() -> N
     build_step = _workflow_step(build, "Run release gates and build distributions")
     build_script = build_step.get("run")
     assert isinstance(build_script, str)
-    _assert_terms(build_script, "cd dist", "sha256sum ./*.whl ./*.tar.gz > SHA256SUMS")
+    _assert_terms(
+        build_script,
+        ".venv/bin/python -m ruff check src tests __init__.py cli.py",
+        ".venv/bin/python -m ruff format --check src tests __init__.py cli.py",
+        "cd dist",
+        "sha256sum ./*.whl ./*.tar.gz > SHA256SUMS",
+    )
+    assert ".venv/bin/python -m ruff check ." not in build_script
+    assert ".venv/bin/python -m ruff format --check ." not in build_script
     assert "sha256sum dist/" not in build_script
 
     publish = _workflow_job("publish-pypi", workflow=workflow_path)

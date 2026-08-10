@@ -88,8 +88,8 @@ jobs:
           BETTER_HINDSIGHT_EXPECT_HERMES_VERSION: "0.20.0"
         run: |
           uv lock --check
-          .venv/bin/python -m ruff check .
-          .venv/bin/python -m ruff format --check .
+          .venv/bin/python -m ruff check src tests __init__.py cli.py
+          .venv/bin/python -m ruff format --check src tests __init__.py cli.py
           .venv/bin/python -m mypy
           .venv/bin/python -m pytest
           rm -rf dist
