@@ -9,13 +9,14 @@ does not require a data migration. On the current supported Hermes release it is
 requires `hindsight-client==0.8.5`, while bundled `hindsight` requires exact `0.6.1`, so switching
 providers also requires the documented stopped-process package-version transition.
 
-> **Status: `0.1.0a1` development prerelease candidate.** Tasks 0–6 are complete at checkpoint `3f542d4`.
+> **Status: `0.1.0a1` GitHub development prerelease.** Tasks 0–6 are complete at checkpoint `3f542d4`.
 > The Task 6 proof ran once against a dedicated
 > Hermes 0.19.0 interpreter and isolated Hindsight 0.8.5 instance using only synthetic data; its
 > generated bank was removed and an authenticated post-run listing found zero banks. Its independent
 > findings were closed. The rolling compatibility/release rebaseline is complete at checkpoint
-> `2a05a10`; Task 7's bounded independent reviews are complete, while publication and production
-> canary activation remain separately authorized. The current-Hermes
+> `2a05a10`; Task 7's bounded independent reviews are complete. The exact-tag GitHub prerelease is
+> available, while trusted PyPI publication and production canary activation remain separately
+> authorized. The current-Hermes
 > `cryptography` findings remain visible in the supported-host audit as upstream observations, not
 > plugin release blockers. The live
 > node is not an operator next action and must not be rerun without a changed candidate plus renewed
@@ -132,7 +133,7 @@ and no production credential belongs in the test process.
 Production rollout uses a dedicated Hermes interpreter/profile plus a separate canary instance and
 bank, preserving the old deployment. The existing Hermes installation, Hindsight instance, and bank
 remain running, unmodified, and available for rollback; this prerelease performs no initial
-migration, deduplication, reconstruction, or deletion. Canary activation, publication, and any
+migration, deduplication, reconstruction, or deletion. Canary activation, PyPI publication, and any
 production mutation remain separately authorized.
 
 ## Repository and implementation authority

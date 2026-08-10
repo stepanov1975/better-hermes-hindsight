@@ -2,9 +2,9 @@
 
 Better Hermes Hindsight targets the current stable Hermes Agent release selected by the rolling
 compatibility policy (`v2026.8.3`, package metadata 0.20.0) and an external/self-hosted Hindsight
-0.8.5 service. Version `0.1.0a1` is a reviewed development prerelease candidate, not a production
+0.8.5 service. Version `0.1.0a1` is a reviewed GitHub development prerelease, not a production
 release. The isolated Task 6 proof is complete at checkpoint `3f542d4`; production canary use and
-publication remain separately authorized. The
+trusted PyPI publishing remains separately authorized. The
 current Hermes `cryptography` findings are documented upstream host observations rather than plugin
 release blockers; see [audit-findings.md](audit-findings.md).
 
@@ -28,8 +28,9 @@ need an incompatible provider/SDK must remain stopped.
 
 - standard current stable Hermes Agent installation;
 - `uv` available on `PATH`;
-- a built Better Hermes Hindsight wheel from the reviewed commit;
-- the Git URL for that same reviewed commit;
+- the downloaded wheel and `SHA256SUMS` from the reviewed GitHub release, or a locally built wheel
+  from a reviewed source commit;
+- a local Git checkout pinned to and verified against that same reviewed commit;
 - an existing named Hermes profile plus an isolated Hindsight 0.8.5 development instance; and
 - credentials supplied through the documented profile configuration path, never the repository.
 
@@ -47,13 +48,12 @@ If Hermes uses another interpreter, set `HERMES_PYTHON` to the interpreter named
 
 ## Stop every process sharing the interpreter
 
-Build the reviewed wheel first. Then list gateways and stop every profile backed by this Hermes
-installation, not only `$PROFILE`:
+Acquire and verify the release wheel and exact tagged Git checkout using the immutable procedure in
+the [release notes](releases/0.1.0a1.md). For development-only source builds, build the reviewed wheel
+before continuing. Then list gateways and stop every profile backed by this Hermes installation, not
+only `$PROFILE`:
 
 ```bash
-# From the reviewed Better Hermes Hindsight checkout:
-uv build
-
 hermes gateway list
 # Repeat for every listed profile using HERMES_PYTHON:
 hermes --profile <profile> gateway stop
@@ -72,12 +72,21 @@ fi
 ## Install into the selected profile
 
 ```bash
+BETTER_WHEEL=/path/to/verified/better_hermes_hindsight-0.1.0a1-py3-none-any.whl
+SOURCE_DIR=/path/to/verified/v0.1.0a1-checkout
+EXPECTED_COMMIT=3404516e69d4d9861b04ff9299a2c30a76566158
+
 uv pip install --python "$HERMES_PYTHON" \
-  dist/better_hermes_hindsight-0.1.0a1-py3-none-any.whl \
+  "$BETTER_WHEEL" \
   'hindsight-client==0.8.5'
 uv pip check --python "$HERMES_PYTHON"
 
-hermes --profile "$PROFILE" plugins install <reviewed-git-url> --enable
+test "$(git -C "$SOURCE_DIR" rev-parse HEAD)" = "$EXPECTED_COMMIT"
+hermes --profile "$PROFILE" plugins install "file://$SOURCE_DIR" --enable
+HERMES_BASE="${HERMES_HOME:-$HOME/.hermes}"
+PLUGIN_DIR="$HERMES_BASE/profiles/$PROFILE/plugins/better_hindsight"
+test "$(git -C "$PLUGIN_DIR" rev-parse HEAD)" = "$EXPECTED_COMMIT"
+test -z "$(git -C "$PLUGIN_DIR" status --porcelain=v1)"
 hermes --profile "$PROFILE" config set memory.provider better_hindsight
 ```
 
@@ -103,16 +112,19 @@ isolated canary. Leave incompatible profiles stopped or give them a separate Her
 
 ## Update
 
-Build the reviewed replacement first, then repeat the all-process stop and interpreter-use check.
-Upgrade the wheel and exact SDK with `uv pip --python`, and update only the selected profile's Git
-checkout:
+Acquire and verify the replacement release's exact wheel and tagged local checkout, then repeat the
+all-process stop and interpreter-use check. Upgrade the wheel and exact SDK with `uv pip --python`,
+and replace only the selected profile's Git checkout from that verified local source:
 
 ```bash
 uv pip install --python "$HERMES_PYTHON" \
-  dist/better_hermes_hindsight-0.1.0a1-py3-none-any.whl \
+  "$BETTER_WHEEL" \
   'hindsight-client==0.8.5'
 uv pip check --python "$HERMES_PYTHON"
-hermes --profile "$PROFILE" plugins update better_hindsight
+test "$(git -C "$SOURCE_DIR" rev-parse HEAD)" = "$EXPECTED_COMMIT"
+hermes --profile "$PROFILE" plugins install "file://$SOURCE_DIR" --force --enable
+test "$(git -C "$PLUGIN_DIR" rev-parse HEAD)" = "$EXPECTED_COMMIT"
+test -z "$(git -C "$PLUGIN_DIR" status --porcelain=v1)"
 ```
 
 The Hermes command does not rewrite the Python environment. Re-run profile-scoped discovery, status,

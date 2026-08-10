@@ -66,16 +66,30 @@ profiles that still select Better stopped or give them a separate Hermes interpr
 
 ## Return to Better
 
-Stop and verify every process sharing the interpreter again. Use `uv pip --python` to install the
-reviewed Better wheel and exact `hindsight-client==0.8.5`, install the reviewed Git plugin into the
-named profile, and select Better:
+Stop and verify every process sharing the interpreter again. Acquire and verify the release assets
+and exact tag clone using the
+[immutable installation procedure](releases/0.1.0a1.md#immutable-installation-inputs),
+then set these paths:
 
 ```bash
+BETTER_WHEEL=/path/to/downloaded/better_hermes_hindsight-0.1.0a1-py3-none-any.whl
+SOURCE_DIR=/path/to/exact-v0.1.0a1-clone
+EXPECTED_COMMIT=3404516e69d4d9861b04ff9299a2c30a76566158
+HERMES_BASE="${HERMES_HOME:-$HOME/.hermes}"
+PLUGIN_DIR="$HERMES_BASE/profiles/$PROFILE/plugins/better_hindsight"
+
+test "$(sha256sum "$BETTER_WHEEL" | cut -d' ' -f1)" = \
+  ba94a798c34043bca02fb80eb51200ae62e82bde85973c6314da7812de5e7ce4
+test "$(git -C "$SOURCE_DIR" rev-parse HEAD)" = "$EXPECTED_COMMIT"
+test -z "$(git -C "$SOURCE_DIR" status --porcelain)"
+
 uv pip install --python "$HERMES_PYTHON" \
-  dist/better_hermes_hindsight-0.1.0a1-py3-none-any.whl \
+  "$BETTER_WHEEL" \
   'hindsight-client==0.8.5'
 uv pip check --python "$HERMES_PYTHON"
-hermes --profile "$PROFILE" plugins install <reviewed-git-url> --enable
+hermes --profile "$PROFILE" plugins install "file://$SOURCE_DIR" --force --enable
+test "$(git -C "$PLUGIN_DIR" rev-parse HEAD)" = "$EXPECTED_COMMIT"
+test -z "$(git -C "$PLUGIN_DIR" status --porcelain)"
 hermes --profile "$PROFILE" config set memory.provider better_hindsight
 hermes --profile "$PROFILE" better_hindsight status
 ```

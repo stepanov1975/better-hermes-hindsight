@@ -1,6 +1,6 @@
 # Contributing
 
-Version `0.1.0a1` is a development prerelease candidate, not a production release. Discuss
+Version `0.1.0a1` is a GitHub development prerelease, not a production release. Discuss
 architectural changes before implementing them, keep diffs narrow, and do not claim production
 readiness from mocked tests alone.
 

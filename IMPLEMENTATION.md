@@ -10,26 +10,31 @@ cannot restart abandoned work.
 - Canonical-plan SHA-256:
   `ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31`
 - Last completed remote candidate checkpoint: `030aeff` (`ci: remove prerelease bootstrap dependency`)
+- Released GitHub prerelease checkpoint: `3404516` (`docs: close prerelease candidate evidence`)
 - Compatibility rebaseline checkpoint: `2a05a10` (`ci: rebaseline Hermes compatibility gates`)
-- Plan state: Tasks 0–7 and the rolling Hermes compatibility/release rebaseline are complete through
-  pushed prerelease candidate `030aeff`. Initial focused review found a non-portable checksum manifest
+- Plan state: Tasks 0–7 and the rolling Hermes compatibility/release rebaseline are complete. The
+  functional candidate is `030aeff`; evidence-only closure `3404516` is tagged `v0.1.0a1` and published
+  as a GitHub-only development prerelease. Initial focused review found a non-portable checksum manifest
   and an incomplete source distribution; both fixes passed exact-candidate re-review. Later reviews
   closed literal truncation artifacts, corrected released-Hermes callback scheduling prose, scoped
   recursive gates away from the nested compatibility checkout, and removed a pre-sync packaging import
   from prerelease identity validation. Candidate `030aeff` passed independent exact-candidate review,
   exact-commit GitHub CI run `31390417755`, and security run `31390417898`; the pushed default branch
   then reported no open Dependabot alerts. This status closure changes no executable, package, or
-  release-workflow behavior. Tagging, publication, production canary activation, and visibility changes
-  remain pending separate authorization.
+  release-workflow behavior. Exact-tag build run `31402768287` passed with PyPI jobs skipped; an
+  independently reviewed immutable install procedure closed Git checkout and wheel provenance findings
+  before the GitHub release was created. Production canary activation and visibility changes remain
+  pending separate authorization.
 - Completed Task 5 scope: remote segment reconstruction metadata plus a thin root plugin layout for
   the released Hermes Git plugin lifecycle
 - Security scope: Better Hindsight code, artifacts, its complete runtime dependency closure, and the
   locked project-owned build/publication tooling are release gates. Hermes `v2026.8.3`'s unrelated
   `cryptography==48.0.1` findings remain upstream host observations because the plugin neither depends
   on that package nor invokes the affected paths.
-- Next action: decide whether to configure publication protections and separately authorize a
-  `v0.1.0a1` tag/publication. The private repository currently has no `pypi` environment and no
-  `PYPI_RELEASE_CONFIGURED` Actions variable, so publication remains fail-closed.
+- Publication boundary: GitHub prerelease `v0.1.0a1` contains the exact workflow-built wheel, sdist,
+  and checksum manifest. Trusted PyPI publishing is deferred. The `pypi` environment is restricted to
+  exact tag `v0.1.0a1`, while `PYPI_RELEASE_CONFIGURED` remains absent and no PyPI project exists, so
+  PyPI publication remains fail-closed. No production or canary deployment occurred.
 
 ## Completed foundation
 

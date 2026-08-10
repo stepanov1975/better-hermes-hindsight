@@ -2,13 +2,14 @@
 
 ## Status and authority
 
-Better Hermes Hindsight `0.1.0a1` is a development prerelease candidate for
+Better Hermes Hindsight `0.1.0a1` is a published GitHub development prerelease for
 external/self-hosted-only use. The tracked
 [IMPLEMENTATION.md](IMPLEMENTATION.md) router names the only active implementation plan. Two earlier
 plans are retired historical records and cannot supply active requirements.
 
-The repository remains private during proof work and becomes public only after the release checklist
-passes. This design describes the implementable best-effort plugin, not an ideal host API.
+The repository remains private after the GitHub-only prerelease; any visibility change requires
+separate authorization. This design describes the implementable best-effort plugin, not an ideal host
+API.
 
 ## Primary goal
 

@@ -91,18 +91,18 @@ TASK4_FROZEN_AUTHORITY_PATHS = (
 )
 
 _TASK4_FROZEN_AUTHORITY_SHA256 = {
-    "IMPLEMENTATION.md": "fc231ed887932256255486ba8d4041b5273460af902a0811de9193e77d5823d5",
-    "README.md": "898749a47393c467cf4503c578ed26a200527bbb9f97b555904abe6964cb372c",
-    "DESIGN.md": "332295589aacb6fd0e1e61a26fdde8179e30f2c0cf587a45014042b81cf5d27f",
+    "IMPLEMENTATION.md": "f15f0c16a25f26861b09bd879a18c1c4288268875f0cdf1cbb7fc86c7ed61385",
+    "README.md": "ce35b43809b4e6f44feba73b16fa3aa5991a0726660e6e6730eb1183be728b8d",
+    "DESIGN.md": "9c007a4e41bfbbe198370e0835f0033858c176973ae43df62c6c725e58ea1926",
     "docs/audit-findings.md": "6968809d0860ee5418414f74e2cecff74745c0b9972a1a0aec0a67b085859b92",
     "docs/compatibility.md": "5b125f4d546d930664e82aad92a5d71fc475d72ebb6d2c975eb3cc716e676a59",
     "docs/configuration.md": "b60acfb20c468a9bddb5e489a382c6dd676f5fc1fd081af4225d1dc2e9a64380",
     "docs/development-instance.md": (
         "6ee5b3cd960fab6fee52c569c54d7578683c9ba0b6a242578a367f408be87d10"
     ),
-    "docs/operations.md": "4635ea77853448e4a32f4b34c94d0fe5bbd82c8bcb4691818f88a9da80269f18",
+    "docs/operations.md": "6bee83c3c3a8630b9f7d8fa4b86bd4e64828077416173b8a8b353098b3a3a159",
     "docs/public-release-checklist.md": (
-        "e241b9eedaa3a0cb428c341020d8a921cf9442051aeff0763e3218db066d0c2c"
+        "46445badff09ba567eeec5d26099a578b82bdc27d22a02ebc07048743921c6b2"
     ),
     "src/better_hermes_hindsight/config.py": (
         "ce310b60359d34c6e2c30fcc46592d43ecc0b2ad36a6731ae87743b21a733621"
@@ -2301,8 +2301,8 @@ def test_unrelated_host_findings_are_informational_without_plugin_reachability()
         "do not block Task 7 or public release",
         "does not declare or import `cryptography`",
         "no allowlist or dependency override",
-        "0.1.0a1` is a reviewed development prerelease candidate",
-        "publication remain separately authorized",
+        "0.1.0a1` is a reviewed GitHub development prerelease",
+        "trusted PyPI publishing remains separately authorized",
     )
     plugin_job = _workflow_job("project-dependency-security")
     for name in (
@@ -2346,12 +2346,50 @@ def test_first_prerelease_metadata_and_operator_paths_are_consistent() -> None:
     release_notes = _read("docs/releases/0.1.0a1.md")
     changelog = _read("CHANGELOG.md")
     installation = _read("docs/installation.md")
+    rollback = _read("docs/rollback.md")
     security = _read("SECURITY.md")
-    _assert_terms(release_notes, "0.1.0a1", "limitations", "rollback", "Hindsight 0.8.5")
+    _assert_terms(
+        release_notes,
+        "0.1.0a1",
+        "limitations",
+        "rollback",
+        "Hindsight 0.8.5",
+        "SHA256SUMS",
+        "ba94a798c34043bca02fb80eb51200ae62e82bde85973c6314da7812de5e7ce4",
+        'plugins install "file://$SOURCE_DIR"',
+        "GitHub-only prerelease",
+        "hermes gateway list",
+        "config set memory.provider better_hindsight",
+        "better_hindsight missions check",
+        "hindsight-client==0.6.1",
+        "Do not substitute a local rebuild or moving Git",
+    )
+    assert "blob/v0.1.0a1/docs/installation.md" not in release_notes
+    assert "blob/v0.1.0a1/docs/rollback.md" not in release_notes
     _assert_terms(changelog, "[0.1.0a1] - 2026-08-10", "Added", "Security")
     _assert_terms(security, "0.1.0a1", "prerelease", "not supported for production")
     assert "better_hermes_hindsight-0.0.0" not in installation
-    assert installation.count("better_hermes_hindsight-0.1.0a1-py3-none-any.whl") == 2
+    assert installation.count("better_hermes_hindsight-0.1.0a1-py3-none-any.whl") == 1
+    _assert_terms(
+        installation,
+        "BETTER_WHEEL",
+        "SOURCE_DIR",
+        "EXPECTED_COMMIT",
+        'plugins install "file://$SOURCE_DIR"',
+        "--force --enable",
+    )
+    assert "<reviewed-git-url>" not in installation
+    _assert_terms(
+        rollback,
+        "releases/0.1.0a1.md#immutable-installation-inputs",
+        "BETTER_WHEEL",
+        "SOURCE_DIR",
+        "EXPECTED_COMMIT",
+        'plugins install "file://$SOURCE_DIR"',
+        "--force --enable",
+    )
+    assert "<reviewed-git-url>" not in rollback
+    assert "dist/better_hermes_hindsight" not in rollback
 
     sdist_manifest = _read("MANIFEST.in")
     _assert_terms(
