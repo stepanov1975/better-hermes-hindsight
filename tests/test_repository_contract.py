@@ -23,7 +23,7 @@ from markdown_it.token import Token
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL_PLAN_PATH = ROOT / ".hermes/plans/2026-07-27_071437-best-effort-plugin.md"
 LOCAL_PLAN_INDEX_PATH = ROOT / ".hermes/plans/README.md"
-LOCAL_PLAN_INDEX_SHA256 = "280b356f07ee906f2af93fafcfa716db315beb03fdff47cb927a8ce14368adcf"
+LOCAL_PLAN_INDEX_SHA256 = "af037d31e5db42efda4277e2a6c5205a90b59cbc3746b702bb27eebab4e13e03"
 
 _STATUS_COMPATIBILITY_START = b"<!-- better-hindsight-status-compatibility:start -->"
 _STATUS_COMPATIBILITY_END = b"<!-- better-hindsight-status-compatibility:end -->"
@@ -91,7 +91,7 @@ TASK4_FROZEN_AUTHORITY_PATHS = (
 )
 
 _TASK4_FROZEN_AUTHORITY_SHA256 = {
-    "IMPLEMENTATION.md": "d60d89a2055877788592bc163a89c03242c00b76bf4b9da1c9040996ac265751",
+    "IMPLEMENTATION.md": "7f3381dee00d2b86693c193cbf90bada3d287f734c0a425098dc69a1afa2a569",
     "README.md": "898749a47393c467cf4503c578ed26a200527bbb9f97b555904abe6964cb372c",
     "DESIGN.md": "332295589aacb6fd0e1e61a26fdde8179e30f2c0cf587a45014042b81cf5d27f",
     "docs/audit-findings.md": "6968809d0860ee5418414f74e2cecff74745c0b9972a1a0aec0a67b085859b92",
@@ -102,7 +102,7 @@ _TASK4_FROZEN_AUTHORITY_SHA256 = {
     ),
     "docs/operations.md": "4635ea77853448e4a32f4b34c94d0fe5bbd82c8bcb4691818f88a9da80269f18",
     "docs/public-release-checklist.md": (
-        "27189b7f86fe6c7ed2dbf5239467a2c9ef1aecfc2ba35dcf04662a560b35d77b"
+        "b5467b14bf48cd1887a89986ebc19476acc8b72d8b3792b6f44932c7b477cccc"
     ),
     "src/better_hermes_hindsight/config.py": (
         "ce310b60359d34c6e2c30fcc46592d43ecc0b2ad36a6731ae87743b21a733621"
@@ -1431,7 +1431,7 @@ def test_local_plan_files_match_the_tracked_router_when_present() -> None:
         ".hermes/plans/2026-07-27_071437-best-effort-plugin.md",
         "ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31",
         "Tasks 0–7 and the rolling Hermes compatibility/release rebaseline are complete",
-        "Last completed code checkpoint: `2a941a9`",
+        "Last completed local candidate checkpoint: `8c571c1`",
         "dedicated Hermes interpreter/profile",
     )
     normalized_router = _normalized(router)

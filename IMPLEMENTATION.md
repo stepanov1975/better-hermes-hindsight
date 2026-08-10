@@ -9,14 +9,16 @@ cannot restart abandoned work.
 - Canonical plan: `.hermes/plans/2026-07-27_071437-best-effort-plugin.md`
 - Canonical-plan SHA-256:
   `ef41f48a3844048a8ff534a3b5132be5d23e962112c10e741bd3fe403b28bc31`
-- Last completed code checkpoint: `2a941a9` (`release: prepare 0.1.0a1 prerelease candidate`)
+- Last completed local candidate checkpoint: `8c571c1` (`docs: qualify released Hermes inline fallback`)
 - Compatibility rebaseline checkpoint: `2a05a10` (`ci: rebaseline Hermes compatibility gates`)
-- Plan state: Tasks 0–7 and the rolling Hermes compatibility/release rebaseline are complete for
-  local prerelease candidate `3f7f94b`. Initial focused review found a non-portable checksum
-  manifest and an incomplete source distribution; both fixes passed the final exact-candidate
-  re-review with no unresolved Blocking or Important findings. Repository push, exact-commit CI,
-  publication, production canary activation, and visibility changes remain pending separate
-  authorization.
+- Plan state: Tasks 0–7 and the rolling Hermes compatibility/release rebaseline are complete through
+  reviewed local prerelease candidate `8c571c1`. Initial focused review found a non-portable checksum
+  manifest and an incomplete source distribution; both fixes passed exact-candidate re-review. Two
+  later documentation-only reviews found and closed literal truncation artifacts and an over-absolute
+  description of released Hermes callback scheduling. Candidate `8c571c1` passed focused independent
+  re-review with no Blocking, Important, or Minor findings. This metadata closure changes no
+  executable, package, or release-workflow behavior. Repository push, exact-commit CI, publication,
+  production canary activation, and visibility changes remain pending separate authorization.
 - Completed Task 5 scope: remote segment reconstruction metadata plus a thin root plugin layout for
   the released Hermes Git plugin lifecycle
 - Security scope: Better Hindsight code, artifacts, its complete runtime dependency closure, and the

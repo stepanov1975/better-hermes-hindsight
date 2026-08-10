@@ -182,8 +182,10 @@ upstream evidence and do not become vulnerabilities in Better Hindsight's distri
 - [ ] CI and security workflows pass for the exact release commit after the separately authorized push.
 - [ ] Dependabot alerts and dependency review are clear or explicitly resolved on the pushed candidate.
 - [x] Independent contract/architecture and implementation/operations re-reviews report no unresolved
-      Blocking or Important finding within the agreed best-effort scope; candidate `3f7f94b` passed
-      the final focused re-review.
+      Blocking or Important finding within the agreed best-effort scope. Release-behavior candidate
+      `3f7f94b` passed its final focused re-review; documentation-fix candidate `8c571c1` then passed
+      exact focused re-review with no Blocking, Important, or Minor findings. The subsequent local
+      metadata closure only records those completed results.
 
 ## Release
 
