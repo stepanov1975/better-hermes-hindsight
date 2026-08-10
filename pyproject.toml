@@ -20,7 +20,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
 ]
-dependencies = ["hindsight-client==0.8.5"]
+dependencies = ["hindsight-client==0.8.6"]
 
 [project.optional-dependencies]
 dev = [
@@ -29,10 +29,10 @@ dev = [
   "mypy>=1.18,<3",
   "pyyaml>=6,<7",
   "pytest>=8,<10",
-  "ruff>=0.15,<0.16",
+  "ruff>=0.15,<0.17",
   "setuptools>=77,<84",
   "types-pyyaml>=6.0.12,<7",
-  "twine>=6,<7",
+  "twine>=6,<8",
 ]
 
 [project.urls]
