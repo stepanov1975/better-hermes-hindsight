@@ -49,6 +49,7 @@ include = ["better_hermes_hindsight*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-q --strict-markers"
 markers = [
   "isolated_hindsight_live: explicitly authorized write-enabled proof against a disposable Hindsight instance",
