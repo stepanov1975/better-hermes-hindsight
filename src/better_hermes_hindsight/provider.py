@@ -149,7 +149,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         session_id: str = "",
         messages: list[dict[str, Any]] | None = None,
     ) -> None:
-        """Attempt short local admission from the released-Hermes background executor.
+        """Attempt short local admission from the Hermes background executor.
 
         Local durability begins only after this callback's complete SQLite transaction commits.
         Callbacks cancelled, never run, or lost before that commit remain outside the guarantee.

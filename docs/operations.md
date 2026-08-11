@@ -1,111 +1,40 @@
 # Operations
 
-Better Hermes Hindsight `0.1.0a1` is a GitHub development prerelease. Sender delivery and
-host-managed installation are implemented and covered by deterministic fake-service and
-released-Hermes tests. An initial opt-in isolated proof ran once with synthetic data and ended with
-its generated bank absent; review findings were closed at checkpoint `3f542d4`. Task 7's bounded
-independent reviews are complete. Trusted PyPI publication and production canary activation remain
-separately authorized. The live node in [development-instance.md](development-instance.md) is not an
-operator next action and requires renewed explicit authorization after any candidate change. Automatic
-retention remains disabled by default. Do not enable this repository in a production Hermes profile.
+## Status
 
-<!-- better-hindsight-status-storage:start -->
-## Status storage contract
+```bash
+hermes --profile <profile> better_hindsight status
+```
 
-- **Active WAL.** When WAL exists, status requires a pre-existing regular SHM file and uses
-  SQLite `mode=ro&vfs=unix` with `PRAGMA query_only=ON` and one read transaction. SQLite may
-  initialize, recover, resize, or otherwise change contents, size, atime, mtime, and ctime only
-  on the same pre-existing regular SHM inode. Its inode, type, link count, mode, UID, GID, and
-  xattrs/ACL xattrs remain unchanged.
-- **Byte and lock effects.** Status issues no database, WAL, profile-lock, or row-byte writes.
-  The point-in-time sender probe may acquire and release a transient kernel `flock` without
-  changing lock-file bytes. An authorized writer may change database or WAL bytes and timestamps
-  during the read; those external changes are not attributed to status.
-- **Sidecar-free snapshot.** When WAL, SHM, and rollback journal are all absent, status uses
-  `mode=ro&immutable=1&vfs=unix`, requires the main-file identity/size/mtime/ctime to remain
-  unchanged, and requires all three sidecars to remain absent. Missing SHM is not an error in the
-  all-sidecars-absent branch.
-- **Malformed topology.** If WAL exists but SHM is missing, status fails before SQLite opens and
-  creates nothing. A pre-existing rollback journal or SHM without WAL is unavailable. Active WAL
-  never uses `immutable=1`.
-- **Trusted topology.** Supported concurrency assumes stable file identities and journal mode.
-  Observable same-principal races return `status_unavailable` when detected, but raced-path effects
-  and undetectable ABA are not prevented; status is not safe against hostile same-UID replacement.
-  This is not a zero-mutation claim because SQLite may change the derived SHM as described above.
-<!-- better-hindsight-status-storage:end -->
+Status passively inspects an existing schema-v1 outbox. It does not initialize, recover, claim, retry, drain, or delete work. An absent outbox is reported as `uninitialized`.
 
-## Delivery boundary
+The result includes queue counts, logical queued bytes, oldest-item age bucket, last fixed error category, and a point-in-time sender-ownership probe. Destination-mismatched rows produce `result: "degraded"` and exit status 1 because the sender cannot safely deliver them under the current configuration.
 
-Released Hermes normally schedules the provider's `sync_turn()` callback on its serialized background
-executor. If executor creation fails or submission raises `RuntimeError` outside shutdown, Hermes runs
-the callback inline; shutdown rejects late work. That callback performs redaction, deterministic
-segmentation, and one bounded SQLite admission only; it neither calls Hindsight nor waits for remote
-delivery. The inline fallback can add that bounded local work to caller latency but does not guarantee
-pre-return admission. Local durability begins after the complete turn's
-admission transaction commits. A callback that never runs or an admission that fails is outside that
-guarantee.
+A destination mismatch normally means the endpoint, bank, payload schema, tags, or observation scopes changed while rows remained queued. Restore the original configuration to let those rows drain, or preserve the outbox and perform a separately reviewed manual recovery. Better never re-targets or deletes them automatically.
 
-A retain-enabled process eagerly starts one sender. A profile-wide POSIX advisory lock elects the only
-process allowed to recover stale `sending` rows, claim work, complete confirmed rows, or reschedule
-failures. Non-owner processes may still admit rows. Bounded cross-process polling lets the lock owner
-observe those admissions without a cross-process event bus.
+## Delivery and retry
 
-The owner claims only rows whose destination fingerprint and payload schema match its current
-configuration. The fingerprint binds normalized endpoint and bank identity, the payload schema,
-canonical redacted/sorted retain tags, and normalized observation scopes; it excludes credentials and
-timing settings. A policy mismatch leaves the old row durable and unclaimed rather than replaying it
-under new transport policy.
+The Hermes `sync_turn()` callback performs redaction, deterministic segmentation, and one bounded SQLite admission. It makes no Hindsight request. Local durability starts when that transaction commits.
 
-## Confirmation and retry
+A process-shared sender claims only rows matching its destination fingerprint. It sends each persisted segment with its stable document ID, `update_mode="replace"`, and synchronous confirmation. Failed, timed-out, or unconfirmed attempts remain durable and are rescheduled with capped exponential backoff.
 
-Each attempt sends the persisted stable document ID and exact segment content with `update_mode="replace"`
-and synchronous retention. Deletion requires typed confirmation of the expected bank, exactly one item,
-`success is True`, and a non-async response. This is replace mode with deterministic identity, not
-exactly-once transport.
+A timeout may mean the server committed after the caller deadline. Stable replace-mode identity makes replay safe for the source document, but delivery is not exactly once.
 
-Unconfirmed work stays durable:
+## Restart and shutdown
 
-- `retain_timeout` means the caller deadline crossed; remote completion may be ambiguous;
-- `retain_failed` means the SDK/HTTP operation or another remote attempt failed; and
-- `retain_unconfirmed` means a well-formed response did not satisfy the exact confirmation predicate.
+The elected sender resets stale `sending` rows after acquiring ownership and retries them. Provider finalization stops new work, settles the sender and async client within a bounded deadline, and closes the outbox only after settlement. If shutdown reports failure, preserve the process state and outbox for diagnosis rather than editing SQLite manually.
 
-The sender increments `attempt_count` before network I/O and reschedules from completion wall time with
-deterministic capped exponential backoff. A timeout may therefore replay a request that committed
-remotely. Stable replace-mode IDs make that replay safe for the preserved source document, but they do
-not provide a zero-loss or exactly-once guarantee.
+## Missions
 
-## Recovery and shutdown
+```bash
+hermes --profile <profile> better_hindsight missions check
+hermes --profile <profile> better_hindsight missions apply --confirm
+```
 
-After acquiring the profile lock, a new owner atomically resets stale `sending` rows to immediately due
-`pending` while preserving attempts and the prior fixed error category. This is safe only after exclusive
-lock acquisition proves the former owner no longer holds sender ownership.
+`check` performs a read and reports `equal`, `drift`, or `missing`. `apply --confirm` patches only configured drifted mission fields and requires exact response plus readback. Mission commands use a client-only runtime and never start the retention sender.
 
-Finalization blocks new runtime work, signals the sender, and uses one code-owned deadline covering an
-active attempt, bounded SQLite work, sender join, and cancellation-resistant SDK settlement. It closes
-the outbox, async client, and runner only after both sender and shared runner are settled. If settlement
-exceeds the deadline, finalization raises fixed `SenderStopError`, keeps the same runtime unavailable,
-and closes none of those resources. A later finalization retries cleanup after settlement.
+There is no automatic mission application, retry-now, drain, arbitrary-row, row-deletion, or bank-selection command.
 
-## Current operator boundary
+## Live validation
 
-`hermes better_hindsight status` passively reads only an existing schema-v1 outbox and probes only an
-existing sender lock. It reports an exclusive queue partition, logical queued bytes, age bucket,
-fixed current-row error category, and point-in-time lock state; it never initializes, recovers, claims,
-reschedules, deletes, retries, or drains work. An absent outbox is reported as `uninitialized` and
-creates nothing.
-
-`hermes better_hindsight missions check` performs one typed remote read.
-`hermes better_hindsight missions apply --confirm` changes only configured drifted allowlisted fields,
-sends at most one PATCH, and requires exact PATCH response and fresh readback. Both require the
-explicit `single_principal=true` assertion and use a client-only runtime that cannot start the
-retention sender. There is still no retry-now, drain, arbitrary-row, row-deletion, or automatic mission
-policy command. Do not edit the SQLite outbox manually: doing so can violate immutable identity,
-capacity, and guarded-attempt invariants.
-
-Use the repository test suite and a temporary `HERMES_HOME` with the loopback fake before any separately
-authorized isolated deployment. The one opt-in live-write procedure is defined in
-[development-instance.md](development-instance.md). It requires a dedicated interpreter because the
-SDK is interpreter-global, a separate development deployment/datastore/key, an exact endpoint decision,
-an independently supplied destination fingerprint, and a generated bank proved absent before create.
-It sanitizes child-process configuration and cleans only that disposable bank. Production rollout
-remains a later reversible canary decision; this harness does not activate it.
+Use fake-service tests first. The opt-in procedure in [development-instance](development-instance.md) targets only the existing isolated Hermes/Hindsight environment and synthetic content. If cleanup fails, retain the reported generated bank identifier for manual cleanup; never infer or delete a resource in the existing production deployment.

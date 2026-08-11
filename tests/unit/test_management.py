@@ -625,10 +625,10 @@ def test_status_ready_snapshot_partitions_every_row_once_and_counts_logical_byte
             "last_error_category": "retain_unconfirmed",
             "logical_queued_bytes": logical_bytes,
             "outbox": "ready",
-            "result": "ok",
+            "result": "degraded",
             "sender_ownership": "free",
         },
-        exit_code=0,
+        exit_code=1,
     )
 
 

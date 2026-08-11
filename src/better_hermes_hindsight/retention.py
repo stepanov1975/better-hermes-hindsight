@@ -40,7 +40,7 @@ def build_retained_segments(
     tags: object,
     segment_max_bytes: object,
 ) -> tuple[RetainedSegment, ...]:
-    """Build canonical redacted segments for one released-Hermes completed callback.
+    """Build canonical redacted segments for one completed Hermes callback.
 
     The raw session identifier is used only as SHA-256 input. Role content and configured tags pass
     through the shared high-confidence redactor before the canonical source is hashed or segmented.

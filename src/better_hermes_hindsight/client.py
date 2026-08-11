@@ -271,7 +271,7 @@ class HindsightClientAdapter:
         """Call public ``arecall`` with only explicitly configured optional controls.
 
         Omission is guaranteed at this adapter boundary. Hindsight 0.8.5's public method applies
-        and serializes some SDK defaults after this call; the fake HTTP contract in Task 3 owns that
+        and serializes some SDK defaults after this call; the fake HTTP contract test owns that
         wire behavior.
         """
 

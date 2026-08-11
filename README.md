@@ -1,186 +1,98 @@
 # Better Hermes Hindsight
 
 [![CI](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/ci.yml/badge.svg)](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/ci.yml)
-[![Security scans](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/security.yml/badge.svg)](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/security.yml)
+[![Secret scan](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/security.yml/badge.svg)](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/security.yml)
 
-Better Hermes Hindsight is an unofficial Hermes memory provider for external/self-hosted Hindsight.
-The provider ID is `better_hindsight`, deliberately distinct from bundled `hindsight` so rollback
-does not require a data migration. On the current supported Hermes release it is not configuration-only: Better
-requires `hindsight-client==0.8.5`, while bundled `hindsight` requires exact `0.6.1`, so switching
-providers also requires the documented stopped-process package-version transition.
+Better Hermes Hindsight is an unofficial Hermes memory provider for an external/self-hosted Hindsight 0.8.5 service. It is developed against a rolling Hermes checkout for a Linux, single-principal deployment.
 
-> **Status: `0.1.0a1` GitHub development prerelease.** Tasks 0–6 are complete at checkpoint `3f542d4`.
-> The Task 6 proof ran once against a dedicated
-> Hermes 0.19.0 interpreter and isolated Hindsight 0.8.5 instance using only synthetic data; its
-> generated bank was removed and an authenticated post-run listing found zero banks. Its independent
-> findings were closed. The rolling compatibility/release rebaseline is complete at checkpoint
-> `2a05a10`; Task 7's bounded independent reviews are complete. The exact-tag GitHub prerelease is
-> available, while trusted PyPI publication and production canary activation remain separately
-> authorized. The current-Hermes
-> `cryptography` findings remain visible in the supported-host audit as upstream observations, not
-> plugin release blockers. The live
-> node is not an operator next action and must not be rerun without a changed candidate plus renewed
-> explicit authorization.
-> The plugin
-> preserves multi-segment reconstruction metadata and installs through Hermes's released Git-plugin
-> lifecycle; no custom installer or package manager ships. Do not install or select this project in a
-> production Hermes profile. Read [IMPLEMENTATION.md](IMPLEMENTATION.md) before changing code; it
-> identifies the only active plan.
+The provider ID is `better_hindsight`, deliberately separate from bundled `hindsight`, so the existing provider and bank remain available for rollback.
 
-## What it is for
+## Why it exists
 
-The primary goal is useful memory on unmodified released Hermes:
+Compared with bundled Hindsight, this plugin deliberately focuses on:
 
-- bounded recall against the current user query;
-- opt-in best-effort retention of the completed-turn callbacks released Hermes actually supplies;
-- short local admission followed by retryable background delivery to self-hosted Hindsight;
-- passive bounded queue diagnostics plus explicit confirmation-gated mission management; and
-- documented rollback to the bundled provider while Better's outbox and both banks stay untouched.
+- bounded recall for the **current** user query;
+- one bounded read-only model tool, `better_hindsight_recall`;
+- opt-in automatic retention through a durable SQLite outbox;
+- deterministic segmentation and reconstructable source metadata;
+- stable replace-mode retries after timeout or restart;
+- explicit principal and destination policy; and
+- operator-only status and mission management.
 
-Recall is enabled by default. Automatic retention is disabled by default until an operator proves
-writes against an isolated development deployment and explicitly enables it for a canary.
+It is narrower than bundled Hindsight. It does not provide embedded/cloud service management, model-facing retain or reflect tools, multi-user bank routing, previous-query background recall, migrations, or automatic deletion.
 
-“Better” is narrower: it means better for this documented external/self-hosted use case and its proof
-criteria. It is not universally better than official Hermes or Hindsight.
+## Reliability boundary
 
-## Honest best-effort boundary
+Recall fails open: timeout, service failure, invalid data, or unavailable runtime yields no external context rather than stopping Hermes. Recalled records are bounded, redacted, and framed as potentially stale historical evidence.
 
-The product has **no Hermes-core prerequisite**. A rolling compatibility matrix exercises the public
-lifecycle in the current stable Hermes release while retaining 0.19.0 as historical characterization.
-Hermes is the host, not a package dependency or runtime prerequisite. Automatic retention uses
-released `sync_turn()` best-effort semantics:
-Hermes schedules the callback on its memory worker, and Better Hindsight does short local work only
-after that callback starts.
+Retention is disabled by default. When enabled, the Hermes callback performs only bounded local redaction, segmentation, and one SQLite admission. Remote delivery runs in the background. Durability begins after admission commits; callbacks Hermes never executes are outside the guarantee.
 
-Local durability starts only after provider admission commits the complete redacted turn to Better
-Hindsight's SQLite outbox. Callbacks lost before Hermes executes the provider hook are outside that
-guarantee. Local admission can also fail because of shutdown, contention, invalid input, queue
-saturation, or local I/O. There is no direct-user provenance claim and no pre-return or no-loss
-guarantee. Retried remote delivery uses a stable document ID and `update_mode="replace"`; it does
-not claim exactly-once transport. Every remote segment also carries string metadata for payload
-schema, source digest, segment index, and segment count so a long source remains reconstructable
-after its completed local outbox rows are deleted.
+Retries use a stable document ID and `update_mode="replace"`. A timed-out write may already have committed remotely, so the plugin does **not** claim exactly-once transport.
 
-`codex_app_server` is unsupported because that runtime bypasses normal provider
-memory behavior. Released `v0.1.0a1` registered no model-facing memory tools. The current unreleased
-development branch adds only read-only `better_hindsight_recall`, a bounded fallback when automatic
-context is insufficient. It reuses the authorized provider's configured recall policy and
-untrusted-evidence formatter; the model cannot select another bank or override recall policy. Retain,
-reflect, configuration, and mission tools are not exposed, and mission changes require an explicit
-operator command.
+## Requirements
 
-## Initial scope
+- Linux/POSIX;
+- the current intended Hermes checkout;
+- Python supported by that checkout (the maintained development lane uses Python 3.13);
+- external Hindsight server and `hindsight-client==0.8.5`;
+- a dedicated Hermes interpreter/profile when bundled Hindsight's incompatible SDK must remain available elsewhere; and
+- `uv` for installation and development.
 
-- External/self-hosted only; no cloud or embedded-daemon management.
-- Exact initial target: `hindsight-client==0.8.5` with Hindsight server 0.8.5.
-- Current-query recall is the only remote or potentially long-running memory work before the first
-  model call. It has a bounded fail-open deadline.
-- `better_hindsight_recall` can deliberately repeat that same bounded, read-only retrieval path with
-  a focused query. It adds no model-directed write or caller-selected recall controls.
-- Retention accepts non-empty user/final-assistant text from the released callback as-is. It does not
-  infer authoritative human-versus-synthetic origin from text, platform names, or transcript shape.
-- The callback path performs bounded redaction, segmentation, and one atomic SQLite admission. It
-  performs no Hindsight request and does not wait for remote drain.
-- Hermes normally schedules this callback on its retention executor. If executor creation fails or
-  submission raises `RuntimeError` outside shutdown, released Hermes invokes the same callback
-  inline. Better's bounded local-only behavior is unchanged, but the host caller can then spend that
-  local admission time before returning. During shutdown, Hermes rejects late work instead.
-- One profile-wide POSIX advisory lock elects the sender. Bounded SQLite polling lets that owner see
-  rows admitted by another process.
-- Pending rows are matched to a credential-free destination fingerprint and replay the same stable
-  document ID with replace mode until synchronous response validation succeeds.
-- Logical pending-row and payload-byte limits bound admitted work; they are not an exact SQLite/WAL
-  file-size guarantee.
-- Source documents are the preserved record. Multi-segment reconstruction metadata is forwarded
-  through Hindsight's public item metadata; facts, observations, embeddings, and summaries remain
-  derived indexes.
-- Retain and observation mission text remain distinct. `better_hindsight missions check` is
-  read-only; `better_hindsight missions apply --confirm` changes only configured drifted fields and
-  verifies exact readback. Neither command is automatic initialization policy.
+Compatibility is behavioral rather than release-matrix based. Validation records the tested Hermes commit, but another commit is not rejected solely because its identity changed.
+
+## Installation
+
+Use the same Git checkout for the installed package and Hermes plugin bridge:
+
+```bash
+PROFILE=better-hindsight-dev
+SOURCE_DIR=/path/to/better-hermes-hindsight
+HERMES_PYTHON=/path/to/dedicated/hermes/python
+
+uv pip install --python "$HERMES_PYTHON" -e "$SOURCE_DIR" 'hindsight-client==0.8.5'
+uv pip check --python "$HERMES_PYTHON"
+hermes --profile "$PROFILE" plugins install "file://$SOURCE_DIR" --force --enable
+hermes --profile "$PROFILE" config set memory.provider better_hindsight
+```
+
+Configure endpoint, bank, principal, and credential for the selected profile. Leave retention disabled until recall and status work against the isolated service. See [installation](docs/installation.md) and [configuration](docs/configuration.md).
 
 ## Operator commands
 
-Released Hermes discovers the underscore-only command from the active memory-provider shim:
-
 ```text
-hermes better_hindsight status
-hermes better_hindsight missions check
-hermes better_hindsight missions apply --confirm
+hermes --profile <profile> better_hindsight status
+hermes --profile <profile> better_hindsight missions check
+hermes --profile <profile> better_hindsight missions apply --confirm
 ```
 
-`status` passively inspects an existing schema-v1 SQLite outbox and probes the existing sender lock;
-an absent outbox is reported as `uninitialized` without creating files. Mission commands require
-`single_principal=true` and own a short-lived client-only runtime that never opens the retention
-outbox or starts its sender. Handler-controlled output is canonical JSON bounded to 1,024 UTF-8
-bytes. Exit statuses are `0` for success/equality, `1` for drift or missing mission state, `2` for
-host-owned usage errors, `3` for fixed pre-write/local failures, and `4` once a remote write was
-attempted but the final outcome cannot be proven. There is no retry or drain command.
+`status` reads the existing outbox without initializing or draining it. Mission changes are never automatic and require explicit confirmation. There is no retry-now, row-deletion, arbitrary-bank, or model-facing write command.
 
-## Installation model
+See [operations](docs/operations.md) and [rollback](docs/rollback.md).
 
-Hermes-managed plugin installation uses the released host lifecycle: the repository root contains a
-manifest and thin provider/CLI bridges consumed by `hermes plugins install|update|remove`. No custom
-installer, transaction tree, tombstone, quarantine, or package rollback engine is part of this
-project. `uv` owns the Python wheel and exact Hindsight SDK while every Hermes process sharing the
-interpreter is stopped, because the supported Hermes environment cannot run Better's
-`hindsight-client==0.8.5` and the bundled provider's exact `0.6.1` in one interpreter at the same
-time. A profile scopes config and data, not packages.
+## Intentional limitations
 
-See [installation](docs/installation.md) and [rollback](docs/rollback.md) for the bounded workflow.
-Task 5 tests use only disposable Git repositories and temporary Hermes homes; they do not change a
-live profile, interpreter, service, outbox, or Hindsight bank.
-
-## Isolation and rollback
-
-Development writes require a dedicated Hermes interpreter/profile plus an isolated Hindsight
-instance, separate storage, API key, and disposable bank. Deterministic fake-service tests run first
-and no production credential belongs in the test process.
-
-Production rollout uses a dedicated Hermes interpreter/profile plus a separate canary instance and
-bank, preserving the old deployment. The existing Hermes installation, Hindsight instance, and bank
-remain running, unmodified, and available for rollback; this prerelease performs no initial
-migration, deduplication, reconstruction, or deletion. Canary activation, PyPI publication, and any
-production mutation remain separately authorized.
-
-## Repository and implementation authority
-
-The tracked [implementation router](IMPLEMENTATION.md) identifies the canonical local plan, its hash,
-the completed Tasks 0–4 checkpoint, the abandoned overgrown installer oracle, and the active
-product-aligned Task 5 scope. Never infer implementation requirements from a retired plan, stale
-proof wording, or cached review transcript. The separate Hermes-core worktree is frozen research and
-must not be imported, installed, committed, or treated as a prerequisite.
-
-The rolling compatibility policy and historical version/source observations are in
-[docs/compatibility.md](docs/compatibility.md). Sender
-recovery, retry, and shutdown semantics are in [docs/operations.md](docs/operations.md). Sanitized
-operational aggregates and their limited interpretation are in
-[docs/audit-findings.md](docs/audit-findings.md).
+The initial product is external-service-only, Linux/POSIX, one principal, one static bank, and normal-Hermes-loop-only. It does not support `codex_app_server`, Windows sender election, hot reload, typed turn provenance, automatic migration, remote rewind, or exactly-once delivery. These are accepted limits, not prerequisites for a usable version.
 
 ## Development
 
-Requires Python 3.11-3.13 and [uv](https://docs.astral.sh/uv/).
-
 ```bash
 uv sync --extra dev
+uv lock --check
 uv run --frozen --extra dev python -m ruff check .
 uv run --frozen --extra dev python -m ruff format --check .
 uv run --frozen --extra dev python -m mypy
+uv run --frozen --extra dev python -m pytest -p no:cacheprovider
 uv run --frozen --extra dev python -m build
 ```
 
-All tests run in CI's selected Hermes compatibility environments rather than via a published `proof`
-extra; the repository root is itself the Hermes plugin bridge and therefore imports the host API.
+The project follows rolling `main`. A Git commit is enough to identify a deployed build. Versions and tags are optional snapshots; they are not bumped for every development change, and PyPI publication is not part of the normal workflow.
 
-Read [IMPLEMENTATION.md](IMPLEMENTATION.md), then [CONTRIBUTING.md](CONTRIBUTING.md) and
-[DESIGN.md](DESIGN.md), before changing code.
+See [implementation status](IMPLEMENTATION.md), [design](DESIGN.md), and [contributing](CONTRIBUTING.md).
 
 ## Safety
 
-Never commit endpoints, credentials, private bank names, principal identifiers, raw memories,
-transcripts, databases, logs, or local runtime state. Use a temporary `HERMES_HOME`, synthetic
-fixtures, and a fake service before any explicitly enabled isolated live proof.
+Never commit endpoints, credentials, private bank names, principal identifiers, raw memories, transcripts, databases, logs, or local runtime state. Live writes require explicit opt-in and the existing isolated Hindsight environment with synthetic content.
 
-## Licensing and attribution
+## License
 
-The project is MIT licensed. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for upstream
-attribution requirements and [SECURITY.md](SECURITY.md) for reporting security problems.
+MIT. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [SECURITY.md](SECURITY.md).

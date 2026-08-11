@@ -409,7 +409,7 @@ class SQLiteOutbox:
 
     @property
     def profile_lock_path(self) -> Path:
-        """Return the private lock file Task 3 will acquire for sender ownership."""
+        """Return the private lock file used for sender ownership."""
 
         return self._profile_lock_identity.path
 

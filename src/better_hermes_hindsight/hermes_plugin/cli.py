@@ -15,7 +15,7 @@ _MAX_JSON_BYTES = 1024
 
 
 def register_cli(parser: ArgumentParser) -> None:
-    """Register the exact bounded Task 4 operator grammar."""
+    """Register the bounded operator command grammar."""
 
     commands = parser.add_subparsers(dest="better_hindsight_action", required=True)
     commands.add_parser("status", help="Inspect the local retention outbox")

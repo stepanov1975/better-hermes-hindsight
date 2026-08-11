@@ -161,7 +161,7 @@ detector; credentials and other sensitive text must not be stored in Hindsight i
 
 `recall.context_max_bytes` counts the complete Better envelope, including its preamble, JSONL record
 separators, truncation marker, and suffix. It does not include the outer `<memory-context>` wrapper
-added later by released Hermes. Initialization remains local and network-free: server-version and
+added later by Hermes. Initialization remains local and network-free: server-version and
 bank checks belong to explicit diagnostics or isolated live-proof setup, not another cold pre-model
 request.
 
@@ -188,8 +188,7 @@ silently interprets it as `combined`; write `combined` explicitly. `shared` addi
 
 ## Principal authorization
 
-The first prerelease has one static bank and credential for one explicitly asserted principal. It
-has no per-user bank router.
+The current provider uses one static bank and credential for one explicitly asserted principal. It has no per-user bank router.
 
 - CLI is authorized only when `single_principal=true`.
 - Gateway authorization requires an exact configured platform plus either a `user_id` tuple or a
@@ -204,8 +203,8 @@ different users to different banks.
 
 ## Retention construction and local admission
 
-Enabling `retain.enabled` opts into completed-turn callbacks released Hermes actually supplies. It
-does not establish direct-user provenance. Released Hermes normally schedules `sync_turn()` on its
+Enabling `retain.enabled` opts into completed-turn callbacks Hermes actually supplies. It
+does not establish direct-user provenance. Hermes normally schedules `sync_turn()` on its
 background executor after a completed turn. If executor creation fails or submission raises
 `RuntimeError` outside shutdown, the host invokes the callback inline; shutdown rejects late work.
 That rare fallback can make the caller spend Better's bounded local-admission time before returning,

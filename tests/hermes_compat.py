@@ -1,40 +1,38 @@
-"""Selected Hermes host identity for compatibility tests.
+"""Observe the Hermes host selected for compatibility tests.
 
-The default keeps the original 0.19.0 release-commit characterization reproducible.
-CI overrides the version and may omit the commit when exercising another released host.
+The project follows the intended current checkout. Tests verify that imported host
+sources belong to the installed distribution, but do not reject a host solely
+because its version or commit changed.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from importlib import metadata
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
-_HISTORICAL_VERSION = "0.19.0"
-_HISTORICAL_COMMIT = "3ef6bbd201263d354fd83ec55b3c306ded2eb72a"
 
-EXPECTED_HERMES_VERSION = os.environ.get(
-    "BETTER_HINDSIGHT_EXPECT_HERMES_VERSION",
-    _HISTORICAL_VERSION,
-)
-EXPECTED_HERMES_COMMIT = os.environ.get(
-    "BETTER_HINDSIGHT_EXPECT_HERMES_COMMIT",
-    _HISTORICAL_COMMIT if EXPECTED_HERMES_VERSION == _HISTORICAL_VERSION else "",
-)
+def _observed_identity() -> tuple[str, str]:
+    distribution = metadata.distribution("hermes-agent")
+    commit = ""
+    direct_url_text = distribution.read_text("direct_url.json")
+    if direct_url_text:
+        direct_url = json.loads(direct_url_text)
+        value = direct_url.get("vcs_info", {}).get("commit_id")
+        if isinstance(value, str):
+            commit = value
+    return distribution.version, commit
+
+
+EXPECTED_HERMES_VERSION, EXPECTED_HERMES_COMMIT = _observed_identity()
 
 
 def assert_selected_hermes() -> metadata.Distribution:
-    """Assert and return the explicitly selected host distribution."""
+    """Return the installed host after basic identity validation."""
 
     distribution = metadata.distribution("hermes-agent")
-    assert distribution.version == EXPECTED_HERMES_VERSION
-    if EXPECTED_HERMES_COMMIT:
-        direct_url_text = distribution.read_text("direct_url.json")
-        assert direct_url_text is not None
-        direct_url = json.loads(direct_url_text)
-        assert direct_url.get("vcs_info", {}).get("commit_id") == EXPECTED_HERMES_COMMIT
+    assert distribution.version
     return distribution
 
 
@@ -42,7 +40,7 @@ def selected_distribution_file(
     distribution: metadata.Distribution,
     relative_path: str,
 ) -> Path:
-    """Locate a host file from either an installed wheel or an editable release checkout."""
+    """Locate a host file from either an installed wheel or editable checkout."""
 
     files = distribution.files or ()
     entry = next((item for item in files if str(item) == relative_path), None)

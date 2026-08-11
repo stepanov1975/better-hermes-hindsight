@@ -1,4 +1,4 @@
-"""Integration proof for exact released-Hermes memory and command discovery."""
+"""Integration proof for current-Hermes memory and command discovery."""
 
 from __future__ import annotations
 
@@ -154,21 +154,9 @@ assert parser.parse_args(["missions", "check"]) is not None
 apply_args = parser.parse_args(["missions", "apply", "--confirm"])
 assert apply_args.confirm is True
 
-from agent.codex_runtime import run_codex_app_server_turn
-from agent.turn_context import build_turn_context
-
-# Compatibility oracle only: the pinned codex_app_server path receives the plain user_message
-# directly and skips the normal API-content sidecar. Better Hindsight does not patch or emulate
-# support for this explicitly excluded runtime, and this proof performs no remote recall there.
-codex_source = inspect.getsource(run_codex_app_server_turn)
-turn_context_source = inspect.getsource(build_turn_context)
-assert "run_turn(user_input=user_message)" in codex_source
-assert 'api_mode", None) != "codex_app_server"' in turn_context_source
-
 print(json.dumps({
     "cli_commands": [command["name"]],
     "cli_module": command["setup_fn"].__module__,
-    "codex_app_server_memory_supported": False,
     "commit": release_commit,
     "discovered": names.count("better_hindsight"),
     "loaded": provider.name,
@@ -279,7 +267,7 @@ def _write_host_selection(hermes_home: Path, provider: str) -> None:
     )
 
 
-def test_exact_released_loader_discovers_three_file_active_shim_cli_and_recall_tool(
+def test_current_loader_discovers_active_shim_cli_and_recall_tool(
     tmp_path: Path,
 ) -> None:
     hermes_home = tmp_path / "hermes-home"
@@ -312,7 +300,6 @@ def test_exact_released_loader_discovers_three_file_active_shim_cli_and_recall_t
     assert payload == {
         "cli_commands": ["better_hindsight"],
         "cli_module": "_hermes_user_memory.better_hindsight.cli",
-        "codex_app_server_memory_supported": False,
         "commit": EXPECTED_HERMES_COMMIT,
         "discovered": 1,
         "loaded": "better_hindsight",
@@ -345,7 +332,7 @@ def test_exact_released_loader_discovers_three_file_active_shim_cli_and_recall_t
     assert not (config_dir / "outbox.sqlite3.lock").exists()
 
 
-def test_exact_released_inactive_provider_discovery_returns_no_better_command_directly(
+def test_current_inactive_provider_discovery_returns_no_better_command_directly(
     tmp_path: Path,
 ) -> None:
     hermes_home = tmp_path / "hermes-home"

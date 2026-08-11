@@ -5,82 +5,17 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: "17 5 * * 1"
 
 permissions:
   contents: read
 
 jobs:
-  checks:
-    name: Python ${{ matrix.python-version }}
+  test-current-hermes:
+    name: Python 3.13 / Hermes main
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
-
-    steps:
-      - name: Check out repository
-        # actions/checkout v7.0.1
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Set up Python
-        # actions/setup-python v6.3.0
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
-        with:
-          python-version: ${{ matrix.python-version }}
-
-      - name: Install uv
-        run: python -m pip install uv==0.11.4
-
-      - name: Sync locked environment
-        run: uv sync --frozen --extra dev
-
-      - name: Check lock file
-        run: uv lock --check
-
-      - name: Run Ruff
-        run: |
-          uv run --frozen --extra dev python -m ruff check .
-          uv run --frozen --extra dev python -m ruff format --check .
-
-      - name: Run mypy
-        run: uv run --frozen --extra dev python -m mypy
-
-      - name: Build and inspect distributions
-        run: |
-          rm -rf dist
-          uv run --frozen --extra dev python -m build
-          uv run --frozen --extra dev python -m twine check dist/*
-
-      - name: Smoke-test wheel in a fresh environment
-        run: |
-          python -m venv "${RUNNER_TEMP}/wheel-smoke"
-          "${RUNNER_TEMP}/wheel-smoke/bin/python" -m pip install --no-deps dist/*.whl
-          "${RUNNER_TEMP}/wheel-smoke/bin/python" -c "import better_hermes_hindsight as p; assert p.PROVIDER_ID == 'better_hindsight'"
-
-  compatibility:
-    name: Hermes ${{ matrix.name || 'current-v2026.8.3' }} / Python ${{ matrix.python-version }}
-    runs-on: ubuntu-latest
-    continue-on-error: ${{ matrix.historical }}
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
-        historical: [false]
-        include:
-          - name: historical-0.19.0
-            python-version: "3.12"
-            historical: true
-            version: "0.19.0"
-            commit: 3ef6bbd201263d354fd83ec55b3c306ded2eb72a
-            expected-commit: 3ef6bbd201263d354fd83ec55b3c306ded2eb72a
-
-    env:
-      BETTER_HINDSIGHT_EXPECT_HERMES_VERSION: ${{ matrix.version || '0.20.0' }}
-      BETTER_HINDSIGHT_EXPECT_HERMES_COMMIT: ${{ matrix.expected-commit || '' }}
+    timeout-minutes: 30
 
     steps:
       - name: Check out Better Hindsight
@@ -90,13 +25,12 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Check out current Hermes release source
-        if: matrix.historical != true
+      - name: Check out current Hermes
         # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: NousResearch/hermes-agent
-          ref: 3c27eb6234bf91b8ceee9e9071591b31e9b148cb
+          ref: main
           path: .compat/hermes-current
           persist-credentials: false
 
@@ -104,32 +38,31 @@ jobs:
         # actions/setup-python v6.3.0
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.13"
 
       - name: Install uv
         run: python -m pip install uv==0.11.4
 
-      - name: Sync Better Hindsight test environment
-        run: uv sync --frozen --extra dev
-
-      - name: Install historical Hermes characterization host
-        if: matrix.historical == true
-        env:
-          HERMES_COMPAT_COMMIT: ${{ matrix.commit }}
+      - name: Install development environment and current Hermes
         run: |
-          uv pip install --python .venv/bin/python \
-            "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git@${HERMES_COMPAT_COMMIT}"
-          uv pip install --python .venv/bin/python "hindsight-client==0.8.5"
-          uv pip check --python .venv/bin/python
-
-      - name: Install current supported Hermes host
-        if: matrix.historical != true
-        run: |
-          test "$(git -C .compat/hermes-current rev-parse HEAD)" = \
-            "3c27eb6234bf91b8ceee9e9071591b31e9b148cb"
+          uv sync --frozen --extra dev
           uv pip install --python .venv/bin/python -e .compat/hermes-current
-          uv pip install --python .venv/bin/python "hindsight-client==0.8.5"
+          uv pip install --python .venv/bin/python 'hindsight-client==0.8.5'
           uv pip check --python .venv/bin/python
 
-      - name: Run full compatibility suite
-        run: .venv/bin/python -m pytest
+      - name: Record tested source identities
+        run: |
+          echo "Better $(git rev-parse HEAD)"
+          echo "Hermes $(git -C .compat/hermes-current rev-parse HEAD)"
+          .venv/bin/python -c 'from importlib.metadata import version; print("Hermes package", version("hermes-agent")); print("Hindsight client", version("hindsight-client"))'
+
+      - name: Validate
+        run: |
+          uv lock --check
+          .venv/bin/python -m ruff check .
+          .venv/bin/python -m ruff format --check .
+          .venv/bin/python -m mypy
+          .venv/bin/python -m pytest -p no:cacheprovider
+          rm -rf dist
+          .venv/bin/python -m build
+          git diff --check

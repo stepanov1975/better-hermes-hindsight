@@ -78,7 +78,10 @@ def status(
         payload = _status_payload(inspection, now=float(observed_at))
     except Exception:
         return _fixed_error("status", "status_unavailable")
-    return ManagementResult(payload=payload, exit_code=0)
+    return ManagementResult(
+        payload=payload,
+        exit_code=1 if inspection.mismatch_count else 0,
+    )
 
 
 def _status_payload(inspection: OutboxInspection, *, now: float) -> dict[str, object]:
@@ -106,7 +109,7 @@ def _status_payload(inspection: OutboxInspection, *, now: float) -> dict[str, ob
         "last_error_category": inspection.last_error_category or "none",
         "logical_queued_bytes": inspection.logical_queued_bytes,
         "outbox": inspection.outbox,
-        "result": "ok",
+        "result": "degraded" if inspection.mismatch_count else "ok",
         "sender_ownership": inspection.sender_ownership,
     }
 

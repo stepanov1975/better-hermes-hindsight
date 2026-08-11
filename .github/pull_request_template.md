@@ -1,25 +1,18 @@
 ## Summary
 
-<!-- What changed, why, and which proof gate or issue does it address? -->
-
-## Root cause
-
-<!-- Describe the underlying cause, not only the visible symptom. -->
+<!-- What changed and why? -->
 
 ## Verification
 
-- [ ] `uv lock --check`
-- [ ] `uv run --extra dev --extra proof python -m pytest`
-- [ ] `uv run --extra dev --extra proof python -m ruff check .`
-- [ ] `uv run --extra dev --extra proof python -m ruff format --check .`
-- [ ] `uv run --extra dev --extra proof python -m mypy`
-- [ ] Package build and `twine check`
-- [ ] Fresh temporary-profile smoke when plugin behavior changed
+<!-- List the checks actually run. Use "not run" when appropriate. -->
+
+- [ ] Relevant tests
+- [ ] Ruff
+- [ ] mypy
 - [ ] `git diff --check`
 
-## Safety and compatibility
+## Operational impact
 
-- [ ] No production endpoint, credential, bank ID, memory, transcript, or database added
-- [ ] No active Hermes/Hindsight installation was modified during tests
-- [ ] Upstream-derived source attribution is preserved
-- [ ] Compatibility and rollback impact are documented
+<!-- Note config, compatibility, data-safety, and rollback effects. Omit this section for changes with none. -->
+
+Do not include credentials, private endpoints, real bank IDs, memories, transcripts, or databases.
