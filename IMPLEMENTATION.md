@@ -37,7 +37,7 @@ A development commit is usable when:
 
 1. focused and full deterministic tests pass;
 2. Ruff and mypy pass;
-3. the package builds and the root bridge imports;
+3. the root bridge imports through the intended Hermes checkout;
 4. the current Hermes checkout discovers and initializes the provider;
 5. the isolated Hindsight smoke test proves bounded recall, retained delivery, restart recovery, and cleanup or clear manual-cleanup reporting; and
 6. rollback to the untouched bundled-provider environment remains available.

@@ -10,7 +10,6 @@ The test skips unless all required values are present:
 export BETTER_HINDSIGHT_ALLOW_DEV_WRITES=1
 export BETTER_HINDSIGHT_REQUIRE_LIVE_PROOF=1
 export BETTER_HINDSIGHT_DEV_API_URL=http://isolated-host:8888
-export BETTER_HINDSIGHT_DEV_API_KEY_ENV=BETTER_HINDSIGHT_DEV_API_KEY
 export BETTER_HINDSIGHT_DEV_API_KEY='...'
 export BETTER_HINDSIGHT_DEV_HERMES_PYTHON=/path/to/isolated/hermes/python
 ```

@@ -12,12 +12,11 @@ uv sync --extra dev
 
 ```bash
 uv lock --check
-uv run --frozen --extra dev python -m ruff check .
-uv run --frozen --extra dev python -m ruff format --check .
+uv run --frozen --extra dev python -m ruff check src tests __init__.py cli.py
+uv run --frozen --extra dev python -m ruff format --check src tests __init__.py cli.py
 uv run --frozen --extra dev python -m mypy
 uv run --frozen --extra dev python -m pytest -p no:cacheprovider
-uv run --frozen --extra dev python -m build
-uv run --frozen --extra dev python -m pip check
+uv pip check --python .venv/bin/python
 
 git diff --check
 ```

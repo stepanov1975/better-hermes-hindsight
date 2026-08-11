@@ -472,19 +472,19 @@ def _run_live_child() -> int:
 
 
 def _child_environment(inputs: DevelopmentInputs, home: Path) -> dict[str, str]:
-    environment = dict(os.environ)
-    for name in tuple(environment):
-        if name.startswith("HINDSIGHT_") or name.startswith("BETTER_HINDSIGHT_CHILD_"):
-            environment.pop(name)
+    inherited_names = ("LANG", "LC_ALL", "PATH", "TZ")
+    environment = {name: os.environ[name] for name in inherited_names if name in os.environ}
     environment.update(
         {
             "HERMES_HOME": os.fspath(home),
             "HINDSIGHT_API_KEY": inputs.api_key,
+            "NO_PROXY": "*",
             "BETTER_HINDSIGHT_CHILD_API_URL": inputs.api_url,
             "BETTER_HINDSIGHT_CHILD_BANK_ID": inputs.bank_id,
             "BETTER_HINDSIGHT_CHILD_HERMES_PYTHON": os.fspath(inputs.hermes_python),
             "BETTER_HINDSIGHT_CHILD_OWNERSHIP_NAME": inputs.ownership_name,
             "PYTHONDONTWRITEBYTECODE": "1",
+            "no_proxy": "*",
         }
     )
     return environment
@@ -494,6 +494,30 @@ def test_live_proof_is_explicitly_opt_in() -> None:
     assert _development_inputs({}) is None
     with pytest.raises(RuntimeError, match="REQUIRE_LIVE_PROOF"):
         _development_inputs({"BETTER_HINDSIGHT_ALLOW_DEV_WRITES": "1"})
+
+
+def test_child_environment_does_not_forward_unrelated_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "unrelated-secret")
+    monkeypatch.setenv("HINDSIGHT_API_KEY", "unrelated-hindsight-key")
+    monkeypatch.setenv("PATH", "/synthetic/bin")
+    inputs = DevelopmentInputs(
+        api_url="http://127.0.0.1:8888",
+        api_key="synthetic-live-key",
+        hermes_python=Path("/synthetic/hermes/python"),
+        allowed_endpoints=(),
+        bank_id="better-hindsight-live-synthetic",
+        ownership_name="Better Hindsight live test synthetic",
+    )
+
+    environment = _child_environment(inputs, tmp_path / "hermes-home")
+
+    assert "AWS_SECRET_ACCESS_KEY" not in environment
+    assert environment["HINDSIGHT_API_KEY"] == inputs.api_key
+    assert environment["PATH"] == "/synthetic/bin"
+    assert environment["NO_PROXY"] == environment["no_proxy"] == "*"
 
 
 def test_live_smoke_attempts_cleanup_when_create_result_is_uncertain(

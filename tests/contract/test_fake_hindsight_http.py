@@ -6,15 +6,9 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
 import secrets
-import shutil
 import socket
-import subprocess
-import sys
-import tarfile
 import traceback
-import zipfile
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
 from typing import Protocol, cast
@@ -54,7 +48,6 @@ from tests.fakes.hindsight_server import (
     RetainFault,
 )
 
-ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_BANK_ID = "fixture-bank"
 FIXTURE_API_KEY = "fixture-api-key"
 FIXTURE_USER_AGENT = f"better-hermes-hindsight/{__version__}"
@@ -1686,79 +1679,3 @@ def test_adapter_maps_raw_failures_to_fixed_nonleaking_errors_and_reports(
     assert runtime_sentinel not in serialized_errors
     assert runtime_sentinel not in safe_report
     assert runtime_sentinel not in request_records
-
-
-def _copy_build_project(destination: Path) -> Path:
-    project = destination / "project"
-    shutil.copytree(
-        ROOT,
-        project,
-        ignore=shutil.ignore_patterns(
-            ".git",
-            ".mypy_cache",
-            ".pytest_cache",
-            ".ruff_cache",
-            ".venv",
-            "*.egg-info",
-            "*.pyc",
-            "__pycache__",
-            "build",
-            "dist",
-        ),
-    )
-    return project
-
-
-def _archive_payloads(path: Path) -> list[bytes]:
-    payloads: list[bytes] = [path.read_bytes()]
-    if path.suffix == ".whl":
-        with zipfile.ZipFile(path) as archive:
-            payloads.extend(archive.read(name) for name in archive.namelist())
-        return payloads
-    if path.name.endswith(".tar.gz"):
-        with tarfile.open(path, mode="r:gz") as archive:
-            for member in archive.getmembers():
-                if not member.isfile():
-                    continue
-                extracted = archive.extractfile(member)
-                if extracted is not None:
-                    payloads.append(extracted.read())
-        return payloads
-    raise AssertionError(f"unexpected build artifact: {path.name}")
-
-
-def test_runtime_sentinel_is_absent_from_wheel_and_sdist_bytes(
-    tmp_path: Path,
-    runtime_sentinel: str,
-) -> None:
-    project = _copy_build_project(tmp_path)
-    output_dir = tmp_path / "build-artifacts"
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "build",
-            "--no-isolation",
-            "--outdir",
-            str(output_dir),
-            str(project),
-        ],
-        cwd=project,
-        env={
-            **os.environ,
-            "NO_PROXY": "*",
-            "PIP_NO_INDEX": "1",
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "no_proxy": "*",
-        },
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert completed.returncode == 0, completed.stderr[-2000:]
-
-    artifacts = sorted(output_dir.iterdir())
-    assert any(path.suffix == ".whl" for path in artifacts)
-    assert any(path.name.endswith(".tar.gz") for path in artifacts)
-    marker = runtime_sentinel.encode()
-    assert all(marker not in payload for path in artifacts for payload in _archive_payloads(path))

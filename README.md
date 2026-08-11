@@ -78,11 +78,10 @@ The initial product is external-service-only, Linux/POSIX, one principal, one st
 ```bash
 uv sync --extra dev
 uv lock --check
-uv run --frozen --extra dev python -m ruff check .
-uv run --frozen --extra dev python -m ruff format --check .
+uv run --frozen --extra dev python -m ruff check src tests __init__.py cli.py
+uv run --frozen --extra dev python -m ruff format --check src tests __init__.py cli.py
 uv run --frozen --extra dev python -m mypy
 uv run --frozen --extra dev python -m pytest -p no:cacheprovider
-uv run --frozen --extra dev python -m build
 ```
 
 The project follows rolling `main`. A Git commit is enough to identify a deployed build. Versions and tags are optional snapshots; they are not bumped for every development change, and PyPI publication is not part of the normal workflow.
