@@ -6,7 +6,18 @@
 hermes --profile <profile> better_hindsight status
 ```
 
-Status passively inspects an existing schema-v1 outbox. It does not initialize, recover, claim, retry, drain, or delete work. An absent outbox is reported as `uninitialized`.
+Status passively inspects an existing schema-v1 outbox. It does not initialize or migrate schemas,
+perform application-owned queue recovery, write rows, claim, retry, drain, or delete work. An absent
+outbox is reported as `uninitialized`; a non-regular database or malformed sidecar topology produces
+the fixed `status_unavailable` error.
+
+Inspection uses SQLite URI read-only mode rather than an ordinary writable database open. A
+sidecar-free database is read as an immutable snapshot so inspection creates no SQLite files. When an
+active WAL and SHM pair exists, status uses SQLite's read-only WAL path so committed WAL state remains
+visible; SQLite may update the existing SHM coordination state during that read. The command assumes
+the supported personal Linux/POSIX deployment: one trusted local operator and a stable outbox
+pathname and sidecar topology for the short inspection. It is a passive operational snapshot, not a
+forensic snapshot across concurrent pathname or topology replacement.
 
 The result includes queue counts, logical queued bytes, oldest-item age bucket, last fixed error category, and a point-in-time sender-ownership probe. Destination-mismatched rows produce `result: "degraded"` and exit status 1 because the sender cannot safely deliver them under the current configuration.
 

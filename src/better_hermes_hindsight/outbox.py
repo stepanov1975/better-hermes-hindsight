@@ -70,7 +70,6 @@ _SCHEMA_COLUMN_INFO = (
     ("created_at", "REAL", 1, None, 0),
     ("updated_at", "REAL", 1, None, 0),
 )
-_STATUS_MINIMUM_SQLITE = (3, 22, 0)
 # SQLite's built-in unix VFS maps WAL-index shared memory in fixed 32 KiB regions.
 _STATUS_SHM_REGION_BYTES = 32_768
 _STATUS_ERROR_CATEGORIES = frozenset({"retain_timeout", "retain_failed", "retain_unconfirmed"})
@@ -283,23 +282,6 @@ class OutboxInspection:
     oldest_created_at: float | None = None
     last_error_category: OutboxFailureCategory | None = None
     sender_ownership: Literal["held", "free", "unavailable"] = "free"
-
-
-@dataclass(frozen=True, slots=True)
-class _StatusFile:
-    path: Path = field(repr=False)
-    descriptor: int = field(repr=False)
-    device: int
-    inode: int
-    file_type: int
-    link_count: int
-    mode: int
-    uid: int
-    gid: int
-    size: int
-    mtime_ns: int
-    ctime_ns: int
-    xattrs: tuple[tuple[str, bytes], ...] = field(repr=False)
 
 
 class SQLiteOutbox:
@@ -992,12 +974,6 @@ def _inspect_outbox(config: BetterHindsightConfig) -> OutboxInspection:
     _require_inside(home, database_path.resolve(strict=False))
     if not os.path.lexists(database_path):
         return OutboxInspection(outbox="uninitialized")
-    if (
-        os.name != "posix"
-        or sqlite3.sqlite_version_info < _STATUS_MINIMUM_SQLITE
-        or not hasattr(os, "O_NOFOLLOW")
-    ):
-        raise OSError
 
     paths = {
         "database": database_path,
@@ -1005,28 +981,25 @@ def _inspect_outbox(config: BetterHindsightConfig) -> OutboxInspection:
         "shm": Path(f"{database_path}-shm"),
         "journal": Path(f"{database_path}-journal"),
     }
-    opened: dict[str, _StatusFile] = {}
+    sizes = {"database": _status_file_size(home, database_path)}
+    for name in ("wal", "shm", "journal"):
+        path = paths[name]
+        _require_inside(home, path.resolve(strict=False))
+        if os.path.lexists(path):
+            sizes[name] = _status_file_size(home, path)
+
+    has_wal = "wal" in sizes
+    has_shm = "shm" in sizes
+    if "journal" in sizes or has_wal != has_shm:
+        raise OSError
+    active_wal = has_wal
+    if active_wal and (
+        sizes["shm"] < _STATUS_SHM_REGION_BYTES or sizes["shm"] % _STATUS_SHM_REGION_BYTES != 0
+    ):
+        raise OSError
+
     connection: sqlite3.Connection | None = None
     try:
-        opened["database"] = _open_status_file(home, paths["database"])
-        for name in ("wal", "shm", "journal"):
-            path = paths[name]
-            _require_inside(home, path.resolve(strict=False))
-            if os.path.lexists(path):
-                opened[name] = _open_status_file(home, path)
-
-        has_wal = "wal" in opened
-        has_shm = "shm" in opened
-        if "journal" in opened or has_wal != has_shm:
-            raise OSError
-        active_wal = has_wal
-        if active_wal and (
-            opened["shm"].size < _STATUS_SHM_REGION_BYTES
-            or opened["shm"].size % _STATUS_SHM_REGION_BYTES != 0
-        ):
-            raise OSError
-        _revalidate_status_topology(home, paths, opened, active_wal=active_wal)
-
         query = "mode=ro&vfs=unix" if active_wal else "mode=ro&immutable=1&vfs=unix"
         connection = sqlite3.connect(
             f"{database_path.as_uri()}?{query}",
@@ -1039,7 +1012,6 @@ def _inspect_outbox(config: BetterHindsightConfig) -> OutboxInspection:
         connection.close()
         connection = None
 
-        _revalidate_status_topology(home, paths, opened, active_wal=active_wal)
         ownership = _probe_sender_ownership(home, Path(f"{database_path}.lock"))
         return OutboxInspection(
             outbox="ready",
@@ -1056,9 +1028,6 @@ def _inspect_outbox(config: BetterHindsightConfig) -> OutboxInspection:
         if connection is not None:
             with contextlib.suppress(Exception):
                 connection.close()
-        for item in opened.values():
-            with contextlib.suppress(OSError):
-                os.close(item.descriptor)
 
 
 def _read_status_snapshot(
@@ -1191,115 +1160,12 @@ def _read_status_snapshot(
     )
 
 
-def _open_status_file(home: Path, path: Path, *, writable: bool = False) -> _StatusFile:
-    before_open = path.stat(follow_symlinks=False)
-    if not stat.S_ISREG(before_open.st_mode):
+def _status_file_size(home: Path, path: Path) -> int:
+    status = path.stat(follow_symlinks=False)
+    if not stat.S_ISREG(status.st_mode):
         raise OSError
-    resolved = path.resolve(strict=True)
-    _require_inside(home, resolved)
-    flags = (os.O_RDWR if writable else os.O_RDONLY) | getattr(os, "O_CLOEXEC", 0)
-    flags |= getattr(os, "O_NOFOLLOW", 0)
-    flags |= getattr(os, "O_NONBLOCK", 0)
-    descriptor = os.open(path, flags)
-    try:
-        descriptor_status = os.fstat(descriptor)
-        path_status = path.stat(follow_symlinks=False)
-        if (
-            not stat.S_ISREG(descriptor_status.st_mode)
-            or not stat.S_ISREG(path_status.st_mode)
-            or (before_open.st_dev, before_open.st_ino)
-            != (descriptor_status.st_dev, descriptor_status.st_ino)
-            or (descriptor_status.st_dev, descriptor_status.st_ino)
-            != (path_status.st_dev, path_status.st_ino)
-        ):
-            raise OSError
-        return _StatusFile(
-            path=path,
-            descriptor=descriptor,
-            device=descriptor_status.st_dev,
-            inode=descriptor_status.st_ino,
-            file_type=stat.S_IFMT(descriptor_status.st_mode),
-            link_count=descriptor_status.st_nlink,
-            mode=stat.S_IMODE(descriptor_status.st_mode),
-            uid=descriptor_status.st_uid,
-            gid=descriptor_status.st_gid,
-            size=descriptor_status.st_size,
-            mtime_ns=descriptor_status.st_mtime_ns,
-            ctime_ns=descriptor_status.st_ctime_ns,
-            xattrs=_status_xattrs(path),
-        )
-    except Exception:
-        os.close(descriptor)
-        raise
-
-
-def _status_xattrs(path: Path) -> tuple[tuple[str, bytes], ...]:
-    names = sorted(os.listxattr(path, follow_symlinks=False))
-    return tuple((name, os.getxattr(path, name, follow_symlinks=False)) for name in names)
-
-
-def _revalidate_status_file(
-    home: Path,
-    item: _StatusFile,
-    *,
-    stable_data_metadata: bool,
-) -> None:
-    _require_inside(home, item.path.resolve(strict=True))
-    descriptor_status = os.fstat(item.descriptor)
-    path_status = item.path.stat(follow_symlinks=False)
-    stable = (
-        item.device,
-        item.inode,
-        item.file_type,
-        item.link_count,
-        item.mode,
-        item.uid,
-        item.gid,
-    )
-    for current in (descriptor_status, path_status):
-        if (
-            current.st_dev,
-            current.st_ino,
-            stat.S_IFMT(current.st_mode),
-            current.st_nlink,
-            stat.S_IMODE(current.st_mode),
-            current.st_uid,
-            current.st_gid,
-        ) != stable:
-            raise OSError
-        if stable_data_metadata and (
-            current.st_size,
-            current.st_mtime_ns,
-            current.st_ctime_ns,
-        ) != (item.size, item.mtime_ns, item.ctime_ns):
-            raise OSError
-    if _status_xattrs(item.path) != item.xattrs:
-        raise OSError
-
-
-def _revalidate_status_topology(
-    home: Path,
-    paths: dict[str, Path],
-    opened: dict[str, _StatusFile],
-    *,
-    active_wal: bool,
-) -> None:
-    _revalidate_status_file(
-        home,
-        opened["database"],
-        stable_data_metadata=not active_wal,
-    )
-    expected_present = {"database"}
-    if active_wal:
-        expected_present.update({"wal", "shm"})
-        _revalidate_status_file(home, opened["wal"], stable_data_metadata=False)
-        _revalidate_status_file(home, opened["shm"], stable_data_metadata=False)
-    for name, path in paths.items():
-        if name in expected_present:
-            continue
-        _require_inside(home, path.resolve(strict=False))
-        if os.path.lexists(path):
-            raise OSError
+    _require_inside(home, path.resolve(strict=True))
+    return status.st_size
 
 
 def _probe_sender_ownership(
@@ -1310,21 +1176,23 @@ def _probe_sender_ownership(
         _require_inside(home, lock_path.resolve(strict=False))
         if not os.path.lexists(lock_path):
             return "free"
-        item = _open_status_file(home, lock_path, writable=True)
+        _status_file_size(home, lock_path)
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        descriptor = os.open(lock_path, flags)
     except Exception:
         return "unavailable"
 
     acquired = False
     released = False
     try:
-        acquired = _try_flock_exclusive(item.descriptor)
+        acquired = _try_flock_exclusive(descriptor)
         ownership: Literal["held", "free"] = "free" if acquired else "held"
         if acquired:
             import fcntl
 
-            fcntl.flock(item.descriptor, fcntl.LOCK_UN)
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
             released = True
-        _revalidate_status_file(home, item, stable_data_metadata=True)
         return ownership
     except Exception:
         return "unavailable"
@@ -1333,9 +1201,9 @@ def _probe_sender_ownership(
             import fcntl
 
             with contextlib.suppress(OSError):
-                fcntl.flock(item.descriptor, fcntl.LOCK_UN)
+                fcntl.flock(descriptor, fcntl.LOCK_UN)
         with contextlib.suppress(OSError):
-            os.close(item.descriptor)
+            os.close(descriptor)
 
 
 def _prepare_private_paths(

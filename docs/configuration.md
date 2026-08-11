@@ -232,13 +232,22 @@ session identifier, endpoint, bank, credential, or path.
 
 The profile-local outbox uses private SQLite schema version 1. A new/version-0 database is initialized
 to v1, reopening v1 is idempotent, and unknown nonzero versions are rejected without an invented
-legacy migration. The configured path is revalidated inside `hermes_home` when opened, including
-symlink escapes. The pre-created database is opened existing-only, and its no-follow device/inode
-identity is checked immediately after connection but before schema writes and again after
-initialization. Newly created outbox directories use mode `0700` on POSIX; the database and reserved
-profile lock file use `0600`. Pre-existing parent-directory modes are not changed, and an existing
-file is permission-corrected only after it passes confinement and private-schema validation; a
-rejected foreign file is left unchanged.
+legacy migration. On the sender/write path, the configured path is revalidated inside `hermes_home`
+when opened, including symlink escapes. The pre-created database is opened existing-only, and its
+no-follow device/inode identity is checked immediately after connection but before schema writes and
+again after initialization. Newly created outbox directories use mode `0700` on POSIX; the database
+and reserved profile lock file use `0600`. Pre-existing parent-directory modes are not changed, and
+an existing file is permission-corrected only after it passes confinement and private-schema
+validation; a rejected foreign file is left unchanged.
+
+Operator status is a narrower passive path. It checks that the existing database and any SQLite
+sidecars are regular files inside `hermes_home`, rejects incomplete WAL topology, and opens SQLite
+with URI `mode=ro`. It uses an immutable read when no sidecars exist and a WAL-aware read when an
+active WAL/SHM pair exists. Status never creates or migrates a schema, performs application-owned
+queue recovery, or writes outbox rows. SQLite may update existing SHM coordination state while
+reading active WAL content. Status assumes the intended personal Linux/POSIX deployment has one
+trusted local operator and a stable outbox pathname and sidecar topology during the short inspection;
+concurrent pathname/topology replacement is outside that operational model.
 
 Sender delivery is implemented after local admission. A retain-enabled process starts one daemon
 sender, and a profile-wide POSIX advisory lock elects the sole process allowed to recover, claim,

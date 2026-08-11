@@ -234,11 +234,6 @@ def _sqlite_sidecars(config: BetterHindsightConfig) -> tuple[Path, Path, Path]:
     return Path(f"{database}-wal"), Path(f"{database}-shm"), Path(f"{database}-journal")
 
 
-def _xattrs(path: Path) -> tuple[tuple[str, bytes], ...]:
-    names = sorted(os.listxattr(path, follow_symlinks=False))
-    return tuple((name, os.getxattr(path, name, follow_symlinks=False)) for name in names)
-
-
 def _document_id(index: int) -> str:
     return f"better-hindsight-turn-v1:{index:064x}"
 
@@ -520,39 +515,6 @@ def test_status_rejects_truncated_shm_before_sqlite_open(
     assert shm.read_bytes() == b""
 
 
-@pytest.mark.parametrize("unsupported", ["platform", "sqlite", "no_follow"])
-def test_status_rejects_unsupported_runtime_before_sqlite_open(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    unsupported: str,
-) -> None:
-    config = _config(tmp_path)
-    _initialize_outbox(config)
-    connect_calls = 0
-
-    def forbidden_connect(*_args: object, **_kwargs: object) -> sqlite3.Connection:
-        nonlocal connect_calls
-        connect_calls += 1
-        raise AssertionError("unsupported runtime reached sqlite3.connect")
-
-    monkeypatch.setattr(sqlite3, "connect", forbidden_connect)
-    if unsupported == "platform":
-        monkeypatch.setattr(os, "name", "nt")
-    elif unsupported == "sqlite":
-        monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 21, 0))
-    else:
-        monkeypatch.delattr(os, "O_NOFOLLOW")
-
-    result = status(config, now=20_000.0)
-
-    _assert_result(
-        result,
-        payload={"command": "status", "error": "status_unavailable", "result": "error"},
-        exit_code=3,
-    )
-    assert connect_calls == 0
-
-
 def test_status_ready_snapshot_partitions_every_row_once_and_counts_logical_bytes(
     tmp_path: Path,
 ) -> None:
@@ -632,7 +594,7 @@ def test_status_ready_snapshot_partitions_every_row_once_and_counts_logical_byte
     )
 
 
-def test_status_reads_committed_wal_state_coherently_without_mutating_profile_files(
+def test_status_reads_committed_wal_state_without_mutating_database_or_wal_files(
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path)
@@ -649,30 +611,14 @@ def test_status_reads_committed_wal_state_coherently_without_mutating_profile_fi
         writer.commit()
         profile_files = tuple(sorted(config.outbox.path.parent.iterdir()))
         assert Path(f"{config.outbox.path}-wal") in profile_files
-        before: dict[
-            str,
-            tuple[
-                bytes,
-                tuple[int, int, int, int, int, int, int],
-                tuple[int, int, int],
-                tuple[tuple[str, bytes], ...],
-            ],
-        ] = {}
+        before: dict[str, tuple[bytes, tuple[int, int, int]]] = {}
         for path in profile_files:
+            if path.name.endswith("-shm"):
+                continue
             path_status = path.stat(follow_symlinks=False)
             before[path.name] = (
                 path.read_bytes(),
-                (
-                    path_status.st_dev,
-                    path_status.st_ino,
-                    stat.S_IFMT(path_status.st_mode),
-                    path_status.st_nlink,
-                    stat.S_IMODE(path_status.st_mode),
-                    path_status.st_uid,
-                    path_status.st_gid,
-                ),
                 (path_status.st_size, path_status.st_mtime_ns, path_status.st_ctime_ns),
-                _xattrs(path),
             )
 
         result = status(config, now=2_000.0)
@@ -690,26 +636,16 @@ def test_status_reads_committed_wal_state_coherently_without_mutating_profile_fi
         after_files = tuple(sorted(config.outbox.path.parent.iterdir()))
         assert after_files == profile_files
         for path in after_files:
-            path_status = path.stat(follow_symlinks=False)
-            before_bytes, before_identity, before_mutable_stat, before_xattrs = before[path.name]
-            assert (
-                path_status.st_dev,
-                path_status.st_ino,
-                stat.S_IFMT(path_status.st_mode),
-                path_status.st_nlink,
-                stat.S_IMODE(path_status.st_mode),
-                path_status.st_uid,
-                path_status.st_gid,
-            ) == before_identity
-            assert _xattrs(path) == before_xattrs
             if path.name.endswith("-shm"):
                 continue
+            path_status = path.stat(follow_symlinks=False)
+            before_bytes, before_stat = before[path.name]
             assert path.read_bytes() == before_bytes
             assert (
                 path_status.st_size,
                 path_status.st_mtime_ns,
                 path_status.st_ctime_ns,
-            ) == before_mutable_stat
+            ) == before_stat
     finally:
         writer.close()
 
@@ -881,63 +817,6 @@ def test_status_malformed_outbox_is_fixed_failure_without_mutation(tmp_path: Pat
     assert stat.S_IMODE(after.st_mode) == stat.S_IMODE(before.st_mode) == 0o640
     assert after.st_mtime_ns == before.st_mtime_ns
     assert not Path(f"{config.outbox.path}.lock").exists()
-
-
-def test_status_rejects_database_identity_replacement_after_read_only_open(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config = _config(tmp_path)
-    _initialize_outbox(config)
-    displaced = config.outbox.path.with_name("displaced.sqlite3")
-    replacement = b"synthetic replacement must remain untouched\n"
-    original_connect = sqlite3.connect
-
-    def replacing_connect(database: str, *args: Any, **kwargs: Any) -> sqlite3.Connection:
-        connection = original_connect(database, *args, **kwargs)
-        config.outbox.path.rename(displaced)
-        config.outbox.path.write_bytes(replacement)
-        os.chmod(config.outbox.path, 0o640)
-        return cast(sqlite3.Connection, connection)
-
-    monkeypatch.setattr(sqlite3, "connect", replacing_connect)
-
-    result = status(config, now=2_000.0)
-
-    _assert_result(
-        result,
-        payload={"command": "status", "error": "status_unavailable", "result": "error"},
-        exit_code=3,
-    )
-    assert config.outbox.path.read_bytes() == replacement
-    assert stat.S_IMODE(config.outbox.path.stat().st_mode) == 0o640
-    assert displaced.is_file()
-
-
-def test_status_rejects_sidecar_transition_after_read_only_open(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config = _config(tmp_path)
-    _initialize_outbox(config)
-    _wal, _shm, journal = _sqlite_sidecars(config)
-    original_connect = sqlite3.connect
-    marker = b"synthetic concurrent rollback journal\n"
-
-    def transitioning_connect(database: str, *args: Any, **kwargs: Any) -> sqlite3.Connection:
-        connection = original_connect(database, *args, **kwargs)
-        journal.write_bytes(marker)
-        return cast(sqlite3.Connection, connection)
-
-    monkeypatch.setattr(sqlite3, "connect", transitioning_connect)
-    result = status(config, now=2_000.0)
-
-    _assert_result(
-        result,
-        payload={"command": "status", "error": "status_unavailable", "result": "error"},
-        exit_code=3,
-    )
-    assert journal.read_bytes() == marker
 
 
 @pytest.mark.skipif(os.name != "posix", reason="sender ownership is POSIX-only")
