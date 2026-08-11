@@ -42,7 +42,7 @@ hermes --profile <profile> better_hindsight missions check
 hermes --profile <profile> better_hindsight missions apply --confirm
 ```
 
-`check` performs a read and reports `equal`, `drift`, or `missing`. `apply --confirm` patches only configured drifted mission fields and requires exact response plus readback. Mission commands use a client-only runtime and never start the retention sender.
+`check` performs a read and reports `equal`, `drift`, or `missing`. `apply --confirm` patches only configured drifted mission fields and requires an exact GET readback before reporting success. Mission commands use a client-only runtime and never start the retention sender.
 
 There is no automatic mission application, retry-now, drain, arbitrary-row, row-deletion, or bank-selection command.
 
