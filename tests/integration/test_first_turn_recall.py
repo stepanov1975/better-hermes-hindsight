@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import better_hermes_hindsight.hermes_plugin as packaged_plugin
+from tests.integration.helpers import clean_subprocess_env, materialize_packaged_shim
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL_SECRET_SENTINEL = "synthetic-model-secret-must-not-leak"
@@ -273,52 +272,16 @@ print(json.dumps(asyncio.run(scenario()), sort_keys=True))
 '''
 
 
-def _clean_subprocess_env(home: Path) -> dict[str, str]:
-    environment = {
-        name: os.environ[name]
-        for name in (
-            "LANG",
-            "LC_ALL",
-            "PATH",
-            "PYTHONASYNCIODEBUG",
-            "PYTHONTRACEMALLOC",
-            "PYTHONWARNINGS",
-            "TMPDIR",
-            "TZ",
-        )
-        if name in os.environ
-    }
-    environment.update(
-        {
-            "HOME": str(home / "home"),
-            "HERMES_HOME": str(home / "hermes-home"),
-            "NO_PROXY": "127.0.0.1,localhost",
-            "PIP_NO_INDEX": "1",
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "XDG_CACHE_HOME": str(home / "xdg-cache"),
-            "XDG_CONFIG_HOME": str(home / "xdg-config"),
-            "XDG_DATA_HOME": str(home / "xdg-data"),
-            "XDG_STATE_HOME": str(home / "xdg-state"),
-            "no_proxy": "127.0.0.1,localhost",
-        }
-    )
-    return environment
-
-
-def _materialize_packaged_shim(hermes_home: Path) -> None:
-    source = Path(packaged_plugin.__file__).resolve().parent
-    destination = hermes_home / "plugins" / "better_hindsight"
-    destination.mkdir(parents=True)
-    for name in ("__init__.py", "plugin.yaml"):
-        shutil.copy2(source / name, destination / name)
-
-
 def _run_scenario(
     tmp_path: Path,
     scenario: str,
 ) -> tuple[dict[str, object], subprocess.CompletedProcess[str]]:
     hermes_home = tmp_path / "hermes-home"
-    _materialize_packaged_shim(hermes_home)
+    materialize_packaged_shim(
+        source=Path(packaged_plugin.__file__).resolve().parent,
+        hermes_home=hermes_home,
+        names=("__init__.py", "plugin.yaml"),
+    )
     error_sentinel = f"synthetic-fake-error-{scenario}-must-not-leak"
     completed = subprocess.run(
         [
@@ -332,7 +295,11 @@ def _run_scenario(
             MODEL_SECRET_SENTINEL,
         ],
         cwd=ROOT,
-        env=_clean_subprocess_env(tmp_path),
+        env=clean_subprocess_env(
+            tmp_path,
+            hermes_home=hermes_home,
+            no_proxy="127.0.0.1,localhost",
+        ),
         check=False,
         capture_output=True,
         text=True,

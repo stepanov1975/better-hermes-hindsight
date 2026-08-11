@@ -301,7 +301,6 @@ def test_complete_typed_configuration_round_trips(tmp_path: Path) -> None:
             ],
             "recall": {
                 "enabled": False,
-                "query_projection": "head_tail",
                 "timeout_seconds": 2.25,
                 "input_max_chars": 3210,
                 "context_max_bytes": 6543,
@@ -342,7 +341,7 @@ def test_complete_typed_configuration_round_trips(tmp_path: Path) -> None:
 
     assert not hasattr(config, "integration_mode")
     assert config.recall.enabled is False
-    assert config.recall.query_projection == "head_tail"
+    assert not hasattr(config.recall, "query_projection")
     assert config.recall.timeout_seconds == 2.25
     assert config.recall.input_max_chars == 3210
     assert config.recall.context_max_bytes == 6543
@@ -400,7 +399,6 @@ def test_omitted_hindsight_recall_controls_remain_none(tmp_path: Path) -> None:
     config = load_config(hermes_home=tmp_path, environ={})
 
     assert config.recall.budget is None
-    assert config.recall.query_projection == "head_tail"
     assert config.recall.max_tokens is None
     assert config.recall.types is None
     assert config.recall.tags is None
@@ -487,7 +485,7 @@ def test_bare_empty_observation_scope_is_rejected(tmp_path: Path) -> None:
         {"recall": {"timeout_seconds": 31}},
         {"recall": {"input_max_chars": 0}},
         {"recall": {"context_max_bytes": 0}},
-        {"recall": {"query_projection": "full"}},
+        {"recall": {"query_projection": "head_tail"}},
         {"recall": {"budget": "extreme"}},
         {"recall": {"max_tokens": 0}},
         {"recall": {"types": ["directive"]}},
@@ -786,7 +784,8 @@ def test_agent_context_is_only_a_separate_write_gate(tmp_path: Path) -> None:
 
     assert authorization.recall_enabled is True
     assert authorization.retain_enabled is False
-    assert authorization.agent_context == "secondary"
+    assert authorization.identity_authorized is True
+    assert not hasattr(authorization, "agent_context")
 
 
 def test_cli_requires_explicit_single_principal_declaration(tmp_path: Path) -> None:

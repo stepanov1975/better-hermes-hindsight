@@ -33,10 +33,6 @@ class MissionUpdateError(ValueError):
     """A mission update attempted to use unsupported bank configuration surface."""
 
 
-class DisposableBankGuardError(PermissionError):
-    """A disposable-bank mutation was attempted without an explicit guard."""
-
-
 @dataclass(frozen=True, slots=True)
 class RetainSegment:
     """One immutable retained source segment with its stable document identity."""
@@ -75,9 +71,6 @@ class MissionSnapshot:
 class HindsightClientProtocol(Protocol):
     """The complete Hindsight surface used by the shared process runtime."""
 
-    async def get_server_version(self) -> object:
-        """Read the connected server version and feature flags."""
-
     async def recall(self, query: str) -> object:
         """Recall against the configured bank."""
 
@@ -85,24 +78,11 @@ class HindsightClientProtocol(Protocol):
         """Synchronously confirm one replace-mode retained segment."""
         ...
 
-    async def get_bank_profile(self) -> object:
-        """Read the configured bank profile."""
-
     async def get_bank_config(self) -> object:
         """Read the configured bank configuration."""
 
-    async def update_bank_missions(self, updates: Mapping[str, str]) -> object:
+    async def update_bank_missions(self, updates: Mapping[str, str]) -> None:
         """Update only allowlisted retain and observations mission fields."""
-
-    async def create_disposable_bank(
-        self, bank_id: str, *, confirm_disposable: bool = False
-    ) -> object:
-        """Create or upsert a guarded disposable bank."""
-
-    async def delete_disposable_bank(
-        self, bank_id: str, *, confirm_disposable: bool = False
-    ) -> object:
-        """Delete a guarded disposable bank."""
 
     async def close(self) -> None:
         """Close the client on its owning event loop."""
@@ -113,7 +93,7 @@ class MissionClientProtocol(Protocol):
 
     async def get_bank_config(self) -> MissionSnapshot: ...
 
-    async def update_bank_missions(self, updates: Mapping[str, str]) -> MissionSnapshot: ...
+    async def update_bank_missions(self, updates: Mapping[str, str]) -> None: ...
 
 
 class HindsightSdkFactory(Protocol):
@@ -130,25 +110,17 @@ class HindsightSdkFactory(Protocol):
 
 
 class _BanksApiProtocol(Protocol):
-    async def get_bank_profile(self, **kwargs: object) -> object: ...
-
     async def get_bank_config(self, **kwargs: object) -> object: ...
 
     async def update_bank_config(self, **kwargs: object) -> object: ...
-
-    async def delete_bank(self, **kwargs: object) -> object: ...
 
 
 class _HindsightSdkProtocol(Protocol):
     banks: _BanksApiProtocol
 
-    async def aget_version(self) -> object: ...
-
     async def arecall(self, **kwargs: object) -> object: ...
 
     async def aretain_batch(self, **kwargs: object) -> object: ...
-
-    async def acreate_bank(self, **kwargs: object) -> object: ...
 
     async def aclose(self) -> None: ...
 
@@ -156,13 +128,8 @@ class _HindsightSdkProtocol(Protocol):
 _T = TypeVar("_T")
 
 _CLIENT_FAILURES: dict[str, tuple[str, str]] = {
-    "version": ("version_failed", "Better Hindsight version check failed."),
     "recall": ("recall_failed", "Better Hindsight recall failed."),
     "retain": ("retain_failed", "Better Hindsight retain failed."),
-    "bank_profile": (
-        "bank_profile_failed",
-        "Better Hindsight bank profile read failed.",
-    ),
     "bank_config": (
         "bank_config_failed",
         "Better Hindsight bank configuration read failed.",
@@ -170,14 +137,6 @@ _CLIENT_FAILURES: dict[str, tuple[str, str]] = {
     "mission_update": (
         "mission_update_failed",
         "Better Hindsight mission update failed.",
-    ),
-    "disposable_bank_create": (
-        "disposable_bank_create_failed",
-        "Better Hindsight disposable bank creation failed.",
-    ),
-    "disposable_bank_delete": (
-        "disposable_bank_delete_failed",
-        "Better Hindsight disposable bank deletion failed.",
     ),
     "client_close": (
         "client_close_failed",
@@ -208,7 +167,7 @@ def create_hindsight_client(
     """Construct the one concrete SDK client used by a process runtime.
 
     The caller must invoke this function on the runtime's owning event loop. The SDK constructor is
-    local-only; profile and bank reads remain explicit adapter operations.
+    local-only; bank reads remain explicit adapter operations.
     """
 
     factory = sdk_factory
@@ -262,11 +221,6 @@ class HindsightClientAdapter:
     def __repr__(self) -> str:
         return "HindsightClientAdapter()"
 
-    async def get_server_version(self) -> object:
-        """Read the server version through public ``aget_version``."""
-
-        return await _mapped_call("version", self._sdk.aget_version)
-
     async def recall(self, query: str) -> object:
         """Call public ``arecall`` with only explicitly configured optional controls.
 
@@ -313,14 +267,6 @@ class HindsightClientAdapter:
             retain,
         )
 
-    async def get_bank_profile(self) -> object:
-        """Read the profile through the SDK's public async banks API."""
-
-        return await _mapped_call(
-            "bank_profile",
-            lambda: self._sdk.banks.get_bank_profile(bank_id=self._bank_id),
-        )
-
     async def get_bank_config(self) -> MissionSnapshot:
         """Read and exactly validate missions through the SDK's public async banks API."""
 
@@ -333,8 +279,12 @@ class HindsightClientAdapter:
             get,
         )
 
-    async def update_bank_missions(self, updates: Mapping[str, str]) -> MissionSnapshot:
-        """Apply only configured retain and observations mission changes."""
+    async def update_bank_missions(self, updates: Mapping[str, str]) -> None:
+        """Apply only configured retain and observations mission changes.
+
+        The PATCH response is intentionally ignored. Operator success depends on a separate,
+        exact GET readback of the configured missions.
+        """
 
         copied_updates = dict(updates)
         if (
@@ -349,48 +299,16 @@ class HindsightClientAdapter:
                 "each update must be a configured non-empty mission."
             )
 
-        async def update() -> MissionSnapshot:
+        async def update() -> None:
             from hindsight_client_api.models.bank_config_update import BankConfigUpdate
 
             request = BankConfigUpdate(updates=copied_updates)
-            response = await self._sdk.banks.update_bank_config(
+            await self._sdk.banks.update_bank_config(
                 bank_id=self._bank_id,
                 bank_config_update=request,
             )
-            return _mission_snapshot(
-                response,
-                expected_bank_id=self._bank_id,
-                expected_updates=copied_updates,
-            )
 
-        return await _mapped_call("mission_update", update)
-
-    async def create_disposable_bank(
-        self, bank_id: str, *, confirm_disposable: bool = False
-    ) -> object:
-        """Use public ``acreate_bank`` only after an explicit disposable-resource guard.
-
-        In 0.8.5 this call is an upsert and uses a separate SDK transport that does not carry the
-        configured client user agent. This adapter does not hide either limitation or reach into
-        private SDK state to work around it.
-        """
-
-        _require_disposable_confirmation(confirm_disposable)
-        return await _mapped_call(
-            "disposable_bank_create",
-            lambda: self._sdk.acreate_bank(bank_id=bank_id),
-        )
-
-    async def delete_disposable_bank(
-        self, bank_id: str, *, confirm_disposable: bool = False
-    ) -> object:
-        """Use public ``banks.delete_bank`` only for explicitly disposable resources."""
-
-        _require_disposable_confirmation(confirm_disposable)
-        return await _mapped_call(
-            "disposable_bank_delete",
-            lambda: self._sdk.banks.delete_bank(bank_id=bank_id),
-        )
+        await _mapped_call("mission_update", update)
 
     async def close(self) -> None:
         """Close the public SDK client on the caller's event loop."""
@@ -453,7 +371,6 @@ def _mission_snapshot(
     response: object,
     *,
     expected_bank_id: str,
-    expected_updates: Mapping[str, str] | None = None,
 ) -> MissionSnapshot:
     from hindsight_client_api.models.bank_config_response import BankConfigResponse
 
@@ -468,10 +385,6 @@ def _mission_snapshot(
         retain_mission=_mission_value(mission_config, "retain_mission"),
         observations_mission=_mission_value(mission_config, "observations_mission"),
     )
-    if expected_updates is not None:
-        for name, expected_value in expected_updates.items():
-            if getattr(snapshot, name) != MissionValue(present=True, value=expected_value):
-                raise ValueError("malformed bank configuration response")
     return snapshot
 
 
@@ -486,11 +399,6 @@ def _mission_value(config: dict[str, object], name: str) -> MissionValue:
     return MissionValue(present=True, value=value)
 
 
-def _require_disposable_confirmation(confirmed: bool) -> None:
-    if confirmed is not True:
-        raise DisposableBankGuardError("Better Hindsight disposable-bank confirmation required.")
-
-
 async def _mapped_call(operation: str, call: Callable[[], Awaitable[_T]]) -> _T:
     category, message = _CLIENT_FAILURES[operation]
     try:
@@ -502,7 +410,6 @@ async def _mapped_call(operation: str, call: Callable[[], Awaitable[_T]]) -> _T:
 
 
 __all__ = [
-    "DisposableBankGuardError",
     "HINDSIGHT_DISTRIBUTION",
     "HINDSIGHT_SDK_VERSION",
     "HindsightClientAdapter",

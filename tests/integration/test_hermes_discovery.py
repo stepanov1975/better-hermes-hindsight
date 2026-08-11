@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import better_hermes_hindsight.hermes_plugin as packaged_plugin
 from tests.hermes_compat import EXPECTED_HERMES_COMMIT, EXPECTED_HERMES_VERSION
+from tests.integration.helpers import (
+    clean_subprocess_env,
+    materialize_packaged_shim,
+    write_host_selection,
+)
 
 SHIM_FILES = ("__init__.py", "cli.py", "plugin.yaml")
 
@@ -214,65 +217,16 @@ print(json.dumps({
 """
 
 
-def _clean_subprocess_env(home: Path) -> dict[str, str]:
-    environment = {
-        name: os.environ[name]
-        for name in (
-            "LANG",
-            "LC_ALL",
-            "PATH",
-            "PYTHONASYNCIODEBUG",
-            "PYTHONTRACEMALLOC",
-            "PYTHONWARNINGS",
-            "TMPDIR",
-            "TZ",
-        )
-        if name in os.environ
-    }
-    environment.update(
-        {
-            "HOME": str(home / "home"),
-            "HERMES_HOME": str(home / "hermes-home"),
-            "NO_PROXY": "*",
-            "PIP_NO_INDEX": "1",
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "XDG_CACHE_HOME": str(home / "xdg-cache"),
-            "XDG_CONFIG_HOME": str(home / "xdg-config"),
-            "XDG_DATA_HOME": str(home / "xdg-data"),
-            "XDG_STATE_HOME": str(home / "xdg-state"),
-            "no_proxy": "*",
-        }
-    )
-    return environment
-
-
-def _materialize_packaged_shim(hermes_home: Path) -> Path:
-    source = Path(packaged_plugin.__file__).resolve().parent
-    destination = hermes_home / "plugins" / "better_hindsight"
-    destination.mkdir(parents=True, exist_ok=True)
-    # cli.py is intentionally absent at the RED checkpoint. Copy whatever is
-    # present so released discovery—not fixture setup—exposes the missing shim.
-    for name in SHIM_FILES:
-        candidate = source / name
-        if candidate.is_file():
-            shutil.copy2(candidate, destination / name)
-    return destination
-
-
-def _write_host_selection(hermes_home: Path, provider: str) -> None:
-    hermes_home.mkdir(parents=True, exist_ok=True)
-    (hermes_home / "config.yaml").write_text(
-        f"memory:\n  provider: {provider}\n",
-        encoding="utf-8",
-    )
-
-
 def test_current_loader_discovers_active_shim_cli_and_recall_tool(
     tmp_path: Path,
 ) -> None:
     hermes_home = tmp_path / "hermes-home"
-    _write_host_selection(hermes_home, "better_hindsight")
-    shim = _materialize_packaged_shim(hermes_home)
+    write_host_selection(hermes_home)
+    shim = materialize_packaged_shim(
+        source=Path(packaged_plugin.__file__).resolve().parent,
+        hermes_home=hermes_home,
+        names=SHIM_FILES,
+    )
     config_dir = hermes_home / "better_hindsight"
     config_dir.mkdir(parents=True)
     # Import/discovery must not validate even a deliberately invalid profile.
@@ -288,7 +242,11 @@ def test_current_loader_discovers_active_shim_cli_and_recall_tool(
             str(hermes_home),
         ],
         cwd=tmp_path,
-        env=_clean_subprocess_env(tmp_path),
+        env=clean_subprocess_env(
+            tmp_path,
+            hermes_home=hermes_home,
+            no_proxy="*",
+        ),
         check=False,
         capture_output=True,
         text=True,
@@ -336,8 +294,12 @@ def test_current_inactive_provider_discovery_returns_no_better_command_directly(
     tmp_path: Path,
 ) -> None:
     hermes_home = tmp_path / "hermes-home"
-    _write_host_selection(hermes_home, "hindsight")
-    shim = _materialize_packaged_shim(hermes_home)
+    write_host_selection(hermes_home, "hindsight")
+    shim = materialize_packaged_shim(
+        source=Path(packaged_plugin.__file__).resolve().parent,
+        hermes_home=hermes_home,
+        names=SHIM_FILES,
+    )
 
     completed = subprocess.run(
         [
@@ -348,7 +310,11 @@ def test_current_inactive_provider_discovery_returns_no_better_command_directly(
             EXPECTED_HERMES_VERSION,
         ],
         cwd=tmp_path,
-        env=_clean_subprocess_env(tmp_path),
+        env=clean_subprocess_env(
+            tmp_path,
+            hermes_home=hermes_home,
+            no_proxy="*",
+        ),
         check=False,
         capture_output=True,
         text=True,

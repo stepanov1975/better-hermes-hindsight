@@ -52,7 +52,7 @@ class _MissionClient:
         *,
         events: list[object],
         gets: Sequence[MissionSnapshot | BaseException],
-        patches: Sequence[MissionSnapshot | BaseException] = (),
+        patches: Sequence[object | BaseException] = (),
     ) -> None:
         self.events = events
         self.gets = deque(gets)
@@ -62,15 +62,15 @@ class _MissionClient:
         self.events.append("get")
         return self._next(self.gets, "unexpected extra mission GET")
 
-    async def update_bank_missions(self, updates: Mapping[str, str]) -> MissionSnapshot:
+    async def update_bank_missions(self, updates: Mapping[str, str]) -> object:
         self.events.append(("patch", dict(updates)))
         return self._next(self.patches, "unexpected extra mission PATCH")
 
     @staticmethod
     def _next(
-        scripted: deque[MissionSnapshot | BaseException],
+        scripted: deque[_T | BaseException],
         empty_message: str,
-    ) -> MissionSnapshot:
+    ) -> _T:
         if not scripted:
             raise AssertionError(empty_message)
         value = scripted.popleft()
@@ -175,7 +175,7 @@ def _snapshot(
 def _runtime_factory(
     *,
     gets: Sequence[MissionSnapshot | BaseException],
-    patches: Sequence[MissionSnapshot | BaseException] = (),
+    patches: Sequence[object | BaseException] = (),
     creation_error: BaseException | None = None,
     finalize_error: BaseException | None = None,
 ) -> tuple[_RuntimeFactory, _FakeRuntime, list[object]]:
@@ -1465,11 +1465,10 @@ def test_mission_apply_partial_configuration_patches_only_drift_and_preserves_un
     untouched = _value("Preserve this unconfigured remote mission exactly.")
     config = _config(tmp_path, retain_mission=desired)
     before = _snapshot(_value(_RETAIN_REMOTE), untouched)
-    after_patch = _snapshot(_value(desired), untouched)
     readback = _snapshot(_value(desired), untouched)
     factory, runtime, events = _runtime_factory(
         gets=[before, readback],
-        patches=[after_patch],
+        patches=[{"updated": ["retain_mission"]}],
     )
 
     result = apply_missions(config, confirmed=True, runtime_factory=factory)
@@ -1570,23 +1569,17 @@ def test_mission_apply_patch_failure_is_write_attempted_outcome_unknown(
     _assert_remote_deadlines(runtime, count=2, maximum=config.retain.timeout_seconds)
 
 
-@pytest.mark.parametrize(
-    "mutated_untouched",
-    [
-        _value(None, present=False),
-        _value("Unexpected mutation of untouched mission."),
-    ],
-    ids=["presence-changed", "value-changed"],
-)
-def test_mission_apply_rejects_patch_response_that_changes_untouched_field_without_readback(
+def test_mission_apply_ignores_noncanonical_patch_response_and_uses_exact_get_readback(
     tmp_path: Path,
-    mutated_untouched: MissionValue,
 ) -> None:
     untouched = _value("Preserve untouched mission exactly.")
     config = _config(tmp_path, retain_mission=_RETAIN_DESIRED)
     before = _snapshot(_value(_RETAIN_REMOTE), untouched)
-    invalid_patch = _snapshot(_value(_RETAIN_DESIRED), mutated_untouched)
-    factory, _runtime, events = _runtime_factory(gets=[before], patches=[invalid_patch])
+    readback = _snapshot(_value(_RETAIN_DESIRED), untouched)
+    factory, _runtime, events = _runtime_factory(
+        gets=[before, readback],
+        patches=[{"status": "accepted"}],
+    )
 
     result = apply_missions(config, confirmed=True, runtime_factory=factory)
 
@@ -1594,15 +1587,16 @@ def test_mission_apply_rejects_patch_response_that_changes_untouched_field_witho
         result,
         payload={
             "command": "missions_apply",
-            "outcome": "write_attempted_outcome_unknown",
-            "result": "error",
+            "outcome": "verified_success",
+            "result": "ok",
         },
-        exit_code=4,
+        exit_code=0,
     )
     assert events == [
         "runtime_create",
         "get",
         ("patch", {"retain_mission": _RETAIN_DESIRED}),
+        "get",
         "runtime_finalize",
     ]
 

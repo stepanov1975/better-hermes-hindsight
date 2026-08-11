@@ -1,11 +1,10 @@
-"""Exact released-Hermes integration proofs for the Task 4 operator CLI."""
+"""Exact released-Hermes integration proofs for the operator CLI."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-import shutil
 import stat
 import subprocess
 import sys
@@ -16,6 +15,11 @@ import pytest
 
 import better_hermes_hindsight.hermes_plugin as packaged_plugin
 from tests.hermes_compat import EXPECTED_HERMES_COMMIT, EXPECTED_HERMES_VERSION
+from tests.integration.helpers import (
+    clean_subprocess_env,
+    materialize_packaged_shim,
+    write_host_selection,
+)
 
 SHIM_FILES = ("__init__.py", "cli.py", "plugin.yaml")
 FIXTURE_BANK_ID = "operator-cli-fixture-bank"
@@ -339,72 +343,6 @@ if caught is not None:
 """
 
 
-def _clean_subprocess_env(
-    root: Path,
-    *,
-    hermes_home: Path | None,
-    extra: Mapping[str, str] | None = None,
-) -> dict[str, str]:
-    home = root / "home"
-    home.mkdir(parents=True, exist_ok=True)
-    environment = {
-        name: os.environ[name]
-        for name in (
-            "LANG",
-            "LC_ALL",
-            "PATH",
-            "PYTHONASYNCIODEBUG",
-            "PYTHONTRACEMALLOC",
-            "PYTHONWARNINGS",
-            "TMPDIR",
-            "TZ",
-        )
-        if name in os.environ
-    }
-    environment.update(
-        {
-            "HOME": str(home),
-            "HERMES_DISABLE_UPDATE_CHECK": "1",
-            "HERMES_QUIET": "1",
-            "NO_PROXY": "*",
-            "PIP_NO_INDEX": "1",
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "XDG_CACHE_HOME": str(root / "xdg-cache"),
-            "XDG_CONFIG_HOME": str(root / "xdg-config"),
-            "XDG_DATA_HOME": str(root / "xdg-data"),
-            "XDG_STATE_HOME": str(root / "xdg-state"),
-            "no_proxy": "*",
-        }
-    )
-    if hermes_home is not None:
-        environment["HERMES_HOME"] = str(hermes_home)
-    if extra is not None:
-        environment.update(extra)
-    return environment
-
-
-def _materialize_packaged_shim(hermes_home: Path) -> Path:
-    source = Path(packaged_plugin.__file__).resolve().parent
-    destination = hermes_home / "plugins" / "better_hindsight"
-    destination.mkdir(parents=True, exist_ok=True)
-    # During the RED phase cli.py intentionally does not exist yet. Copy every
-    # released-shim source that exists so the subprocess reaches released Hermes
-    # and fails on the missing command rather than in this test fixture.
-    for name in SHIM_FILES:
-        candidate = source / name
-        if candidate.is_file():
-            shutil.copy2(candidate, destination / name)
-    return destination
-
-
-def _write_host_selection(hermes_home: Path, provider: str = "better_hindsight") -> None:
-    hermes_home.mkdir(parents=True, exist_ok=True)
-    (hermes_home / "config.yaml").write_text(
-        f"memory:\n  provider: {provider}\n",
-        encoding="utf-8",
-    )
-
-
 def _write_plugin_config(
     hermes_home: Path,
     *,
@@ -488,10 +426,15 @@ def _run_released_cli(
             *argv,
         ],
         cwd=root,
-        env=_clean_subprocess_env(
+        env=clean_subprocess_env(
             root,
             hermes_home=exported_hermes_home,
-            extra=extra_environment,
+            no_proxy="*",
+            extra={
+                "HERMES_DISABLE_UPDATE_CHECK": "1",
+                "HERMES_QUIET": "1",
+                **(extra_environment or {}),
+            },
         ),
         check=False,
         capture_output=True,
@@ -519,8 +462,12 @@ def _assert_handler_output(
 
 def _prepare_explicit_home(root: Path) -> tuple[Path, Path]:
     hermes_home = root / "hermes-home"
-    _write_host_selection(hermes_home)
-    shim = _materialize_packaged_shim(hermes_home)
+    write_host_selection(hermes_home)
+    shim = materialize_packaged_shim(
+        source=Path(packaged_plugin.__file__).resolve().parent,
+        hermes_home=hermes_home,
+        names=SHIM_FILES,
+    )
     return hermes_home, shim
 
 
@@ -605,10 +552,14 @@ def test_named_profile_selection_drives_discovery_and_absent_status_without_crea
     tmp_path: Path,
 ) -> None:
     default_home = tmp_path / "home" / ".hermes"
-    _write_host_selection(default_home, provider="hindsight")
+    write_host_selection(default_home, provider="hindsight")
     selected_home = default_home / "profiles" / "operator_fixture"
-    _write_host_selection(selected_home)
-    shim = _materialize_packaged_shim(selected_home)
+    write_host_selection(selected_home)
+    shim = materialize_packaged_shim(
+        source=Path(packaged_plugin.__file__).resolve().parent,
+        hermes_home=selected_home,
+        names=SHIM_FILES,
+    )
     _write_plugin_config(selected_home)
     before_shim = _snapshot_tree(shim)
     before_profile = _snapshot_tree(selected_home / "better_hindsight")

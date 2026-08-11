@@ -24,7 +24,6 @@ import better_hermes_hindsight.client as client_module
 from better_hermes_hindsight import __version__
 from better_hermes_hindsight.client import (
     MISSION_UPDATE_FIELDS,
-    DisposableBankGuardError,
     HindsightClientAdapter,
     HindsightClientError,
     MissionUpdateError,
@@ -136,17 +135,11 @@ class _FakeBanksApi:
             "observations_mission": "observe-old",
         }
 
-    async def get_bank_profile(self, **kwargs: object) -> object:
-        return self._record("get_bank_profile", kwargs)
-
     async def get_bank_config(self, **kwargs: object) -> object:
         return self._record("get_bank_config", kwargs)
 
     async def update_bank_config(self, **kwargs: object) -> object:
         return self._record("update_bank_config", kwargs)
-
-    async def delete_bank(self, **kwargs: object) -> object:
-        return self._record("delete_bank", kwargs)
 
     def _record(self, operation: str, kwargs: Mapping[str, object]) -> object:
         failure = self._failures.get(operation)
@@ -176,14 +169,8 @@ class _FakeSdkClient:
     async def arecall(self, **kwargs: object) -> object:
         return self._record("arecall", kwargs)
 
-    async def aget_version(self) -> object:
-        return self._record("aget_version", {})
-
     async def aretain_batch(self, **kwargs: object) -> object:
         return self._record("aretain_batch", kwargs)
-
-    async def acreate_bank(self, **kwargs: object) -> object:
-        return self._record("acreate_bank", kwargs)
 
     async def aclose(self) -> None:
         self._record("aclose", {})
@@ -606,7 +593,7 @@ def test_mission_value_and_snapshot_are_exact_frozen_slotted_project_types() -> 
         snapshot.__setattr__("retain_mission", absent)
 
 
-def test_bank_reads_and_allowlisted_mission_update_use_public_banks_api_and_typed_snapshots(
+def test_bank_config_read_and_allowlisted_mission_update_use_public_banks_api(
     tmp_path: Path,
 ) -> None:
     config = _config(tmp_path, injected={"bank_id": "sample-bank"})
@@ -614,8 +601,6 @@ def test_bank_reads_and_allowlisted_mission_update_use_public_banks_api_and_type
     adapter = HindsightClientAdapter(config=config, sdk_client=sdk_client)
 
     assert sdk_client.banks.calls == []
-    version = asyncio.run(adapter.get_server_version())
-    profile = asyncio.run(adapter.get_bank_profile())
     bank_config = asyncio.run(adapter.get_bank_config())
     updated = asyncio.run(
         adapter.update_bank_missions(
@@ -626,26 +611,16 @@ def test_bank_reads_and_allowlisted_mission_update_use_public_banks_api_and_type
         )
     )
 
-    assert version == {"operation": "aget_version"}
-    assert profile == {"operation": "get_bank_profile"}
     assert bank_config == _expected_mission_snapshot(
         retain_present=True,
         retain_value="retain-old",
         observations_present=True,
         observations_value="observe-old",
     )
-    assert updated == _expected_mission_snapshot(
-        retain_present=True,
-        retain_value="Retain stable preferences.",
-        observations_present=True,
-        observations_value="Consolidate stable observations.",
-    )
+    assert updated is None
     assert frozenset({"retain_mission", "observations_mission"}) == MISSION_UPDATE_FIELDS
-    assert sdk_client.banks.calls[:2] == [
-        ("get_bank_profile", {"bank_id": "sample-bank"}),
-        ("get_bank_config", {"bank_id": "sample-bank"}),
-    ]
-    operation, kwargs = sdk_client.banks.calls[2]
+    assert sdk_client.banks.calls[0] == ("get_bank_config", {"bank_id": "sample-bank"})
+    operation, kwargs = sdk_client.banks.calls[1]
     assert operation == "update_bank_config"
     assert kwargs["bank_id"] == "sample-bank"
     update = kwargs["bank_config_update"]
@@ -719,21 +694,6 @@ _VALID_MISSION_CONFIG = {
 
 
 @pytest.mark.parametrize(
-    ("operation", "expected_category", "expected_message"),
-    [
-        (
-            "get_bank_config",
-            "bank_config_failed",
-            "Better Hindsight bank configuration read failed.",
-        ),
-        (
-            "update_bank_config",
-            "mission_update_failed",
-            "Better Hindsight mission update failed.",
-        ),
-    ],
-)
-@pytest.mark.parametrize(
     "response",
     [
         object(),
@@ -784,28 +744,20 @@ _VALID_MISSION_CONFIG = {
         "unprintable-mission-value",
     ],
 )
-def test_get_and_patch_require_exact_sdk_response_bank_config_and_mission_types(
+def test_get_requires_exact_sdk_response_bank_config_and_mission_types(
     tmp_path: Path,
-    operation: str,
-    expected_category: str,
-    expected_message: str,
     response: object,
 ) -> None:
     config = _config(tmp_path, injected={"bank_id": "sample-bank"})
     sdk_client = _FakeSdkClient()
-    sdk_client.responses[operation] = response
+    sdk_client.responses["get_bank_config"] = response
     adapter = HindsightClientAdapter(config=config, sdk_client=sdk_client)
 
-    async def invoke() -> object:
-        if operation == "get_bank_config":
-            return await adapter.get_bank_config()
-        return await adapter.update_bank_missions({"retain_mission": "retain-new"})
-
     with pytest.raises(HindsightClientError) as caught:
-        asyncio.run(invoke())
+        asyncio.run(adapter.get_bank_config())
 
-    assert caught.value.category == expected_category
-    assert str(caught.value) == expected_message
+    assert caught.value.category == "bank_config_failed"
+    assert str(caught.value) == "Better Hindsight bank configuration read failed."
     assert caught.value.__cause__ is None
     assert caught.value.__suppress_context__ is True
     error_surface = "\n".join(
@@ -813,6 +765,18 @@ def test_get_and_patch_require_exact_sdk_response_bank_config_and_mission_types(
     )
     assert _RAW_BANK_SENTINEL not in error_surface
     assert _RAW_MISSION_SENTINEL not in error_surface
+    assert len(sdk_client.banks.calls) == 1
+
+
+def test_mission_update_ignores_sparse_noncanonical_sdk_response(tmp_path: Path) -> None:
+    config = _config(tmp_path, injected={"bank_id": "sample-bank"})
+    sdk_client = _FakeSdkClient()
+    sdk_client.responses["update_bank_config"] = {"status": "accepted"}
+    adapter = HindsightClientAdapter(config=config, sdk_client=sdk_client)
+
+    result = asyncio.run(adapter.update_bank_missions({"retain_mission": "retain-new"}))
+
+    assert result is None
     assert len(sdk_client.banks.calls) == 1
 
 
@@ -854,42 +818,11 @@ def test_empty_or_clearing_mission_update_is_rejected_before_sdk_call(
     assert sdk_client.banks.calls == []
 
 
-def test_disposable_bank_create_and_delete_require_explicit_guard(tmp_path: Path) -> None:
-    config = _config(tmp_path)
-    sdk_client = _FakeSdkClient()
-    adapter = HindsightClientAdapter(config=config, sdk_client=sdk_client)
-
-    with pytest.raises(DisposableBankGuardError, match="disposable-bank confirmation required"):
-        asyncio.run(adapter.create_disposable_bank("disposable-bank", confirm_disposable=False))
-    with pytest.raises(DisposableBankGuardError, match="disposable-bank confirmation required"):
-        asyncio.run(adapter.delete_disposable_bank("disposable-bank", confirm_disposable=False))
-    assert sdk_client.calls == []
-    assert sdk_client.banks.calls == []
-
-    created = asyncio.run(
-        adapter.create_disposable_bank("disposable-bank", confirm_disposable=True)
-    )
-    deleted = asyncio.run(
-        adapter.delete_disposable_bank("disposable-bank", confirm_disposable=True)
-    )
-
-    assert created == {"operation": "acreate_bank"}
-    assert deleted == {"operation": "delete_bank"}
-    assert sdk_client.calls == [("acreate_bank", {"bank_id": "disposable-bank"})]
-    assert sdk_client.banks.calls == [("delete_bank", {"bank_id": "disposable-bank"})]
-
-
 @pytest.mark.parametrize(
     "operation, expected_category, expected_message",
     [
-        ("aget_version", "version_failed", "Better Hindsight version check failed."),
         ("arecall", "recall_failed", "Better Hindsight recall failed."),
         ("aretain_batch", "retain_failed", "Better Hindsight retain failed."),
-        (
-            "get_bank_profile",
-            "bank_profile_failed",
-            "Better Hindsight bank profile read failed.",
-        ),
         (
             "get_bank_config",
             "bank_config_failed",
@@ -899,16 +832,6 @@ def test_disposable_bank_create_and_delete_require_explicit_guard(tmp_path: Path
             "update_bank_config",
             "mission_update_failed",
             "Better Hindsight mission update failed.",
-        ),
-        (
-            "acreate_bank",
-            "disposable_bank_create_failed",
-            "Better Hindsight disposable bank creation failed.",
-        ),
-        (
-            "delete_bank",
-            "disposable_bank_delete_failed",
-            "Better Hindsight disposable bank deletion failed.",
         ),
         ("aclose", "client_close_failed", "Better Hindsight client close failed."),
     ],
@@ -925,22 +848,15 @@ def test_raw_sdk_failures_map_to_fixed_sanitized_errors(
     adapter = HindsightClientAdapter(config=config, sdk_client=sdk_client)
 
     async def invoke() -> object | None:
-        if operation == "aget_version":
-            return await adapter.get_server_version()
         if operation == "arecall":
             return await adapter.recall("query")
         if operation == "aretain_batch":
             return await adapter.retain_segment(_retain_segment(content="content"))
-        if operation == "get_bank_profile":
-            return await adapter.get_bank_profile()
         if operation == "get_bank_config":
             return await adapter.get_bank_config()
         if operation == "update_bank_config":
-            return await adapter.update_bank_missions({"retain_mission": "mission"})
-        if operation == "acreate_bank":
-            return await adapter.create_disposable_bank("disposable-bank", confirm_disposable=True)
-        if operation == "delete_bank":
-            return await adapter.delete_disposable_bank("disposable-bank", confirm_disposable=True)
+            await adapter.update_bank_missions({"retain_mission": "mission"})
+            return None
         await adapter.close()
         return None
 

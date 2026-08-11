@@ -47,7 +47,6 @@ This example uses only synthetic/local values and contains no API key. Retention
   ],
   "recall": {
     "enabled": true,
-    "query_projection": "head_tail",
     "timeout_seconds": 3.5,
     "input_max_chars": 4096,
     "context_max_bytes": 8192
@@ -87,7 +86,6 @@ and invalid ranges are errors rather than silent fallbacks.
 | `single_principal` | `false` | Must be explicitly `true` to authorize CLI or gateway memory |
 | `allowed_principals` | `[]` | Exact `(platform, identifier_kind, identifier)` tuples |
 | `recall.enabled` | `true` | Boolean |
-| `recall.query_projection` | `head_tail` | Head-plus-tail projection; no full-history mode |
 | `recall.timeout_seconds` | `3.5` | Greater than zero, at most 30 seconds |
 | `recall.input_max_chars` | `4096` | 1 through 65,536 characters |
 | `recall.context_max_bytes` | `8192` | 1 through 1,048,576 bytes |
