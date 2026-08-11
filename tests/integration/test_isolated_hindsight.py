@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -96,7 +97,7 @@ def _development_inputs(environ: Mapping[str, str]) -> DevelopmentInputs | None:
     return DevelopmentInputs(
         api_url=api_url,
         api_key=values["BETTER_HINDSIGHT_DEV_API_KEY"],
-        hermes_python=hermes_python.resolve(),
+        hermes_python=Path(os.path.abspath(hermes_python)),
         allowed_endpoints=allowed,
     )
 
@@ -496,6 +497,28 @@ def test_live_proof_is_explicitly_opt_in() -> None:
         _development_inputs({"BETTER_HINDSIGHT_ALLOW_DEV_WRITES": "1"})
 
 
+def test_live_proof_preserves_a_virtualenv_interpreter_symlink(tmp_path: Path) -> None:
+    base_python = tmp_path / "base-python"
+    base_python.write_text("#!/bin/sh\n", encoding="utf-8")
+    base_python.chmod(0o700)
+    venv_python = tmp_path / "venv" / "bin" / "python"
+    venv_python.parent.mkdir(parents=True)
+    venv_python.symlink_to(base_python)
+
+    inputs = _development_inputs(
+        {
+            "BETTER_HINDSIGHT_REQUIRE_LIVE_PROOF": "1",
+            "BETTER_HINDSIGHT_ALLOW_DEV_WRITES": "1",
+            "BETTER_HINDSIGHT_DEV_API_URL": "http://127.0.0.1:8888",
+            "BETTER_HINDSIGHT_DEV_API_KEY": "synthetic-live-key",
+            "BETTER_HINDSIGHT_DEV_HERMES_PYTHON": os.fspath(venv_python),
+        }
+    )
+
+    assert inputs is not None
+    assert inputs.hermes_python == venv_python.absolute()
+
+
 def test_child_environment_does_not_forward_unrelated_credentials(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -537,22 +560,11 @@ def test_live_smoke_attempts_cleanup_when_create_result_is_uncertain(
     def uncertain_create(_inputs: DevelopmentInputs) -> None:
         raise RuntimeError("create result uncertain")
 
-    monkeypatch.setattr(
-        "tests.integration.test_isolated_hindsight._development_inputs",
-        lambda _environ: inputs,
-    )
-    monkeypatch.setattr(
-        "tests.integration.test_isolated_hindsight._with_disposable_bank",
-        lambda _inputs: inputs,
-    )
-    monkeypatch.setattr(
-        "tests.integration.test_isolated_hindsight._create_disposable_bank",
-        uncertain_create,
-    )
-    monkeypatch.setattr(
-        "tests.integration.test_isolated_hindsight._delete_disposable_bank",
-        cleanup_calls.append,
-    )
+    current_module = sys.modules[__name__]
+    monkeypatch.setattr(current_module, "_development_inputs", lambda _environ: inputs)
+    monkeypatch.setattr(current_module, "_with_disposable_bank", lambda _inputs: inputs)
+    monkeypatch.setattr(current_module, "_create_disposable_bank", uncertain_create)
+    monkeypatch.setattr(current_module, "_delete_disposable_bank", cleanup_calls.append)
 
     with pytest.raises(RuntimeError, match="create result uncertain"):
         test_isolated_hindsight_smoke(tmp_path)
@@ -589,7 +601,11 @@ def test_isolated_hindsight_smoke(tmp_path: Path) -> None:
         try:
             payload = json.loads(completed.stdout.strip().splitlines()[-1])
         except (IndexError, json.JSONDecodeError):
-            raise AssertionError("live child returned no structured result") from None
+            diagnostic = completed.stderr.replace(inputs.api_key, "[REDACTED]").strip()
+            raise AssertionError(
+                "live child returned no structured result "
+                f"(exit={completed.returncode}, stderr={diagnostic[-2000:]!r})"
+            ) from None
         assert completed.returncode == 0, payload
         assert payload["status"] == "ok"
         assert payload["hindsight_client"] == _HINDSIGHT_VERSION
