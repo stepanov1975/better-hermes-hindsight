@@ -19,7 +19,7 @@ from agent.memory_manager import MemoryManager
 
 from better_hermes_hindsight.client import HINDSIGHT_SDK_VERSION
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
-from better_hermes_hindsight.outbox import OutboxRow, SQLiteOutbox
+from better_hermes_hindsight.outbox import OutboxOpenError, OutboxRow, SQLiteOutbox
 from better_hermes_hindsight.provider import BetterHindsightMemoryProvider
 from better_hermes_hindsight.retention import build_retained_segments
 from better_hermes_hindsight.runtime import (
@@ -275,9 +275,13 @@ def _wait_for_rows(
 ) -> tuple[OutboxRow, ...]:
     deadline = time.monotonic() + timeout
     while True:
-        rows = _read_rows(config)
-        if predicate(rows):
-            return rows
+        try:
+            rows = _read_rows(config)
+        except OutboxOpenError:
+            pass
+        else:
+            if predicate(rows):
+                return rows
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise AssertionError("Timed out waiting for the expected durable outbox state.")
