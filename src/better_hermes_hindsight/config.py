@@ -52,7 +52,6 @@ MAX_TAG_COUNT = 64
 MAX_TAG_CHARS = 256
 
 IdentifierKind: TypeAlias = Literal["user_id", "user_id_alt"]
-QueryProjection: TypeAlias = Literal["head_tail"]
 RecallBudget: TypeAlias = Literal["low", "mid", "high"]
 RecallType: TypeAlias = Literal["world", "experience", "observation"]
 RecallTagMode: TypeAlias = Literal["any", "all", "any_strict", "all_strict", "exact"]
@@ -76,7 +75,6 @@ _ROOT_KEYS = {
 }
 _RECALL_KEYS = {
     "enabled",
-    "query_projection",
     "timeout_seconds",
     "input_max_chars",
     "context_max_bytes",
@@ -172,7 +170,6 @@ class RecallConfig:
     """Bounded local recall policy plus optional Hindsight 0.8.5 controls."""
 
     enabled: bool = True
-    query_projection: QueryProjection = "head_tail"
     timeout_seconds: float = DEFAULT_RECALL_TIMEOUT_SECONDS
     input_max_chars: int = DEFAULT_RECALL_INPUT_MAX_CHARS
     context_max_bytes: int = DEFAULT_RECALL_CONTEXT_MAX_BYTES
@@ -232,7 +229,6 @@ class MemoryAuthorization:
     identity_authorized: bool
     recall_enabled: bool
     retain_enabled: bool
-    agent_context: str | None
 
     @property
     def memory_enabled(self) -> bool:
@@ -300,7 +296,6 @@ class BetterHindsightConfig:
             retain_enabled=(
                 identity_authorized and self.retain.enabled and agent_context == "primary"
             ),
-            agent_context=agent_context,
         )
 
 
@@ -676,15 +671,6 @@ def _parse_recall(value: object) -> RecallConfig:
     values = _expect_mapping(value, "recall")
     _check_unknown_keys(values, _RECALL_KEYS, "recall")
 
-    query_projection = cast(
-        QueryProjection,
-        _parse_literal(
-            values.get("query_projection", "head_tail"),
-            "recall.query_projection",
-            ("head_tail",),
-        ),
-    )
-
     budget_value = values.get("budget")
     budget = cast(
         RecallBudget | None,
@@ -714,7 +700,6 @@ def _parse_recall(value: object) -> RecallConfig:
 
     return RecallConfig(
         enabled=_parse_bool(values.get("enabled", True), "recall.enabled"),
-        query_projection=query_projection,
         timeout_seconds=_parse_bounded_float(
             values.get("timeout_seconds", DEFAULT_RECALL_TIMEOUT_SECONDS),
             "recall.timeout_seconds",
@@ -1009,7 +994,6 @@ __all__ = [
     "MissionConfig",
     "ObservationScopes",
     "OutboxConfig",
-    "QueryProjection",
     "RecallBudget",
     "RecallConfig",
     "RecallMinScores",

@@ -467,9 +467,7 @@ class OutboxSender:
                 self._wake.wait(timeout=timeout)
                 continue
 
-            row = claim.row
-            self._before_submit(row)
-            transition = self._deliver_claim(owner, row)
+            transition = self._deliver_claim(owner, claim.row)
             if transition.status is not OutboxTransitionStatus.APPLIED:
                 return True
         return False
@@ -478,11 +476,6 @@ class OutboxSender:
         if self._stopping():
             return None
         return self._outbox.claim_due(owner, now=self._wall_time())
-
-    def _before_submit(self, row: OutboxRow) -> None:
-        """Deterministic test barrier immediately after claim and before SDK submission."""
-
-        del row
 
     def _deliver_claim(
         self,

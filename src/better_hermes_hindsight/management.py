@@ -208,7 +208,7 @@ def apply_missions(
     confirmed: bool,
     runtime_factory: _RuntimeFactory = create_operator_runtime,
 ) -> ManagementResult:
-    """Apply configured drift once, then require exact PATCH and GET confirmation."""
+    """Apply configured drift once, then require an exact GET readback."""
 
     if confirmed is not True:
         raise PermissionError("Better Hindsight mission apply requires explicit confirmation.")
@@ -248,20 +248,18 @@ def apply_missions(
                 )
             else:
 
-                async def dispatch_patch(client: object) -> MissionSnapshot:
+                async def dispatch_patch(client: object) -> None:
                     nonlocal write_attempted
                     write_attempted = True
-                    return await cast(MissionClientProtocol, client).update_bank_missions(updates)
+                    await cast(MissionClientProtocol, client).update_bank_missions(updates)
 
                 try:
-                    patched = _runtime_call(
+                    _runtime_call(
                         runtime,
                         dispatch_patch,
                         deadline=deadline,
                     )
                     expected = _expected_snapshot(before, updates)
-                    if patched != expected:
-                        raise RuntimeError
                     readback = _runtime_call(
                         runtime,
                         lambda client: cast(MissionClientProtocol, client).get_bank_config(),

@@ -59,7 +59,9 @@ Durability begins only after admission commits. A network timeout may be ambiguo
 - API credentials come from the environment and are not part of destination fingerprints or persisted payload metadata.
 - Outbox rows bind to a credential-free fingerprint of endpoint, bank, schema, tags, and observation scopes.
 - Rows for another destination remain blocked until an operator deliberately restores the old configuration or performs a separately reviewed recovery.
-- Status is passive and must surface blocked work as degraded rather than healthy.
+- Status is passive: it uses SQLite read-only URI opens, performs no application-owned schema
+  creation, migration, queue recovery, or row writes, and must surface blocked work as degraded rather
+  than healthy. SQLite may update existing SHM coordination state while reading active WAL content.
 - Mission application requires `--confirm`, patches only allowlisted drifted fields, and verifies readback.
 - Live tests use synthetic content and the existing isolated Hindsight environment, never production data.
 
@@ -71,4 +73,9 @@ The Git commit is the working identity. A tag or version bump is optional and do
 
 ## Accepted limitations
 
-The intended deployment is Linux/POSIX, one principal, one bank, one external Hindsight 0.8.5 service, and the normal Hermes memory-provider lifecycle. `codex_app_server`, typed provenance, automatic migration/deletion, and cross-platform sender election are outside the initial product. They do not block use in the intended environment.
+The intended deployment is personal Linux/POSIX with one trusted local operator/principal, one bank,
+one external Hindsight 0.8.5 service, a stable profile/outbox pathname topology, and the normal Hermes
+memory-provider lifecycle. Passive status is an operational snapshot under that model, not a defense
+against concurrent pathname replacement or an adversarial local writer. `codex_app_server`, typed
+provenance, automatic migration/deletion, and cross-platform sender election are outside the initial
+product. They do not block use in the intended environment.

@@ -1218,11 +1218,17 @@ def test_claim_submission_race_keeps_lock_and_reschedules_without_invoking_retai
         wall_time=wall_time,
     )
 
-    def pause_before_submit(_row: outbox_module.OutboxRow) -> None:
+    real_deliver_claim = sender._deliver_claim
+
+    def pause_before_submit(
+        owner: outbox_module.ProfileLockOwner,
+        row: outbox_module.OutboxRow,
+    ) -> outbox_module.OutboxTransitionResult:
         claim_paused.set()
         assert allow_submission.wait(timeout=3.0)
+        return real_deliver_claim(owner, row)
 
-    monkeypatch.setattr(sender, "_before_submit", pause_before_submit)
+    monkeypatch.setattr(sender, "_deliver_claim", pause_before_submit)
     real_run = runner.run
 
     def observe_sender_run(

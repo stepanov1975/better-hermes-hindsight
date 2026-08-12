@@ -36,37 +36,16 @@ class _FakeClient:
         self.calls.append(f"recall:{query}")
         return {"query": query}
 
-    async def get_server_version(self) -> object:
-        self.calls.append("version")
-        return object()
-
     async def retain_segment(self, segment: RetainSegment) -> RetainConfirmation:
         self.calls.append(f"retain:{segment.document_id}")
         return RetainConfirmation(confirmed=True)
-
-    async def get_bank_profile(self) -> object:
-        self.calls.append("profile")
-        return object()
 
     async def get_bank_config(self) -> object:
         self.calls.append("config")
         return object()
 
-    async def update_bank_missions(self, updates: Mapping[str, str]) -> object:
+    async def update_bank_missions(self, updates: Mapping[str, str]) -> None:
         self.calls.append(f"missions:{len(updates)}")
-        return object()
-
-    async def create_disposable_bank(
-        self, bank_id: str, *, confirm_disposable: bool = False
-    ) -> object:
-        self.calls.append(f"create:{bank_id}:{confirm_disposable}")
-        return object()
-
-    async def delete_disposable_bank(
-        self, bank_id: str, *, confirm_disposable: bool = False
-    ) -> object:
-        self.calls.append(f"delete:{bank_id}:{confirm_disposable}")
-        return object()
 
     async def close(self) -> None:
         self.close_loops.append(asyncio.get_running_loop())

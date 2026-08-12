@@ -124,9 +124,6 @@ class _RuntimeFakeClient:
         self.calls: list[str] = []
         self.close_calls = 0
 
-    async def get_server_version(self) -> object:
-        raise AssertionError("provider recall must not make a version request")
-
     async def recall(self, query: str) -> object:
         self.calls.append(f"recall:{query}")
         return _recall_response()
@@ -134,24 +131,11 @@ class _RuntimeFakeClient:
     async def retain_segment(self, segment: RetainSegment) -> RetainConfirmation:
         raise AssertionError(f"recall-only provider must not retain {segment.document_id}")
 
-    async def get_bank_profile(self) -> object:
-        raise AssertionError("provider recall must not read the bank profile")
-
     async def get_bank_config(self) -> object:
         raise AssertionError("provider recall must not read bank configuration")
 
-    async def update_bank_missions(self, updates: Mapping[str, str]) -> object:
+    async def update_bank_missions(self, updates: Mapping[str, str]) -> None:
         raise AssertionError(f"provider recall must not update {len(updates)} missions")
-
-    async def create_disposable_bank(
-        self, bank_id: str, *, confirm_disposable: bool = False
-    ) -> object:
-        raise AssertionError(f"provider recall must not create {bank_id}:{confirm_disposable}")
-
-    async def delete_disposable_bank(
-        self, bank_id: str, *, confirm_disposable: bool = False
-    ) -> object:
-        raise AssertionError(f"provider recall must not delete {bank_id}:{confirm_disposable}")
 
     async def close(self) -> None:
         assert asyncio.get_running_loop() is self.created_loop

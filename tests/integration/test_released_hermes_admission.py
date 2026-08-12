@@ -38,10 +38,6 @@ class _NoNetworkClient:
         self.operation_calls: list[str] = []
         self.close_calls = 0
 
-    async def get_server_version(self) -> object:
-        self.operation_calls.append("version")
-        return object()
-
     async def recall(self, query: str) -> object:
         self.operation_calls.append(f"recall:{query}")
         return object()
@@ -50,29 +46,12 @@ class _NoNetworkClient:
         self.operation_calls.append(f"retain:{segment.document_id}")
         return RetainConfirmation(confirmed=True)
 
-    async def get_bank_profile(self) -> object:
-        self.operation_calls.append("profile")
-        return object()
-
     async def get_bank_config(self) -> object:
         self.operation_calls.append("config")
         return object()
 
-    async def update_bank_missions(self, updates: Mapping[str, str]) -> object:
+    async def update_bank_missions(self, updates: Mapping[str, str]) -> None:
         self.operation_calls.append(f"missions:{len(updates)}")
-        return object()
-
-    async def create_disposable_bank(
-        self, bank_id: str, *, confirm_disposable: bool = False
-    ) -> object:
-        self.operation_calls.append(f"create:{bank_id}:{confirm_disposable}")
-        return object()
-
-    async def delete_disposable_bank(
-        self, bank_id: str, *, confirm_disposable: bool = False
-    ) -> object:
-        self.operation_calls.append(f"delete:{bank_id}:{confirm_disposable}")
-        return object()
 
     async def close(self) -> None:
         assert asyncio.get_running_loop() is self.created_loop

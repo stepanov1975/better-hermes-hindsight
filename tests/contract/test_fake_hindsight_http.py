@@ -17,16 +17,12 @@ import pytest
 from aiohttp import ClientConnectorError, ClientError, ClientSession
 from hindsight_client import Hindsight
 from hindsight_client_api.exceptions import ServiceException
-from hindsight_client_api.models.bank_profile_response import BankProfileResponse
-from hindsight_client_api.models.delete_response import DeleteResponse
 from hindsight_client_api.models.recall_response import RecallResponse
-from hindsight_client_api.models.version_response import VersionResponse
 from pydantic import ValidationError
 
 import better_hermes_hindsight.client as client_module
 from better_hermes_hindsight import __version__
 from better_hermes_hindsight.client import (
-    DisposableBankGuardError,
     HindsightClientAdapter,
     HindsightClientError,
     RetainConfirmation,
@@ -167,7 +163,7 @@ def test_real_adapter_serializes_and_decodes_complete_public_contract(
 ) -> None:
     caplog.set_level(logging.DEBUG)
 
-    async def scenario() -> tuple[FakeHindsightServer, str]:
+    async def scenario() -> FakeHindsightServer:
         disposable_bank_id = f"disposable-{secrets.token_hex(12)}"
         server = FakeHindsightServer(
             bank_id=FIXTURE_BANK_ID,
@@ -202,9 +198,6 @@ def test_real_adapter_serializes_and_decodes_complete_public_contract(
             initial_records: tuple[RequestRecord, ...] = server.records
             assert len(initial_records) == 0
 
-            version = await adapter.get_server_version()
-            with pytest.warns(DeprecationWarning):
-                profile = await adapter.get_bank_profile()
             recalled = await adapter.recall("current query")
             segment = _segment(
                 content="immutable segment",
@@ -213,31 +206,8 @@ def test_real_adapter_serializes_and_decodes_complete_public_contract(
             retained = await adapter.retain_segment(segment)
             replayed = await adapter.retain_segment(segment)
             bank_config = await adapter.get_bank_config()
-            updated_config = await adapter.update_bank_missions({"retain_mission": "retain-new"})
-            before_guarded_mutations: tuple[RequestRecord, ...] = server.records
-            with pytest.raises(
-                DisposableBankGuardError,
-                match="disposable-bank confirmation required",
-            ):
-                await adapter.create_disposable_bank(disposable_bank_id)
-            with pytest.raises(
-                DisposableBankGuardError,
-                match="disposable-bank confirmation required",
-            ):
-                await adapter.delete_disposable_bank(disposable_bank_id)
-            assert server.records == before_guarded_mutations
+            await adapter.update_bank_missions({"retain_mission": "retain-new"})
 
-            created = await adapter.create_disposable_bank(
-                disposable_bank_id,
-                confirm_disposable=True,
-            )
-            deleted = await adapter.delete_disposable_bank(
-                disposable_bank_id,
-                confirm_disposable=True,
-            )
-
-            assert isinstance(version, VersionResponse)
-            assert isinstance(profile, BankProfileResponse)
             assert isinstance(recalled, RecallResponse)
             assert retained == RetainConfirmation(confirmed=True)
             assert replayed == RetainConfirmation(confirmed=True)
@@ -247,21 +217,6 @@ def test_real_adapter_serializes_and_decodes_complete_public_contract(
                 observations_present=True,
                 observations_value="observe-old",
             )
-            assert updated_config == _mission_snapshot(
-                retain_present=True,
-                retain_value="retain-new",
-                observations_present=True,
-                observations_value="observe-old",
-            )
-            assert isinstance(created, BankProfileResponse)
-            assert isinstance(deleted, DeleteResponse)
-            assert version.api_version == "0.8.5"
-            assert version.features.observations is True
-            assert version.features.store_document_text is True
-            assert profile.bank_id == FIXTURE_BANK_ID
-            assert profile.name == "Fixture bank"
-            assert profile.disposition.skepticism == 3
-            assert profile.mission == "Fixture mission"
 
             assert len(recalled.results) == 1
             result = recalled.results[0]
@@ -276,43 +231,26 @@ def test_real_adapter_serializes_and_decodes_complete_public_contract(
             assert recalled.source_facts is not None
             assert recalled.source_facts["source-fact-1"].text == "fixture source fact"
 
-            assert created.bank_id == disposable_bank_id
-            assert created.name == "Disposable fixture bank"
-            assert deleted.success is True
-
             records: tuple[RequestRecord, ...] = server.records
-            assert len(records) == 9
+            assert len(records) == 5
             assert len(records) <= MAX_REQUEST_RECORDS
             assert all(record.query == "" for record in records)
 
             for record in records:
-                if record.method == "PUT":
-                    assert record.accept == "*/*"
-                    assert record.user_agent is not None
-                    assert record.user_agent.startswith("Python/")
-                    assert "aiohttp/" in record.user_agent
-                    assert record.user_agent != FIXTURE_USER_AGENT
-                else:
-                    assert record.accept == "application/json"
-                    assert record.user_agent == FIXTURE_USER_AGENT
+                assert record.accept == "application/json"
+                assert record.user_agent == FIXTURE_USER_AGENT
                 assert record.content_type == "application/json"
                 assert record.authorization == "valid_bearer"
 
             assert [(record.method, record.path) for record in records] == [
-                ("GET", "/version"),
-                ("GET", f"/v1/default/banks/{FIXTURE_BANK_ID}/profile"),
                 ("POST", f"/v1/default/banks/{FIXTURE_BANK_ID}/memories/recall"),
                 ("POST", f"/v1/default/banks/{FIXTURE_BANK_ID}/memories"),
                 ("POST", f"/v1/default/banks/{FIXTURE_BANK_ID}/memories"),
                 ("GET", f"/v1/default/banks/{FIXTURE_BANK_ID}/config"),
                 ("PATCH", f"/v1/default/banks/{FIXTURE_BANK_ID}/config"),
-                ("PUT", f"/v1/default/banks/{disposable_bank_id}"),
-                ("DELETE", f"/v1/default/banks/{disposable_bank_id}"),
             ]
 
-            assert records[0].json_body is None
-            assert records[1].json_body is None
-            assert records[2].json_body == {
+            assert records[0].json_body == {
                 "query": "current query",
                 "types": ["world", "observation"],
                 "prefer_observations": True,
@@ -361,32 +299,30 @@ def test_real_adapter_serializes_and_decodes_complete_public_contract(
                 "async": False,
                 "document_tags": None,
             }
-            assert records[3].json_body == expected_retain
-            assert records[4].json_body == expected_retain
-            assert records[3].json_body == records[4].json_body
-            assert records[5].json_body is None
-            assert records[6].json_body == {"updates": {"retain_mission": "retain-new"}}
-            assert records[7].json_body == {}
-            assert records[8].json_body is None
+            assert records[1].json_body == expected_retain
+            assert records[2].json_body == expected_retain
+            assert records[1].json_body == records[2].json_body
+            assert records[3].json_body is None
+            assert records[4].json_body == {"updates": {"retain_mission": "retain-new"}}
 
             report = server.safe_report()
-            assert report.request_count == 9
-            assert report.recorded_count == 9
+            assert report.request_count == 5
+            assert report.recorded_count == 5
             assert len(report.routes) <= MAX_REQUEST_RECORDS
             assert runtime_sentinel not in repr(report)
             assert FIXTURE_API_KEY not in repr(report)
             assert runtime_sentinel not in repr(records)
             assert FIXTURE_API_KEY not in repr(records)
-            return server, disposable_bank_id
+            return server
         finally:
             if adapter is not None:
                 await adapter.close()
             await server.close()
 
-    server, disposable_bank_id = asyncio.run(scenario())
+    server = asyncio.run(scenario())
     captured = capsys.readouterr()
     assert server.closed is True
-    assert disposable_bank_id.startswith("disposable-")
+
     assert FIXTURE_API_KEY not in caplog.text
     assert FIXTURE_API_KEY not in captured.out
     assert FIXTURE_API_KEY not in captured.err
@@ -411,7 +347,7 @@ def test_real_adapter_mission_wire_is_stateful_typed_and_changed_field_only(
             )
 
             before = await adapter.get_bank_config()
-            patched = await adapter.update_bank_missions({"retain_mission": "retain-new"})
+            await adapter.update_bank_missions({"retain_mission": "retain-new"})
             readback = await adapter.get_bank_config()
 
             records = server.records
@@ -441,7 +377,6 @@ def test_real_adapter_mission_wire_is_stateful_typed_and_changed_field_only(
                 observations_value="observe-old",
             )
             assert before == initial_snapshot
-            assert patched == updated_snapshot
             assert readback == updated_snapshot
             assert runtime_sentinel not in repr(server.safe_report())
         finally:
@@ -544,9 +479,9 @@ def test_real_adapter_mission_get_validates_wire_and_preserves_missing_null_blan
 
 @pytest.mark.parametrize(
     "fault",
-    ["wrong_bank", "wrong_type", "response_mismatch", "malformed_json", "http_503"],
+    ["malformed_json", "http_503"],
 )
-def test_real_adapter_mission_patch_validates_response_without_raw_error_leakage(
+def test_real_adapter_mission_patch_maps_sdk_or_http_failure_without_raw_error_leakage(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
     runtime_sentinel: str,
@@ -588,6 +523,45 @@ def test_real_adapter_mission_patch_validates_response_without_raw_error_leakage
     error_surface = asyncio.run(scenario())
     assert runtime_sentinel not in error_surface
     assert runtime_sentinel not in caplog.text
+
+
+@pytest.mark.parametrize("fault", ["wrong_type", "wrong_bank", "response_mismatch"])
+def test_real_adapter_ignores_noncanonical_patch_response_and_allows_exact_readback(
+    tmp_path: Path,
+    runtime_sentinel: str,
+    fault: MissionPatchFault,
+) -> None:
+    async def scenario() -> None:
+        server = FakeHindsightServer(
+            bank_id=FIXTURE_BANK_ID,
+            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
+            error_sentinel=runtime_sentinel,
+            expected_api_key=None,
+        )
+        await server.start()
+        adapter: HindsightClientAdapter | None = None
+        try:
+            adapter = create_hindsight_client(
+                _config(tmp_path, base_url=server.base_url, api_key=None)
+            )
+            server.arm_mission_patch_fault(fault)
+
+            await adapter.update_bank_missions({"retain_mission": "retain-new"})
+            readback = await adapter.get_bank_config()
+
+            assert readback == _mission_snapshot(
+                retain_present=True,
+                retain_value="retain-new",
+                observations_present=True,
+                observations_value="observe-old",
+            )
+            assert [record.method for record in server.records] == ["PATCH", "GET"]
+        finally:
+            if adapter is not None:
+                await adapter.close()
+            await server.close()
+
+    asyncio.run(scenario())
 
 
 def test_real_adapter_maps_commit_then_patch_response_loss_but_fake_retains_state(

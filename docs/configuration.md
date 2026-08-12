@@ -47,7 +47,6 @@ This example uses only synthetic/local values and contains no API key. Retention
   ],
   "recall": {
     "enabled": true,
-    "query_projection": "head_tail",
     "timeout_seconds": 3.5,
     "input_max_chars": 4096,
     "context_max_bytes": 8192
@@ -87,7 +86,6 @@ and invalid ranges are errors rather than silent fallbacks.
 | `single_principal` | `false` | Must be explicitly `true` to authorize CLI or gateway memory |
 | `allowed_principals` | `[]` | Exact `(platform, identifier_kind, identifier)` tuples |
 | `recall.enabled` | `true` | Boolean |
-| `recall.query_projection` | `head_tail` | Head-plus-tail projection; no full-history mode |
 | `recall.timeout_seconds` | `3.5` | Greater than zero, at most 30 seconds |
 | `recall.input_max_chars` | `4096` | 1 through 65,536 characters |
 | `recall.context_max_bytes` | `8192` | 1 through 1,048,576 bytes |
@@ -234,13 +232,22 @@ session identifier, endpoint, bank, credential, or path.
 
 The profile-local outbox uses private SQLite schema version 1. A new/version-0 database is initialized
 to v1, reopening v1 is idempotent, and unknown nonzero versions are rejected without an invented
-legacy migration. The configured path is revalidated inside `hermes_home` when opened, including
-symlink escapes. The pre-created database is opened existing-only, and its no-follow device/inode
-identity is checked immediately after connection but before schema writes and again after
-initialization. Newly created outbox directories use mode `0700` on POSIX; the database and reserved
-profile lock file use `0600`. Pre-existing parent-directory modes are not changed, and an existing
-file is permission-corrected only after it passes confinement and private-schema validation; a
-rejected foreign file is left unchanged.
+legacy migration. On the sender/write path, the configured path is revalidated inside `hermes_home`
+when opened, including symlink escapes. The pre-created database is opened existing-only, and its
+no-follow device/inode identity is checked immediately after connection but before schema writes and
+again after initialization. Newly created outbox directories use mode `0700` on POSIX; the database
+and reserved profile lock file use `0600`. Pre-existing parent-directory modes are not changed, and
+an existing file is permission-corrected only after it passes confinement and private-schema
+validation; a rejected foreign file is left unchanged.
+
+Operator status is a narrower passive path. It checks that the existing database and any SQLite
+sidecars are regular files inside `hermes_home`, rejects incomplete WAL topology, and opens SQLite
+with URI `mode=ro`. It uses an immutable read when no sidecars exist and a WAL-aware read when an
+active WAL/SHM pair exists. Status never creates or migrates a schema, performs application-owned
+queue recovery, or writes outbox rows. SQLite may update existing SHM coordination state while
+reading active WAL content. Status assumes the intended personal Linux/POSIX deployment has one
+trusted local operator and a stable outbox pathname and sidecar topology during the short inspection;
+concurrent pathname/topology replacement is outside that operational model.
 
 Sender delivery is implemented after local admission. A retain-enabled process starts one daemon
 sender, and a profile-wide POSIX advisory lock elects the sole process allowed to recover, claim,

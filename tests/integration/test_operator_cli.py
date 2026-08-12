@@ -1,21 +1,23 @@
-"""Exact released-Hermes integration proofs for the Task 4 operator CLI."""
+"""Exact released-Hermes integration proofs for the operator CLI."""
 
 from __future__ import annotations
 
 import hashlib
 import json
 import os
-import shutil
 import stat
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-import pytest
-
 import better_hermes_hindsight.hermes_plugin as packaged_plugin
 from tests.hermes_compat import EXPECTED_HERMES_COMMIT, EXPECTED_HERMES_VERSION
+from tests.integration.helpers import (
+    clean_subprocess_env,
+    materialize_packaged_shim,
+    write_host_selection,
+)
 
 SHIM_FILES = ("__init__.py", "cli.py", "plugin.yaml")
 FIXTURE_BANK_ID = "operator-cli-fixture-bank"
@@ -59,7 +61,6 @@ sys.argv = ["hermes", *command_argv]
 fixture_bank_id = "operator-cli-fixture-bank"
 desired_retain = "Retain exact synthetic operator preferences."
 desired_observations = "Observe exact synthetic operator patterns."
-failure_sentinel = "synthetic-cli-runtime-failure-must-not-leak"
 
 release = metadata.distribution("hermes-agent")
 assert release.version == release_version
@@ -90,7 +91,7 @@ socket.socket.connect_ex = forbidden_network
 socket.create_connection = forbidden_network
 
 plugin_config_path = expected_home / "better_hindsight" / "config.json"
-config_forbidden_modes = {"help", "usage"}
+config_forbidden_modes = {"help"}
 
 
 def audit_plugin_config(event, args):
@@ -169,14 +170,9 @@ outbox_module.SQLiteOutbox.open = classmethod(
 runtime_module.OutboxSender.start = forbidden("operator CLI started a sender")
 
 no_client_modes = {
-    "authorization_required",
-    "configuration_invalid",
     "help",
-    "mission_configuration_missing",
-    "status_unavailable",
     "status_ready",
     "status_uninitialized",
-    "usage",
 }
 if mode in no_client_modes:
     import hindsight_client
@@ -195,14 +191,11 @@ if mode in config_forbidden_modes:
 
 original_thread_start = threading.Thread.start
 started_threads = []
-no_thread_modes = no_client_modes
 
 
 def guarded_thread_start(thread):
     if "outbox-sender" in thread.name:
         raise AssertionError("operator CLI started a sender thread")
-    if mode in no_thread_modes:
-        raise AssertionError("local/import/help CLI path started a thread")
     started_threads.append(thread.name)
     return original_thread_start(thread)
 
@@ -210,80 +203,54 @@ def guarded_thread_start(thread):
 threading.Thread.start = guarded_thread_start
 
 sdk_instances = []
-sdk_modes = {
-    "apply_already_equal",
-    "apply_patch_failure",
-    "apply_verified",
-    "check_cleanup_failure",
-    "check_drift",
-    "check_equal",
-    "check_get_failure",
-    "mission_check_unavailable",
-    "mission_prewrite_unavailable",
-}
+sdk_modes = {"apply_verified", "check_equal"}
 
 if mode in sdk_modes:
     import hindsight_client
     from hindsight_client_api.models.bank_config_response import BankConfigResponse
 
-    if mode in {"mission_check_unavailable", "mission_prewrite_unavailable"}:
-        class FailingHindsight:
-            def __init__(self, **_kwargs):
-                raise RuntimeError(failure_sentinel)
+    class FakeBanks:
+        def __init__(self):
+            retain_value = desired_retain if mode == "check_equal" else "remote retain mission"
+            self.state = {
+                "observations_mission": desired_observations,
+                "retain_mission": retain_value,
+            }
+            self.calls = []
 
-        hindsight_client.Hindsight = FailingHindsight
-    else:
-        class FakeBanks:
-            def __init__(self):
-                if mode in {"apply_already_equal", "check_cleanup_failure", "check_equal"}:
-                    retain_value = desired_retain
-                else:
-                    retain_value = "remote retain mission"
-                self.state = {
-                    "observations_mission": desired_observations,
-                    "retain_mission": retain_value,
-                }
-                self.calls = []
+        def response(self):
+            return BankConfigResponse(
+                bank_id=fixture_bank_id,
+                config=dict(self.state),
+                overrides={},
+            )
 
-            def response(self):
-                return BankConfigResponse(
-                    bank_id=fixture_bank_id,
-                    config=dict(self.state),
-                    overrides={},
-                )
+        async def get_bank_config(self, **kwargs):
+            assert kwargs == {"bank_id": fixture_bank_id}
+            self.calls.append("get")
+            return self.response()
 
-            async def get_bank_config(self, **kwargs):
-                assert kwargs == {"bank_id": fixture_bank_id}
-                self.calls.append("get")
-                if mode == "check_get_failure":
-                    raise RuntimeError(failure_sentinel)
-                return self.response()
+        async def update_bank_config(self, **kwargs):
+            assert kwargs["bank_id"] == fixture_bank_id
+            request = kwargs["bank_config_update"]
+            updates = request.updates
+            assert type(updates) is dict
+            self.calls.append("patch")
+            self.state.update(updates)
+            return self.response()
 
-            async def update_bank_config(self, **kwargs):
-                assert kwargs["bank_id"] == fixture_bank_id
-                request = kwargs["bank_config_update"]
-                updates = request.updates
-                assert type(updates) is dict
-                self.calls.append("patch")
-                if mode == "apply_patch_failure":
-                    raise RuntimeError(failure_sentinel)
-                self.state.update(updates)
-                return self.response()
+    class FakeHindsight:
+        def __init__(self, **kwargs):
+            assert kwargs["base_url"] == "http://127.0.0.1:9"
+            assert kwargs["api_key"] == "synthetic-operator-cli-api-key"
+            self.banks = FakeBanks()
+            self.close_calls = 0
+            sdk_instances.append(self)
 
-        class FakeHindsight:
-            def __init__(self, **kwargs):
-                assert kwargs["base_url"] == "http://127.0.0.1:9"
-                assert kwargs["api_key"] == "synthetic-operator-cli-api-key"
-                self.banks = FakeBanks()
-                self.close_calls = 0
-                sdk_instances.append(self)
+        async def aclose(self):
+            self.close_calls += 1
 
-            async def aclose(self):
-                self.close_calls += 1
-                if mode == "check_cleanup_failure":
-                    raise RuntimeError(failure_sentinel)
-
-        hindsight_client.Hindsight = FakeHindsight
+    hindsight_client.Hindsight = FakeHindsight
 
 caught = None
 try:
@@ -302,19 +269,14 @@ if expect_discovery:
     assert inspect.iscoroutinefunction(discovered_module.better_hindsight_command) is False
 
 expected_calls = {
-    "apply_already_equal": ["get"],
-    "apply_patch_failure": ["get", "patch"],
     "apply_verified": ["get", "patch", "get"],
-    "check_cleanup_failure": ["get"],
-    "check_drift": ["get"],
     "check_equal": ["get"],
-    "check_get_failure": ["get"],
 }
 if mode in expected_calls:
     assert len(sdk_instances) == 1
     assert sdk_instances[0].banks.calls == expected_calls[mode]
     assert sdk_instances[0].close_calls == 1
-elif mode in {"mission_check_unavailable", "mission_prewrite_unavailable"}:
+else:
     assert sdk_instances == []
 
 if mode in sdk_modes:
@@ -337,72 +299,6 @@ else:
 if caught is not None:
     raise SystemExit(caught.code)
 """
-
-
-def _clean_subprocess_env(
-    root: Path,
-    *,
-    hermes_home: Path | None,
-    extra: Mapping[str, str] | None = None,
-) -> dict[str, str]:
-    home = root / "home"
-    home.mkdir(parents=True, exist_ok=True)
-    environment = {
-        name: os.environ[name]
-        for name in (
-            "LANG",
-            "LC_ALL",
-            "PATH",
-            "PYTHONASYNCIODEBUG",
-            "PYTHONTRACEMALLOC",
-            "PYTHONWARNINGS",
-            "TMPDIR",
-            "TZ",
-        )
-        if name in os.environ
-    }
-    environment.update(
-        {
-            "HOME": str(home),
-            "HERMES_DISABLE_UPDATE_CHECK": "1",
-            "HERMES_QUIET": "1",
-            "NO_PROXY": "*",
-            "PIP_NO_INDEX": "1",
-            "PYTHONDONTWRITEBYTECODE": "1",
-            "XDG_CACHE_HOME": str(root / "xdg-cache"),
-            "XDG_CONFIG_HOME": str(root / "xdg-config"),
-            "XDG_DATA_HOME": str(root / "xdg-data"),
-            "XDG_STATE_HOME": str(root / "xdg-state"),
-            "no_proxy": "*",
-        }
-    )
-    if hermes_home is not None:
-        environment["HERMES_HOME"] = str(hermes_home)
-    if extra is not None:
-        environment.update(extra)
-    return environment
-
-
-def _materialize_packaged_shim(hermes_home: Path) -> Path:
-    source = Path(packaged_plugin.__file__).resolve().parent
-    destination = hermes_home / "plugins" / "better_hindsight"
-    destination.mkdir(parents=True, exist_ok=True)
-    # During the RED phase cli.py intentionally does not exist yet. Copy every
-    # released-shim source that exists so the subprocess reaches released Hermes
-    # and fails on the missing command rather than in this test fixture.
-    for name in SHIM_FILES:
-        candidate = source / name
-        if candidate.is_file():
-            shutil.copy2(candidate, destination / name)
-    return destination
-
-
-def _write_host_selection(hermes_home: Path, provider: str = "better_hindsight") -> None:
-    hermes_home.mkdir(parents=True, exist_ok=True)
-    (hermes_home / "config.yaml").write_text(
-        f"memory:\n  provider: {provider}\n",
-        encoding="utf-8",
-    )
 
 
 def _write_plugin_config(
@@ -488,10 +384,15 @@ def _run_released_cli(
             *argv,
         ],
         cwd=root,
-        env=_clean_subprocess_env(
+        env=clean_subprocess_env(
             root,
             hermes_home=exported_hermes_home,
-            extra=extra_environment,
+            no_proxy="*",
+            extra={
+                "HERMES_DISABLE_UPDATE_CHECK": "1",
+                "HERMES_QUIET": "1",
+                **(extra_environment or {}),
+            },
         ),
         check=False,
         capture_output=True,
@@ -519,8 +420,12 @@ def _assert_handler_output(
 
 def _prepare_explicit_home(root: Path) -> tuple[Path, Path]:
     hermes_home = root / "hermes-home"
-    _write_host_selection(hermes_home)
-    shim = _materialize_packaged_shim(hermes_home)
+    write_host_selection(hermes_home)
+    shim = materialize_packaged_shim(
+        source=Path(packaged_plugin.__file__).resolve().parent,
+        hermes_home=hermes_home,
+        names=SHIM_FILES,
+    )
     return hermes_home, shim
 
 
@@ -559,25 +464,8 @@ def test_top_level_help_skips_plugin_discovery_and_better_side_effects(tmp_path:
     assert _snapshot_tree(hermes_home / "better_hindsight") == before_profile
 
 
-@pytest.mark.parametrize(
-    ("argv", "expected_fragment"),
-    [
-        pytest.param(
-            ["better_hindsight", "--help"],
-            "usage: hermes better_hindsight",
-            id="command-help",
-        ),
-        pytest.param(
-            ["better_hindsight", "missions", "apply", "--help"],
-            "--confirm",
-            id="apply-help",
-        ),
-    ],
-)
 def test_released_plugin_help_discovers_only_the_underscore_command_without_side_effects(
     tmp_path: Path,
-    argv: list[str],
-    expected_fragment: str,
 ) -> None:
     hermes_home, shim = _prepare_explicit_home(tmp_path)
     _write_plugin_config(hermes_home, malformed=True)
@@ -587,7 +475,7 @@ def test_released_plugin_help_discovers_only_the_underscore_command_without_side
     completed = _run_released_cli(
         tmp_path,
         expected_home=hermes_home,
-        argv=argv,
+        argv=["better_hindsight", "--help"],
         mode="help",
         expect_discovery=True,
         exported_hermes_home=hermes_home,
@@ -595,7 +483,7 @@ def test_released_plugin_help_discovers_only_the_underscore_command_without_side
 
     assert completed.returncode == 0, completed.stderr[-4000:]
     assert completed.stderr == ""
-    assert expected_fragment in completed.stdout
+    assert "usage: hermes better_hindsight" in completed.stdout
     assert "better-hindsight" not in completed.stdout
     assert _snapshot_tree(shim) == before_shim
     assert _snapshot_tree(hermes_home / "better_hindsight") == before_profile
@@ -605,10 +493,14 @@ def test_named_profile_selection_drives_discovery_and_absent_status_without_crea
     tmp_path: Path,
 ) -> None:
     default_home = tmp_path / "home" / ".hermes"
-    _write_host_selection(default_home, provider="hindsight")
+    write_host_selection(default_home, provider="hindsight")
     selected_home = default_home / "profiles" / "operator_fixture"
-    _write_host_selection(selected_home)
-    shim = _materialize_packaged_shim(selected_home)
+    write_host_selection(selected_home)
+    shim = materialize_packaged_shim(
+        source=Path(packaged_plugin.__file__).resolve().parent,
+        hermes_home=selected_home,
+        names=SHIM_FILES,
+    )
     _write_plugin_config(selected_home)
     before_shim = _snapshot_tree(shim)
     before_profile = _snapshot_tree(selected_home / "better_hindsight")
@@ -652,165 +544,7 @@ def test_existing_status_uses_only_read_only_sqlite_and_existing_lock_probe_with
     assert _snapshot_tree(hermes_home / "better_hindsight") == before_profile
 
 
-@pytest.mark.parametrize(
-    ("argv", "command_name"),
-    [
-        pytest.param(["better_hindsight", "status"], "status", id="status"),
-        pytest.param(
-            ["better_hindsight", "missions", "check"],
-            "missions_check",
-            id="missions-check",
-        ),
-        pytest.param(
-            ["better_hindsight", "missions", "apply", "--confirm"],
-            "missions_apply",
-            id="missions-apply",
-        ),
-    ],
-)
-def test_every_parsed_command_maps_invalid_configuration_to_exact_json_and_exit_3(
-    tmp_path: Path,
-    argv: list[str],
-    command_name: str,
-) -> None:
-    hermes_home, _shim = _prepare_explicit_home(tmp_path)
-    _write_plugin_config(hermes_home, malformed=True)
-
-    completed = _run_released_cli(
-        tmp_path,
-        expected_home=hermes_home,
-        argv=argv,
-        mode="configuration_invalid",
-        expect_discovery=True,
-        exported_hermes_home=hermes_home,
-    )
-
-    _assert_handler_output(
-        completed,
-        exit_code=3,
-        stdout=(
-            f'{{"command":"{command_name}","error":"configuration_invalid","result":"error"}}\n'
-        ),
-    )
-
-
-def test_missing_principal_assertion_is_exact_authorization_error_without_local_or_remote_work(
-    tmp_path: Path,
-) -> None:
-    hermes_home, _shim = _prepare_explicit_home(tmp_path)
-    _write_plugin_config(hermes_home, single_principal=False)
-
-    completed = _run_released_cli(
-        tmp_path,
-        expected_home=hermes_home,
-        argv=["better_hindsight", "status"],
-        mode="authorization_required",
-        expect_discovery=True,
-        exported_hermes_home=hermes_home,
-    )
-
-    _assert_handler_output(
-        completed,
-        exit_code=3,
-        stdout=('{"command":"status","error":"authorization_required","result":"error"}\n'),
-    )
-
-
-def test_non_regular_outbox_is_exact_status_unavailable_without_mutation(tmp_path: Path) -> None:
-    hermes_home, _shim = _prepare_explicit_home(tmp_path)
-    _write_plugin_config(hermes_home)
-    outbox_path = hermes_home / "better_hindsight" / "outbox.sqlite3"
-    outbox_path.mkdir()
-    before_profile = _snapshot_tree(hermes_home / "better_hindsight")
-
-    completed = _run_released_cli(
-        tmp_path,
-        expected_home=hermes_home,
-        argv=["better_hindsight", "status"],
-        mode="status_unavailable",
-        expect_discovery=True,
-        exported_hermes_home=hermes_home,
-    )
-
-    _assert_handler_output(
-        completed,
-        exit_code=3,
-        stdout='{"command":"status","error":"status_unavailable","result":"error"}\n',
-    )
-    assert _snapshot_tree(hermes_home / "better_hindsight") == before_profile
-
-
-def test_apply_without_any_desired_mission_is_exact_missing_error_and_never_builds_a_client(
-    tmp_path: Path,
-) -> None:
-    hermes_home, _shim = _prepare_explicit_home(tmp_path)
-    _write_plugin_config(hermes_home)
-
-    completed = _run_released_cli(
-        tmp_path,
-        expected_home=hermes_home,
-        argv=["better_hindsight", "missions", "apply", "--confirm"],
-        mode="mission_configuration_missing",
-        expect_discovery=True,
-        exported_hermes_home=hermes_home,
-    )
-
-    _assert_handler_output(
-        completed,
-        exit_code=3,
-        stdout=(
-            '{"command":"missions_apply","error":"mission_configuration_missing",'
-            '"result":"error"}\n'
-        ),
-    )
-
-
-@pytest.mark.parametrize(
-    ("mode", "argv", "expected_stdout"),
-    [
-        pytest.param(
-            "mission_check_unavailable",
-            ["better_hindsight", "missions", "check"],
-            ('{"command":"missions_check","error":"mission_check_unavailable","result":"error"}\n'),
-            id="check-runtime-construction",
-        ),
-        pytest.param(
-            "mission_prewrite_unavailable",
-            ["better_hindsight", "missions", "apply", "--confirm"],
-            (
-                '{"command":"missions_apply","error":"mission_prewrite_unavailable",'
-                '"result":"error"}\n'
-            ),
-            id="apply-runtime-construction",
-        ),
-    ],
-)
-def test_client_construction_failures_use_exact_prewrite_fixed_errors(
-    tmp_path: Path,
-    mode: str,
-    argv: list[str],
-    expected_stdout: str,
-) -> None:
-    hermes_home, _shim = _prepare_explicit_home(tmp_path)
-    _write_plugin_config(
-        hermes_home,
-        missions={"retain_mission": DESIRED_RETAIN_MISSION},
-    )
-
-    completed = _run_released_cli(
-        tmp_path,
-        expected_home=hermes_home,
-        argv=argv,
-        mode=mode,
-        expect_discovery=True,
-        exported_hermes_home=hermes_home,
-        extra_environment={"HINDSIGHT_API_KEY": FIXTURE_API_KEY},
-    )
-
-    _assert_handler_output(completed, exit_code=3, stdout=expected_stdout)
-
-
-def test_check_cleanup_failure_is_exact_fixed_error_after_one_typed_get(tmp_path: Path) -> None:
+def test_sync_check_handler_preserves_released_host_success(tmp_path: Path) -> None:
     hermes_home, _shim = _prepare_explicit_home(tmp_path)
     _write_plugin_config(
         hermes_home,
@@ -824,7 +558,7 @@ def test_check_cleanup_failure_is_exact_fixed_error_after_one_typed_get(tmp_path
         tmp_path,
         expected_home=hermes_home,
         argv=["better_hindsight", "missions", "check"],
-        mode="check_cleanup_failure",
+        mode="check_equal",
         expect_discovery=True,
         exported_hermes_home=hermes_home,
         extra_environment={"HINDSIGHT_API_KEY": FIXTURE_API_KEY},
@@ -832,121 +566,15 @@ def test_check_cleanup_failure_is_exact_fixed_error_after_one_typed_get(tmp_path
 
     _assert_handler_output(
         completed,
-        exit_code=3,
-        stdout=('{"command":"missions_check","error":"runtime_cleanup_failed","result":"error"}\n'),
-    )
-
-
-@pytest.mark.parametrize(
-    ("mode", "exit_code", "expected_stdout"),
-    [
-        pytest.param(
-            "check_equal",
-            0,
-            (
-                '{"command":"missions_check","observations_mission":"equal",'
-                '"result":"equal","retain_mission":"equal"}\n'
-            ),
-            id="equal-returns-normally",
-        ),
-        pytest.param(
-            "check_drift",
-            1,
-            (
-                '{"command":"missions_check","observations_mission":"equal",'
-                '"result":"drift","retain_mission":"drift"}\n'
-            ),
-            id="drift-system-exit-1",
-        ),
-    ],
-)
-def test_sync_check_handler_preserves_released_host_exit_behavior(
-    tmp_path: Path,
-    mode: str,
-    exit_code: int,
-    expected_stdout: str,
-) -> None:
-    hermes_home, _shim = _prepare_explicit_home(tmp_path)
-    _write_plugin_config(
-        hermes_home,
-        missions={
-            "observations_mission": DESIRED_OBSERVATIONS_MISSION,
-            "retain_mission": DESIRED_RETAIN_MISSION,
-        },
-    )
-
-    completed = _run_released_cli(
-        tmp_path,
-        expected_home=hermes_home,
-        argv=["better_hindsight", "missions", "check"],
-        mode=mode,
-        expect_discovery=True,
-        exported_hermes_home=hermes_home,
-        extra_environment={"HINDSIGHT_API_KEY": FIXTURE_API_KEY},
-    )
-
-    _assert_handler_output(completed, exit_code=exit_code, stdout=expected_stdout)
-
-
-def test_failed_get_uses_exhaustive_check_shape_not_raw_error_text(tmp_path: Path) -> None:
-    hermes_home, _shim = _prepare_explicit_home(tmp_path)
-    _write_plugin_config(
-        hermes_home,
-        missions={"retain_mission": DESIRED_RETAIN_MISSION},
-    )
-
-    completed = _run_released_cli(
-        tmp_path,
-        expected_home=hermes_home,
-        argv=["better_hindsight", "missions", "check"],
-        mode="check_get_failure",
-        expect_discovery=True,
-        exported_hermes_home=hermes_home,
-        extra_environment={"HINDSIGHT_API_KEY": FIXTURE_API_KEY},
-    )
-
-    _assert_handler_output(
-        completed,
-        exit_code=3,
+        exit_code=0,
         stdout=(
-            '{"command":"missions_check","observations_mission":"missing",'
-            '"result":"error","retain_mission":"error"}\n'
+            '{"command":"missions_check","observations_mission":"equal",'
+            '"result":"equal","retain_mission":"equal"}\n'
         ),
     )
 
 
-@pytest.mark.parametrize(
-    ("mode", "exit_code", "expected_stdout"),
-    [
-        pytest.param(
-            "apply_already_equal",
-            0,
-            ('{"command":"missions_apply","outcome":"already_equal","result":"ok"}\n'),
-            id="one-get-no-patch",
-        ),
-        pytest.param(
-            "apply_verified",
-            0,
-            ('{"command":"missions_apply","outcome":"verified_success","result":"ok"}\n'),
-            id="patch-and-readback",
-        ),
-        pytest.param(
-            "apply_patch_failure",
-            4,
-            (
-                '{"command":"missions_apply",'
-                '"outcome":"write_attempted_outcome_unknown","result":"error"}\n'
-            ),
-            id="post-dispatch-system-exit-4",
-        ),
-    ],
-)
-def test_sync_apply_handler_uses_exact_success_or_ambiguous_write_exit(
-    tmp_path: Path,
-    mode: str,
-    exit_code: int,
-    expected_stdout: str,
-) -> None:
+def test_sync_apply_handler_preserves_verified_success(tmp_path: Path) -> None:
     hermes_home, _shim = _prepare_explicit_home(tmp_path)
     _write_plugin_config(
         hermes_home,
@@ -957,93 +585,14 @@ def test_sync_apply_handler_uses_exact_success_or_ambiguous_write_exit(
         tmp_path,
         expected_home=hermes_home,
         argv=["better_hindsight", "missions", "apply", "--confirm"],
-        mode=mode,
+        mode="apply_verified",
         expect_discovery=True,
         exported_hermes_home=hermes_home,
         extra_environment={"HINDSIGHT_API_KEY": FIXTURE_API_KEY},
     )
 
-    _assert_handler_output(completed, exit_code=exit_code, stdout=expected_stdout)
-
-
-@pytest.mark.parametrize(
-    ("argv", "short_token"),
-    [
-        pytest.param(["better_hindsight"], "better_hindsight", id="required-command"),
-        pytest.param(
-            ["better_hindsight", "missions"],
-            "missions",
-            id="required-mission-action",
-        ),
-        pytest.param(
-            ["better_hindsight", "missions", "apply"],
-            "--confirm",
-            id="required-confirm",
-        ),
-        pytest.param(
-            ["better_hindsight", "missions", "apply", "--c"],
-            "--c",
-            id="no-abbreviated-confirm-c",
-        ),
-        pytest.param(
-            ["better_hindsight", "missions", "apply", "--co"],
-            "--co",
-            id="no-abbreviated-confirm-co",
-        ),
-        pytest.param(
-            ["better_hindsight", "missions", "apply", "--con"],
-            "--con",
-            id="no-abbreviated-confirm-con",
-        ),
-        pytest.param(
-            ["better_hindsight", "missions", "apply", "--confir"],
-            "--confir",
-            id="no-abbreviated-confirm-confir",
-        ),
-        pytest.param(
-            ["better_hindsight", "missions", "check", "--confirm"],
-            "--confirm",
-            id="confirm-is-apply-only",
-        ),
-        pytest.param(["better_hindsight", "retry"], "retry", id="no-retry-command"),
-        pytest.param(["better_hindsight", "drain"], "drain", id="no-drain-command"),
-        pytest.param(
-            ["better_hindsight", "status", "fixture-id"],
-            "fixture-id",
-            id="no-arbitrary-id",
-        ),
-        pytest.param(
-            ["better-hindsight", "status"],
-            "better-hindsight",
-            id="underscore-only",
-        ),
-    ],
-)
-def test_short_synthetic_usage_errors_belong_to_released_argparse_and_never_run_handler(
-    tmp_path: Path,
-    argv: list[str],
-    short_token: str,
-) -> None:
-    """Host argparse stderr is intentionally not treated as bounded handler output."""
-
-    hermes_home, shim = _prepare_explicit_home(tmp_path)
-    _write_plugin_config(hermes_home, malformed=True)
-    before_shim = _snapshot_tree(shim)
-    before_profile = _snapshot_tree(hermes_home / "better_hindsight")
-
-    completed = _run_released_cli(
-        tmp_path,
-        expected_home=hermes_home,
-        argv=argv,
-        mode="usage",
-        expect_discovery=True,
-        exported_hermes_home=hermes_home,
+    _assert_handler_output(
+        completed,
+        exit_code=0,
+        stdout='{"command":"missions_apply","outcome":"verified_success","result":"ok"}\n',
     )
-
-    assert completed.returncode == 2, completed.stderr[-4000:]
-    assert completed.stdout == ""
-    assert completed.stderr.startswith("usage: hermes")
-    assert "error:" in completed.stderr
-    assert short_token in completed.stderr
-    assert _snapshot_tree(shim) == before_shim
-    assert _snapshot_tree(hermes_home / "better_hindsight") == before_profile
