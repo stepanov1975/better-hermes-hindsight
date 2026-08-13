@@ -394,6 +394,9 @@ def _run_released_cli(
             extra={
                 "HERMES_DISABLE_UPDATE_CHECK": "1",
                 "HERMES_QUIET": "1",
+                # Current Hermes main emits this compile-time warning from update_cmd.py on
+                # Python 3.13 with a fresh bytecode cache. It is host noise, not plugin stderr.
+                "PYTHONWARNINGS": "ignore:invalid escape sequence:SyntaxWarning",
                 **(extra_environment or {}),
             },
         ),
