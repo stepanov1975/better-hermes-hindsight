@@ -61,13 +61,17 @@ For runtime changes, normally run:
 
 ```bash
 uv lock --check
-uv run --frozen --extra dev python -m ruff check src tests __init__.py cli.py
-uv run --frozen --extra dev python -m ruff format --check src tests __init__.py cli.py
+uv run --frozen --extra dev python -m ruff check src tests scripts __init__.py cli.py
+uv run --frozen --extra dev python -m ruff format --check src tests scripts __init__.py cli.py
 uv run --frozen --extra dev python -m mypy
 uv run --frozen --extra dev python -m pytest -p no:cacheprovider
+rm -rf dist
+uv build --out-dir dist
+uvx --from twine twine check dist/*.whl dist/*.tar.gz
+uv run --frozen --extra dev python scripts/check_sdist.py dist/*.tar.gz
 ```
 
-Focused tests may be used during iteration. Run the complete applicable suite before committing runtime or packaging changes. Documentation-only changes need link/diff review, not the full runtime suite.
+Focused tests may be used during iteration. Run the complete applicable suite before committing runtime or packaging changes. The build/twine/sdist checks are required for packaging or release changes. Documentation-only changes need link/diff review, not the full runtime suite.
 
 Live writes require the already isolated development environment, explicit opt-in, synthetic content, and a disposable or dedicated isolated bank. A failed cleanup should report the resource for manual cleanup rather than expand the test into a transaction manager.
 

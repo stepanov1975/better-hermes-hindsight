@@ -6,6 +6,7 @@ import math
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal, Protocol, TypeVar, cast
 
 from better_hermes_hindsight.client import (
@@ -76,13 +77,22 @@ def status(
         return _fixed_error("status", "status_unavailable")
     try:
         inspection = inspect_outbox(config)
-        payload = _status_payload(inspection, now=float(observed_at))
+        payload = _status_payload(
+            inspection,
+            hermes_home=config.hermes_home,
+            now=float(observed_at),
+        )
     except Exception:
         return _fixed_error("status", "status_unavailable")
     return ManagementResult(payload=payload, exit_code=1 if payload["result"] == "degraded" else 0)
 
 
-def _status_payload(inspection: OutboxInspection, *, now: float) -> dict[str, object]:
+def _status_payload(
+    inspection: OutboxInspection,
+    *,
+    hermes_home: Path,
+    now: float,
+) -> dict[str, object]:
     if inspection.oldest_created_at is None:
         age_bucket = "none"
     else:
@@ -120,7 +130,7 @@ def _status_payload(inspection: OutboxInspection, *, now: float) -> dict[str, ob
             "retry": inspection.retry_count,
             "sending": inspection.sending_count,
         },
-        "deployed": deployed_identity(),
+        "deployed": deployed_identity(hermes_home),
         "error_counts": error_counts(inspection.error_category_counts),
         "last_error_category": inspection.last_error_category or "none",
         "logical_queued_bytes": inspection.logical_queued_bytes,

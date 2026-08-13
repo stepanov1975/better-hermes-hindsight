@@ -15,7 +15,9 @@ class _RegistrationContext(Protocol):
 def register(ctx: _RegistrationContext) -> None:
     """Register the installed wheel's provider through Hermes's public plugin context."""
 
-    ctx.register_memory_provider(create_provider())
+    register_provider = getattr(ctx, "register_memory_provider", None)
+    if callable(register_provider):
+        register_provider(create_provider())
 
 
 __all__ = ["register"]

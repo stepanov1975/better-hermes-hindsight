@@ -43,20 +43,20 @@ Compatibility is behavioral rather than release-matrix based. Validation records
 
 ## Installation
 
-Use the same Git checkout for the installed package and Hermes plugin bridge:
+Install a tagged GitHub prerelease with its checksum-verified wheel and dedicated-interpreter
+installer. The installer creates or updates the isolated profile, installs the exact plugin
+bridge, selects `better_hindsight`, and writes an interpreter-bound launcher. It never
+creates a bank, stores a credential, enables retention, starts a gateway, or schedules a
+canary/watchdog.
 
-```bash
-PROFILE=better-hindsight-dev
-SOURCE_DIR=/path/to/better-hermes-hindsight
-HERMES_PYTHON=/path/to/dedicated/hermes/python
+Current Hermes intentionally refuses wheel/sdist installation, so the dedicated interpreter
+links the official installer-managed Hermes source using Hermes's supported editable
+development mechanism. Better Hindsight itself is installed non-editably from the verified
+release wheel.
 
-uv pip install --python "$HERMES_PYTHON" -e "$SOURCE_DIR" 'hindsight-client==0.8.5'
-uv pip check --python "$HERMES_PYTHON"
-hermes --profile "$PROFILE" plugins install "file://$SOURCE_DIR" --force --enable
-hermes --profile "$PROFILE" config set memory.provider better_hindsight
-```
-
-Configure endpoint, bank, principal, and credential for the selected profile. Leave retention disabled until recall and status work against the isolated service. See [installation](docs/installation.md) and [configuration](docs/configuration.md).
+See the exact commands in [installation](docs/installation.md), then configure the endpoint,
+bank, principal, and credential for that profile. Leave retention disabled until recall and
+status work against the isolated service. See [configuration](docs/configuration.md).
 
 ## Operator commands
 
@@ -81,13 +81,18 @@ The initial product is external-service-only, Linux/POSIX, one principal, one st
 ```bash
 uv sync --extra dev
 uv lock --check
-uv run --frozen --extra dev python -m ruff check src tests __init__.py cli.py
-uv run --frozen --extra dev python -m ruff format --check src tests __init__.py cli.py
+uv run --frozen --extra dev python -m ruff check src tests scripts __init__.py cli.py
+uv run --frozen --extra dev python -m ruff format --check src tests scripts __init__.py cli.py
 uv run --frozen --extra dev python -m mypy
 uv run --frozen --extra dev python -m pytest -p no:cacheprovider
+rm -rf dist
+uv build --out-dir dist
+uvx --from twine twine check dist/*.whl dist/*.tar.gz
+uv run --frozen --extra dev python scripts/check_sdist.py dist/*.tar.gz
 ```
 
-The project follows rolling `main`. A Git commit is enough to identify a deployed build. Versions and tags are optional snapshots; they are not bumped for every development change, and PyPI publication is not part of the normal workflow.
+Development follows rolling `main`; ordinary-user deployment uses immutable tagged GitHub
+prereleases. PyPI publication is not required.
 
 See [implementation status](IMPLEMENTATION.md), [design](DESIGN.md), and [contributing](CONTRIBUTING.md).
 

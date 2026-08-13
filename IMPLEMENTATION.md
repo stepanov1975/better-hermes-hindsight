@@ -27,7 +27,8 @@ The existing runtime should not be rewritten merely to reduce line count. Simpli
 - Record observed Hermes, Better, and Hindsight versions/commits in validation results.
 - Fail for missing or incompatible interfaces and broken behavior—not for an unknown but compatible Hermes commit.
 - Use the Git commit as the deployable identity. Version bumps and tags are optional snapshots.
-- Use an editable install from the same checkout for development/canary deployment.
+- Editable installs are development-only. Ordinary-user deployment uses a tagged release
+  wheel plus the exact tagged checkout through `scripts/install_release.py`.
 - Keep `hindsight-client==0.8.5` exact because the SDK/server contract is real.
 - Keep the dedicated interpreter/profile and isolated Hindsight instance because bundled Hermes currently requires an incompatible Hindsight SDK.
 

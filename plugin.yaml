@@ -1,4 +1,4 @@
 name: better_hindsight
 kind: exclusive
-version: 0.1.0a1
+version: 0.1.0a2
 description: Current-query recall for an external Hindsight 0.8.5 service.

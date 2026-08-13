@@ -63,6 +63,17 @@ def test_required_operator_documentation_exists() -> None:
     assert all(path.is_file() for path in required)
 
 
+def test_public_install_guide_fetches_the_complete_immutable_release_set() -> None:
+    text = (ROOT / "docs" / "installation.md").read_text(encoding="utf-8")
+
+    assert 'VERSION="${RELEASE#v}"' in text
+    assert "better_hermes_hindsight-$VERSION-py3-none-any.whl" in text
+    assert "better_hermes_hindsight-$VERSION.tar.gz" in text
+    assert '(cd "$ASSET_DIR" && sha256sum --check SHA256SUMS)' in text
+    assert "Do not install from a moving branch" in text
+    assert 'uv pip install --python "$APP_DIR/venv/bin/python" -e "$SOURCE_DIR"' not in text
+
+
 def test_local_markdown_links_resolve() -> None:
     failures: list[str] = []
     for document in (ROOT / "README.md", ROOT / "CONTRIBUTING.md", ROOT / "DESIGN.md"):

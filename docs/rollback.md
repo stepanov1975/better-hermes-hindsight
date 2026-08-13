@@ -6,7 +6,7 @@ The normal rollback is to stop the dedicated Better Hindsight profile and return
 
 Keep:
 
-- the Better Git commit used;
+- the Better release tag and reported Git commit;
 - the Better SQLite outbox;
 - the isolated Better Hindsight bank; and
 - the original bundled-Hindsight bank and deployment.
@@ -16,8 +16,8 @@ Do not copy credentials, private bank names, principal identifiers, memories, or
 ## Stop Better
 
 ```bash
-PROFILE=better-hindsight-dev
-hermes --profile "$PROFILE" gateway stop
+PROFILE=better-hindsight
+"$HOME/.local/bin/$PROFILE" gateway stop
 ```
 
 Select and start the unchanged old deployment using its existing procedure. Verify one bundled-Hindsight recall. Because the Better canary uses a dedicated interpreter/profile, ordinary rollback does not require replacing its Python packages or deleting its plugin checkout.
@@ -38,15 +38,12 @@ Restart only after provider discovery and an actual bundled recall succeed. This
 
 ## Return to Better
 
-Stop the dedicated Better profile, select the known-good Git commit, refresh the editable package, and reinstall the local plugin bridge:
+Stop the dedicated Better profile and repeat the tagged-release installation procedure with
+the known-good release tag, wheel, and `SHA256SUMS`. The release installer replaces and
+verifies both the package and plugin bridge. Then run:
 
 ```bash
-git -C "$SOURCE_DIR" checkout <known-good-commit>
-uv pip install --python "$HERMES_PYTHON" -e "$SOURCE_DIR" 'hindsight-client==0.8.5'
-uv pip check --python "$HERMES_PYTHON"
-hermes --profile "$PROFILE" plugins install "file://$SOURCE_DIR" --force --enable
-hermes --profile "$PROFILE" config set memory.provider better_hindsight
-hermes --profile "$PROFILE" better_hindsight status
+"$HOME/.local/bin/$PROFILE" better_hindsight status
 ```
 
 Verify recall before re-enabling retention. Neither rollback direction owns remote-memory deletion. Preserve mismatched or failed rows for diagnosis unless a separate recovery explicitly authorizes otherwise.

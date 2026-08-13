@@ -360,6 +360,15 @@ def test_plugin_shim_registers_once_and_exports_no_provider_class_for_loader_fal
     assert not hasattr(hermes_plugin, "BetterHindsightMemoryProvider")
 
 
+def test_plugin_shim_ignores_generic_doctor_context() -> None:
+    """Hermes generic plugin doctor must not invoke memory-only registration."""
+
+    class _GenericContext:
+        pass
+
+    hermes_plugin.register(_GenericContext())  # type: ignore[arg-type]
+
+
 def test_gateway_authorization_uses_separate_identity_kwargs_and_current_query_only(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

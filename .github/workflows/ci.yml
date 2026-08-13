@@ -59,8 +59,12 @@ jobs:
       - name: Validate
         run: |
           uv lock --check
-          .venv/bin/python -m ruff check src tests __init__.py cli.py
-          .venv/bin/python -m ruff format --check src tests __init__.py cli.py
+          .venv/bin/python -m ruff check src tests scripts __init__.py cli.py
+          .venv/bin/python -m ruff format --check src tests scripts __init__.py cli.py
           .venv/bin/python -m mypy
           .venv/bin/python -m pytest -p no:cacheprovider
+          rm -rf dist
+          uv build --out-dir dist
+          uvx --from twine twine check dist/*.whl dist/*.tar.gz
+          .venv/bin/python scripts/check_sdist.py dist/*.tar.gz
           git diff --check

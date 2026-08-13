@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "better-hermes-hindsight"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "Experimental external Hindsight memory provider project for Hermes Agent"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
