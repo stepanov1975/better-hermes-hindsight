@@ -6,6 +6,7 @@ import asyncio
 import atexit
 import concurrent.futures
 import contextlib
+import logging
 import threading
 import time
 from collections.abc import Awaitable, Callable, Sequence
@@ -35,8 +36,21 @@ from better_hermes_hindsight.outbox import (
     SQLiteOutbox,
 )
 from better_hermes_hindsight.retention import RetainedSegment, build_retained_segments
+from better_hermes_hindsight.telemetry import elapsed_milliseconds, emit_event
 
 ASYNC_CANCELLATION_DRAIN_SECONDS = 0.05
+logger = logging.getLogger(__name__)
+
+
+def _bounded_retry_delay(*, attempt_count: int, initial: float, maximum: float) -> float:
+    """Mirror the outbox retry schedule without unbounded exponentiation."""
+
+    delay = initial
+    remaining = attempt_count - 1
+    while remaining > 0 and delay < maximum:
+        delay = min(delay * 2.0, maximum)
+        remaining -= 1
+    return delay
 
 
 class AsyncCallTimeoutError(TimeoutError):
@@ -372,6 +386,8 @@ class OutboxSender:
         self._wall_time = wall_time
         self._poll_interval = config.outbox.poll_interval_seconds
         self._retain_timeout = config.retain.timeout_seconds
+        self._retry_initial = config.outbox.retry_initial_seconds
+        self._retry_max = config.outbox.retry_max_seconds
         self._state_lock = threading.Lock()
         self._stop_requested = threading.Event()
         self._started = False
@@ -420,6 +436,12 @@ class OutboxSender:
         while not self._stopping():
             acquisition = self._outbox.try_acquire_profile_lock()
             if acquisition.status is not ProfileLockStatus.ACQUIRED or acquisition.owner is None:
+                if acquisition.status is ProfileLockStatus.LOCAL_FAILURE:
+                    emit_event(
+                        logger,
+                        "better_hindsight.sender_loop",
+                        outcome="ownership_unavailable",
+                    )
                 self._wake.clear()
                 if not self._stopping():
                     self._wake.wait(timeout=self._poll_interval)
@@ -430,6 +452,11 @@ class OutboxSender:
             try:
                 recovery = self._outbox.recover_sending(owner, now=self._wall_time())
                 if recovery.status is not OutboxTransitionStatus.APPLIED:
+                    emit_event(
+                        logger,
+                        "better_hindsight.sender_loop",
+                        outcome="recovery_failed",
+                    )
                     ownership_lost = True
                 else:
                     ownership_lost = self._run_as_owner(owner)
@@ -455,11 +482,17 @@ class OutboxSender:
             if claim is None:
                 return False
             if claim.status is OutboxClaimStatus.LOCAL_FAILURE:
+                emit_event(logger, "better_hindsight.sender_loop", outcome="claim_failed")
                 return True
             if claim.status is OutboxClaimStatus.EMPTY or claim.row is None:
                 try:
                     retry_deadline = self._outbox.next_matching_retry_deadline()
                 except Exception:
+                    emit_event(
+                        logger,
+                        "better_hindsight.sender_loop",
+                        outcome="retry_deadline_failed",
+                    )
                     return True
                 timeout = self._poll_interval
                 if retry_deadline is not None:
@@ -469,6 +502,11 @@ class OutboxSender:
 
             transition = self._deliver_claim(owner, claim.row)
             if transition.status is not OutboxTransitionStatus.APPLIED:
+                emit_event(
+                    logger,
+                    "better_hindsight.sender_loop",
+                    outcome="transition_failed",
+                )
                 return True
         return False
 
@@ -490,6 +528,7 @@ class OutboxSender:
             segment_index=row.segment_index,
             segment_count=row.segment_count,
         )
+        started = time.monotonic()
         category: OutboxFailureCategory | None = None
         try:
             confirmation = self._runner.run(
@@ -510,20 +549,44 @@ class OutboxSender:
             category = OutboxFailureCategory.RETAIN_FAILED
         else:
             if type(confirmation) is RetainConfirmation and confirmation.confirmed is True:
-                return self._outbox.complete_claim(
+                transition = self._outbox.complete_claim(
                     owner,
                     document_id=row.document_id,
                     attempt_count=row.attempt_count,
                 )
+                emit_event(
+                    logger,
+                    "better_hindsight.sender_attempt",
+                    attempt_count=row.attempt_count,
+                    elapsed_ms=elapsed_milliseconds(started, time.monotonic()),
+                    outcome=("delivered" if transition.applied else "transition_failed"),
+                    retry_delay_ms=0,
+                )
+                return transition
             category = OutboxFailureCategory.RETAIN_UNCONFIRMED
 
-        return self._outbox.reschedule_claim(
+        completed_at = self._wall_time()
+        transition = self._outbox.reschedule_claim(
             owner,
             document_id=row.document_id,
             attempt_count=row.attempt_count,
             category=category,
-            completed_at=self._wall_time(),
+            completed_at=completed_at,
         )
+        retry_delay = _bounded_retry_delay(
+            attempt_count=row.attempt_count,
+            initial=self._retry_initial,
+            maximum=self._retry_max,
+        )
+        emit_event(
+            logger,
+            "better_hindsight.sender_attempt",
+            attempt_count=row.attempt_count,
+            elapsed_ms=elapsed_milliseconds(started, time.monotonic()),
+            outcome=(category.value if transition.applied else "transition_failed"),
+            retry_delay_ms=max(0, round(retry_delay * 1_000)),
+        )
+        return transition
 
     def _wait_for_runner_settlement(self, *, stop_sensitive: bool) -> bool:
         wait_slice = min(self._poll_interval, ASYNC_CANCELLATION_DRAIN_SECONDS)

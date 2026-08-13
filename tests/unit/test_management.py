@@ -214,8 +214,16 @@ def _empty_status_payload(*, outbox: str, ownership: str = "free") -> dict[str, 
         "age_bucket": "none",
         "command": "status",
         "counts": {"mismatch": 0, "pending": 0, "retry": 0, "sending": 0},
+        "deployed": management_module.deployed_identity(),
+        "error_counts": {
+            "retain_failed": 0,
+            "retain_timeout": 0,
+            "retain_unconfirmed": 0,
+        },
         "last_error_category": "none",
         "logical_queued_bytes": 0,
+        "max_attempt_count": 0,
+        "next_retry_bucket": "none",
         "outbox": outbox,
         "result": "ok",
         "sender_ownership": ownership,
@@ -584,14 +592,66 @@ def test_status_ready_snapshot_partitions_every_row_once_and_counts_logical_byte
             "age_bucket": "1m_to_lt_1h",
             "command": "status",
             "counts": {"mismatch": 2, "pending": 1, "retry": 1, "sending": 1},
+            "deployed": management_module.deployed_identity(),
+            "error_counts": {
+                "retain_failed": 1,
+                "retain_timeout": 1,
+                "retain_unconfirmed": 1,
+            },
             "last_error_category": "retain_unconfirmed",
             "logical_queued_bytes": logical_bytes,
+            "max_attempt_count": 8,
+            "next_retry_bucket": "due",
             "outbox": "ready",
             "result": "degraded",
             "sender_ownership": "free",
         },
         exit_code=1,
     )
+
+
+def test_status_reports_retry_severity_categories_identity_and_degrades_retry_backlog(
+    tmp_path: Path,
+) -> None:
+    now = 20_000.0
+    config = _config(tmp_path)
+    _initialize_outbox(config)
+    _insert_row(
+        config,
+        index=1,
+        content="retry-one",
+        attempt_count=2,
+        last_error_category="retain_timeout",
+        created_at=now - 10.0,
+        updated_at=now - 5.0,
+    )
+    _insert_row(
+        config,
+        index=2,
+        content="retry-two",
+        attempt_count=5,
+        last_error_category="retain_failed",
+        created_at=now - 20.0,
+        updated_at=now - 4.0,
+    )
+    with sqlite3.connect(config.outbox.path) as connection:
+        connection.execute("UPDATE outbox SET next_attempt_at=?", (now + 90.0,))
+
+    result = status(config, now=now)
+
+    assert result.exit_code == 1
+    assert result.payload["result"] == "degraded"
+    assert result.payload["max_attempt_count"] == 5
+    assert result.payload["next_retry_bucket"] == "1m_to_lt_5m"
+    assert result.payload["error_counts"] == {
+        "retain_failed": 1,
+        "retain_timeout": 1,
+        "retain_unconfirmed": 0,
+    }
+    identity = result.payload["deployed"]
+    assert isinstance(identity, dict)
+    assert identity["version"]
+    assert "commit" in identity
 
 
 def test_status_reads_committed_wal_state_without_mutating_database_or_wal_files(
@@ -719,22 +779,23 @@ def test_status_active_wal_sees_row_that_immutable_snapshot_misses(
 
 
 @pytest.mark.parametrize(
-    ("age_seconds", "expected"),
+    ("age_seconds", "expected", "expected_exit"),
     [
-        (-5.0, "lt_1m"),
-        (0.0, "lt_1m"),
-        (59.999, "lt_1m"),
-        (60.0, "1m_to_lt_1h"),
-        (3_599.999, "1m_to_lt_1h"),
-        (3_600.0, "1h_to_lt_24h"),
-        (86_399.999, "1h_to_lt_24h"),
-        (86_400.0, "gte_24h"),
+        (-5.0, "lt_1m", 0),
+        (0.0, "lt_1m", 0),
+        (59.999, "lt_1m", 0),
+        (60.0, "1m_to_lt_1h", 0),
+        (3_599.999, "1m_to_lt_1h", 0),
+        (3_600.0, "1h_to_lt_24h", 1),
+        (86_399.999, "1h_to_lt_24h", 1),
+        (86_400.0, "gte_24h", 1),
     ],
 )
 def test_status_age_buckets_have_exact_boundaries_without_sleeping(
     tmp_path: Path,
     age_seconds: float,
     expected: str,
+    expected_exit: int,
 ) -> None:
     now = 100_000.0
     config = _config(tmp_path)
@@ -743,8 +804,9 @@ def test_status_age_buckets_have_exact_boundaries_without_sleeping(
 
     result = status(config, now=now)
 
-    assert result.exit_code == 0
+    assert result.exit_code == expected_exit
     assert result.payload["age_bucket"] == expected
+    assert result.payload["result"] == ("degraded" if expected_exit else "ok")
 
 
 def test_status_last_error_uses_updated_created_document_order(

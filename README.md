@@ -17,7 +17,8 @@ Compared with bundled Hindsight, this plugin deliberately focuses on:
 - deterministic segmentation and reconstructable source metadata;
 - stable replace-mode retries after timeout or restart;
 - explicit principal and destination policy; and
-- operator-only status and mission management.
+- operator-only status and mission management; and
+- privacy-safe structured diagnostics plus opt-in synthetic canary/alert evaluator executables.
 
 It is narrower than bundled Hindsight. It does not provide embedded/cloud service management, model-facing retain or reflect tools, multi-user bank routing, previous-query background recall, migrations, or automatic deletion.
 
@@ -66,6 +67,8 @@ hermes --profile <profile> better_hindsight missions apply --confirm
 ```
 
 `status` reads the existing outbox without initializing or draining it. Mission changes are never automatic and require explicit confirmation. There is no retry-now, row-deletion, arbitrary-bank, or model-facing write command.
+
+The included `python -m better_hermes_hindsight.canary` and `python -m better_hermes_hindsight.watchdog` modules provide an explicit synthetic E2E check and transition-only alert evaluation. Neither is scheduled or activated by installation.
 
 See [operations](docs/operations.md) and [rollback](docs/rollback.md).
 

@@ -17,6 +17,7 @@ from better_hermes_hindsight.client import (
 from better_hermes_hindsight.config import BetterHindsightConfig
 from better_hermes_hindsight.outbox import OutboxInspection, inspect_outbox
 from better_hermes_hindsight.runtime import create_operator_runtime
+from better_hermes_hindsight.telemetry import deployed_identity, error_counts
 
 _T = TypeVar("_T")
 _MissionField = Literal["retain_mission", "observations_mission"]
@@ -78,10 +79,7 @@ def status(
         payload = _status_payload(inspection, now=float(observed_at))
     except Exception:
         return _fixed_error("status", "status_unavailable")
-    return ManagementResult(
-        payload=payload,
-        exit_code=1 if inspection.mismatch_count else 0,
-    )
+    return ManagementResult(payload=payload, exit_code=1 if payload["result"] == "degraded" else 0)
 
 
 def _status_payload(inspection: OutboxInspection, *, now: float) -> dict[str, object]:
@@ -97,6 +95,22 @@ def _status_payload(inspection: OutboxInspection, *, now: float) -> dict[str, ob
             age_bucket = "1h_to_lt_24h"
         else:
             age_bucket = "gte_24h"
+    queued_count = (
+        inspection.mismatch_count
+        + inspection.pending_count
+        + inspection.retry_count
+        + inspection.sending_count
+    )
+    due_work = queued_count > 0 and (
+        inspection.next_retry_at is None or inspection.next_retry_at <= now
+    )
+    degraded = (
+        inspection.mismatch_count > 0
+        or inspection.retry_count > 0
+        or inspection.sending_count > 0
+        or (queued_count > 0 and age_bucket in {"1h_to_lt_24h", "gte_24h"})
+        or (due_work and inspection.sender_ownership == "unavailable")
+    )
     return {
         "age_bucket": age_bucket,
         "command": "status",
@@ -106,12 +120,31 @@ def _status_payload(inspection: OutboxInspection, *, now: float) -> dict[str, ob
             "retry": inspection.retry_count,
             "sending": inspection.sending_count,
         },
+        "deployed": deployed_identity(),
+        "error_counts": error_counts(inspection.error_category_counts),
         "last_error_category": inspection.last_error_category or "none",
         "logical_queued_bytes": inspection.logical_queued_bytes,
+        "max_attempt_count": inspection.max_attempt_count,
+        "next_retry_bucket": _retry_bucket(inspection.next_retry_at, now=now),
         "outbox": inspection.outbox,
-        "result": "degraded" if inspection.mismatch_count else "ok",
+        "result": "degraded" if degraded else "ok",
         "sender_ownership": inspection.sender_ownership,
     }
+
+
+def _retry_bucket(next_retry_at: float | None, *, now: float) -> str:
+    if next_retry_at is None:
+        return "none"
+    remaining = max(0.0, next_retry_at - now)
+    if remaining <= 0.0:
+        return "due"
+    if remaining < 60.0:
+        return "lt_1m"
+    if remaining < 300.0:
+        return "1m_to_lt_5m"
+    if remaining < 3_600.0:
+        return "5m_to_lt_1h"
+    return "gte_1h"
 
 
 def check_missions(
@@ -356,5 +389,6 @@ __all__ = [
     "ManagementResult",
     "apply_missions",
     "check_missions",
+    "deployed_identity",
     "status",
 ]

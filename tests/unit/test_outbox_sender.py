@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import errno
 import hashlib
+import json
+import logging
 import multiprocessing
 import os
 import sqlite3
@@ -1047,9 +1049,11 @@ def test_sender_preserves_remote_metadata_needed_to_reconstruct_segmented_source
 @pytest.mark.skipif(os.name != "posix", reason="sender ownership is POSIX-only")
 def test_sender_maps_remote_failures_to_fixed_retry_categories(
     tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
     failure_kind: str,
     expected_category: outbox_module.OutboxFailureCategory,
 ) -> None:
+    caplog.set_level(logging.INFO)
     config = _config(tmp_path)
     segment = _single_segment(f"failure-{failure_kind}")
     delegate = SQLiteOutbox.open(config)
@@ -1099,6 +1103,18 @@ def test_sender_maps_remote_failures_to_fixed_retry_categories(
     assert rows[0].document_id == segment.document_id
     assert client.factory_segments == [_client_segment(segment)]
     assert f"reschedule:{expected_category.value}:applied" in observed.snapshot_operations()
+    events = [
+        json.loads(record.message) for record in caplog.records if record.message.startswith("{")
+    ]
+    assert events[-1] == {
+        "attempt_count": 1,
+        "elapsed_ms": events[-1]["elapsed_ms"],
+        "event": "better_hindsight.sender_attempt",
+        "outcome": expected_category.value,
+        "retry_delay_ms": 2_000,
+    }
+    assert segment.content not in caplog.text
+    assert segment.document_id not in caplog.text
 
 
 @pytest.mark.skipif(os.name != "posix", reason="sender ownership is POSIX-only")

@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from agent.memory_provider import MemoryProvider
 
 from better_hermes_hindsight import PROVIDER_ID
+from better_hermes_hindsight.client import HindsightClientError
 from better_hermes_hindsight.client import is_available as is_hindsight_available
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.formatting import (
@@ -19,10 +21,12 @@ from better_hermes_hindsight.formatting import (
     project_query,
 )
 from better_hermes_hindsight.runtime import (
+    AsyncCallTimeoutError,
     ProcessRuntimeHandle,
     RuntimeConfigurationConflict,
     acquire_process_runtime,
 )
+from better_hermes_hindsight.telemetry import elapsed_milliseconds, emit_event
 
 logger = logging.getLogger(__name__)
 
@@ -175,10 +179,23 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                 user_content=user_content,
                 assistant_content=assistant_content,
             )
+            emit_event(
+                logger,
+                "better_hindsight.admission",
+                duplicate_count=result.duplicate_count,
+                inserted_count=result.inserted_count,
+                outcome=result.status.value,
+            )
             if result.accepted:
                 return
         except Exception:
-            pass
+            emit_event(
+                logger,
+                "better_hindsight.admission",
+                duplicate_count=0,
+                inserted_count=0,
+                outcome="local_failure",
+            )
         logger.warning(RETENTION_ADMISSION_REJECTED_DIAGNOSTIC)
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
@@ -228,32 +245,50 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         runtime = self._runtime
         if not self._recall_enabled or config is None or runtime is None:
             return None
+        started_at = time.monotonic()
+
+        def record(outcome: str, **fields: object) -> None:
+            emit_event(
+                logger,
+                "better_hindsight.recall",
+                elapsed_ms=elapsed_milliseconds(started_at, time.monotonic()),
+                outcome=outcome,
+                **fields,
+            )
+
         try:
             response = runtime.recall(
                 projected,
                 timeout=config.recall.timeout_seconds,
             )
+        except AsyncCallTimeoutError:
+            record("timeout")
+            logger.warning(RECALL_FAILED_DIAGNOSTIC)
+            return None
+        except HindsightClientError:
+            record("client_error")
+            logger.warning(RECALL_FAILED_DIAGNOSTIC)
+            return None
         except Exception:
+            record("client_error")
             logger.warning(RECALL_FAILED_DIAGNOSTIC)
             return None
 
         try:
             results = getattr(response, "results", None)
+            valid_results = isinstance(results, Sequence) and not isinstance(
+                results, (str, bytes, bytearray)
+            )
+            if not valid_results:
+                raise TypeError
+            result_count = len(cast(Sequence[object], results))
         except Exception:
+            record("response_invalid")
             if warn_on_format_failure:
                 logger.warning(RECALL_FAILED_DIAGNOSTIC)
             return None
-        if not isinstance(results, Sequence) or isinstance(results, (str, bytes, bytearray)):
-            if warn_on_format_failure:
-                logger.warning(RECALL_FAILED_DIAGNOSTIC)
-            return None
-        try:
-            results_are_empty = len(results) == 0
-        except Exception:
-            if warn_on_format_failure:
-                logger.warning(RECALL_FAILED_DIAGNOSTIC)
-            return None
-        if results_are_empty:
+        if result_count == 0:
+            record("empty", formatted_bytes=0, result_count=0)
             return ""
         try:
             context = format_recall_context(
@@ -261,12 +296,19 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                 max_bytes=config.recall.context_max_bytes,
             )
         except Exception:
+            record("format_error")
             logger.warning(RECALL_FAILED_DIAGNOSTIC)
             return None
         if not context:
+            record("format_error")
             if warn_on_format_failure:
                 logger.warning(RECALL_FAILED_DIAGNOSTIC)
             return None
+        record(
+            "success",
+            formatted_bytes=len(context.encode("utf-8")),
+            result_count=result_count,
+        )
         return context
 
     def shutdown(self) -> None:

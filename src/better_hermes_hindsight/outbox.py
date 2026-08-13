@@ -12,7 +12,7 @@ import sqlite3
 import stat
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -281,6 +281,9 @@ class OutboxInspection:
     logical_queued_bytes: int = 0
     oldest_created_at: float | None = None
     last_error_category: OutboxFailureCategory | None = None
+    max_attempt_count: int = 0
+    next_retry_at: float | None = None
+    error_category_counts: Mapping[str, int] = field(default_factory=dict)
     sender_ownership: Literal["held", "free", "unavailable"] = "free"
 
 
@@ -1022,6 +1025,9 @@ def _inspect_outbox(config: BetterHindsightConfig) -> OutboxInspection:
             logical_queued_bytes=inspection.logical_queued_bytes,
             oldest_created_at=inspection.oldest_created_at,
             last_error_category=inspection.last_error_category,
+            max_attempt_count=inspection.max_attempt_count,
+            next_retry_at=inspection.next_retry_at,
+            error_category_counts=inspection.error_category_counts,
             sender_ownership=ownership,
         )
     finally:
@@ -1096,7 +1102,19 @@ def _read_status_snapshot(
                     THEN 1 ELSE 0 END), 0),
                 MAX(ABS(created_at)),
                 MAX(ABS(updated_at)),
-                MAX(ABS(next_attempt_at))
+                MAX(ABS(next_attempt_at)),
+                COALESCE(MAX(attempt_count), 0),
+                MIN(CASE
+                    WHEN destination_fingerprint = :destination
+                     AND payload_schema = :payload_schema
+                     AND state = 'pending' AND attempt_count > 0
+                    THEN next_attempt_at END),
+                COALESCE(SUM(CASE
+                    WHEN last_error_category = 'retain_timeout' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE
+                    WHEN last_error_category = 'retain_failed' THEN 1 ELSE 0 END), 0),
+                COALESCE(SUM(CASE
+                    WHEN last_error_category = 'retain_unconfirmed' THEN 1 ELSE 0 END), 0)
             FROM outbox
             """,
             {
@@ -1105,7 +1123,7 @@ def _read_status_snapshot(
                 "payload_schema": config.outbox.payload_schema,
             },
         ).fetchone()
-        if record is None or len(record) != 12:
+        if record is None or len(record) != 17:
             raise sqlite3.DatabaseError
         connection.execute("COMMIT")
     except Exception:
@@ -1113,7 +1131,7 @@ def _read_status_snapshot(
             connection.execute("ROLLBACK")
         raise
 
-    integer_values = record[:6] + (record[8],)
+    integer_values = record[:6] + (record[8], record[12], record[14], record[15], record[16])
     if any(type(value) is not int or value < 0 for value in integer_values):
         raise sqlite3.DatabaseError
     total, mismatch, sending, retry, pending, logical_bytes = cast(
@@ -1128,6 +1146,19 @@ def _read_status_snapshot(
             or not math.isfinite(float(maximum))
         ):
             raise sqlite3.DatabaseError
+
+    next_retry_value = record[13]
+    if next_retry_value is None:
+        next_retry_at = None
+    elif (
+        isinstance(next_retry_value, bool)
+        or not isinstance(next_retry_value, (int, float))
+        or not math.isfinite(float(next_retry_value))
+        or float(next_retry_value) < 0.0
+    ):
+        raise sqlite3.DatabaseError
+    else:
+        next_retry_at = float(next_retry_value)
 
     oldest_value = record[6]
     if oldest_value is None:
@@ -1157,6 +1188,13 @@ def _read_status_snapshot(
         logical_queued_bytes=logical_bytes,
         oldest_created_at=oldest,
         last_error_category=typed_last_error,
+        max_attempt_count=cast(int, record[12]),
+        next_retry_at=next_retry_at,
+        error_category_counts={
+            "retain_timeout": cast(int, record[14]),
+            "retain_failed": cast(int, record[15]),
+            "retain_unconfirmed": cast(int, record[16]),
+        },
     )
 
 
