@@ -38,6 +38,20 @@ _SEGMENT_MAX_BYTES = 384
 _DRAIN_TIMEOUT_SECONDS = 45.0
 _CHILD_TIMEOUT_SECONDS = 150.0
 _ROOT_PLUGIN_FILES = ("__init__.py", "cli.py", "plugin.yaml")
+_LIVE_CHILD_SCRIPT = r"""
+import sys
+import types
+class _Marker:
+    def __getattr__(self, _name):
+        return lambda function: function
+sys.modules["pytest"] = types.SimpleNamespace(mark=_Marker())
+try:
+    from tests.integration.test_isolated_hindsight import _run_live_child
+finally:
+    del sys.modules["pytest"]
+assert "pytest" not in sys.modules
+raise SystemExit(_run_live_child())
+"""
 _SHORT_TURN = (
     "better-hindsight-live-short",
     "The synthetic Northstar rehearsal uses the recovery phrase cobalt lantern.",
@@ -584,10 +598,7 @@ def test_isolated_hindsight_smoke(tmp_path: Path) -> None:
             [
                 os.fspath(inputs.hermes_python),
                 "-c",
-                (
-                    "from tests.integration.test_isolated_hindsight import _run_live_child; "
-                    "raise SystemExit(_run_live_child())"
-                ),
+                _LIVE_CHILD_SCRIPT,
             ],
             cwd=ROOT,
             env=_child_environment(inputs, tmp_path / "hermes-home"),
