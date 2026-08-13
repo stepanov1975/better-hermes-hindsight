@@ -12,6 +12,7 @@ from typing import ClassVar
 
 import pytest
 
+from better_hermes_hindsight import canary as canary_module
 from better_hermes_hindsight.canary import CanaryConfig, run_canary
 
 _PRIVATE = "private-api-key-sentinel"
@@ -289,6 +290,42 @@ def test_malformed_recall_is_distinct_and_cleanup_still_runs() -> None:
         result = run_canary(_config(api_url))
     assert result["error"] == "recall_invalid"
     assert _Handler.paths[-1][0] == "DELETE"
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (TimeoutError(), "recall_timeout"),
+        (ValueError("private malformed-response sentinel"), "recall_invalid"),
+        (OSError("private transport sentinel"), "recall_failed"),
+    ],
+)
+def test_post_retain_recall_exceptions_use_recall_phase_and_cleanup(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception, expected: str
+) -> None:
+    original_request = canary_module._request_json
+
+    def fail_recall(
+        config: CanaryConfig,
+        method: str,
+        path: str,
+        *,
+        timeout: float,
+        payload: object | None = None,
+    ) -> tuple[int, object]:
+        if path.endswith("/memories/recall"):
+            raise failure
+        return original_request(config, method, path, timeout=timeout, payload=payload)
+
+    monkeypatch.setattr(canary_module, "_request_json", fail_recall)
+    with _server() as api_url:
+        result = run_canary(_config(api_url))
+
+    assert result["error"] == expected
+    assert _Handler.paths[-1][0] == "DELETE"
+    rendered = json.dumps(result)
+    assert "private malformed-response sentinel" not in rendered
+    assert "private transport sentinel" not in rendered
 
 
 @pytest.mark.parametrize(

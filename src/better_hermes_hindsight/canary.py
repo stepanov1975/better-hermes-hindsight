@@ -174,6 +174,7 @@ def run_canary(config: CanaryConfig) -> dict[str, object]:
     tag = f"better-hindsight-canary:{secrets.token_hex(16)}"
     result: dict[str, object] = {"result": "error", "error": "unexpected_failure"}
     retain_dispatched = False
+    phase = "preflight"
     cleanup_ms = 0
     health_started = time.monotonic()
     try:
@@ -198,6 +199,7 @@ def run_canary(config: CanaryConfig) -> dict[str, object]:
             return result
 
         retain_started = time.monotonic()
+        phase = "retain"
         retain_dispatched = True
         status, retained = _request_json(
             config,
@@ -228,6 +230,7 @@ def run_canary(config: CanaryConfig) -> dict[str, object]:
             result = {"result": "error", "error": "retain_unconfirmed", "health_ms": health_ms}
             return result
 
+        phase = "recall"
         recall_started = time.monotonic()
         poll_count = 0
         while poll_count < config.max_polls:
@@ -266,12 +269,28 @@ def run_canary(config: CanaryConfig) -> dict[str, object]:
         result = {"result": "error", "error": "recall_timeout", "poll_count": poll_count}
         return result
     except TimeoutError:
-        phase = "retain_unconfirmed" if retain_dispatched else "deadline_exceeded"
-        result = {"result": "error", "error": phase}
+        error = {
+            "preflight": "deadline_exceeded",
+            "retain": "retain_unconfirmed",
+            "recall": "recall_timeout",
+        }[phase]
+        result = {"result": "error", "error": error}
+        return result
+    except ValueError:
+        error = (
+            "recall_invalid"
+            if phase == "recall"
+            else ("retain_unconfirmed" if phase == "retain" else "request_failed")
+        )
+        result = {"result": "error", "error": error}
         return result
     except Exception:
-        phase = "retain_unconfirmed" if retain_dispatched else "request_failed"
-        result = {"result": "error", "error": phase}
+        error = (
+            "recall_failed"
+            if phase == "recall"
+            else ("retain_unconfirmed" if phase == "retain" else "request_failed")
+        )
+        result = {"result": "error", "error": error}
         return result
     finally:
         if retain_dispatched:
