@@ -79,8 +79,7 @@ def evaluate_watchdog(
     reasons: set[str] = set()
     if status.get("result") != "ok":
         reasons.add("local_status_degraded")
-    if new_retention_failure:
-        reasons.add("new_retention_failure")
+
     sample_count = len(recall_outcomes)
     if sample_count >= minimum_recall_samples:
         timeout_count = sum(outcome == "timeout" for outcome in recall_outcomes)
@@ -89,18 +88,22 @@ def evaluate_watchdog(
     if canary.get("result") != "ok":
         reasons.add("e2e_failed")
 
-    ordered_reasons = [reason for reason in _REASON_ORDER if reason in reasons]
+    persistent_reasons = [reason for reason in _REASON_ORDER if reason in reasons]
+    alert_reasons = set(reasons)
+    if new_retention_failure:
+        alert_reasons.add("new_retention_failure")
+    ordered_reasons = [reason for reason in _REASON_ORDER if reason in alert_reasons]
     previous_reasons = previous["active_reasons"]
     _write_state(
         state_path,
         {
-            "active_reasons": ordered_reasons,
+            "active_reasons": persistent_reasons,
             "recall_outcomes": recall_outcomes,
             "version": 1,
         },
     )
     if ordered_reasons:
-        if ordered_reasons == previous_reasons:
+        if not new_retention_failure and persistent_reasons == previous_reasons:
             return None
         return {
             "event": "better_hindsight.watchdog",

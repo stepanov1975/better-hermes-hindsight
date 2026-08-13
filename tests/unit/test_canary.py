@@ -96,6 +96,8 @@ class _Handler(BaseHTTPRequestHandler):
                 "document_id": type(self).document_id,
                 "memory_units_deleted": 1,
             }
+        elif isinstance(response, dict) and response.get("document_id") is None:
+            response = {**response, "document_id": type(self).document_id}
         self._json(200, response)
 
 
@@ -311,6 +313,11 @@ def test_health_and_version_validation_fail_closed_without_retain(
 @pytest.mark.parametrize(
     "cleanup_override",
     [
+        {
+            "success": True,
+            "document_id": None,
+            "memory_units_deleted": 0,
+        },
         {"success": False, "document_id": "wrong", "memory_units_deleted": 0},
         {"success": True, "document_id": "wrong", "memory_units_deleted": 1},
         {"success": True, "document_id": "ignored", "memory_units_deleted": -1},

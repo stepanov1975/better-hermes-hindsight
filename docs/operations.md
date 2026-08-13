@@ -75,9 +75,10 @@ remain separate operational changes requiring authorization.
 `python -m better_hermes_hindsight.watchdog` accepts three bounded files: the latest status and
 canary JSON objects plus JSONL containing only newly collected structured events. It alerts on degraded local
 status, each new sender retention failure, a configurable rolling recall-timeout rate, or failed E2E
-canary. State contains only fixed aggregate outcomes and the last active reason set, is written mode
-0600, and is bounded. Healthy unchanged state produces no output; an alert transition produces one
-JSON line and exit 1; unchanged alert state is silent; recovery produces one JSON line and exit 0.
+canary. State contains only fixed aggregate recall outcomes and the last active persistent reason set, is written mode
+0600, and is bounded. Healthy unchanged state produces no output; each newly supplied retention failure
+emits one alert even when the same edge occurred previously. Persistent status/canary/timeout-rate alert
+transitions produce one JSON line and exit 1; unchanged persistent alert state is silent; recovery produces one JSON line and exit 0.
 Malformed evaluator input emits fixed `evaluation_failed` JSON and exits 2.
 
 Example evaluator invocation after a caller has atomically produced bounded artifacts:

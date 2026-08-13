@@ -156,7 +156,7 @@ def _cleanup(config: CanaryConfig, *, document_id: str, deadline: float) -> tupl
             and response.get("success") is True
             and response.get("document_id") == document_id
             and type(response.get("memory_units_deleted")) is int
-            and cast(int, response["memory_units_deleted"]) >= 0
+            and cast(int, response["memory_units_deleted"]) > 0
         )
         return valid, _milliseconds(started, time.monotonic())
     except Exception:

@@ -83,6 +83,26 @@ def test_watchdog_alerts_on_new_retention_failure_and_e2e_failure(tmp_path: Path
     assert "recall_timeout" not in json.dumps(result)
 
 
+def test_watchdog_emits_each_new_retention_failure_without_false_recovery(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "watchdog.json"
+    failure = ({"event": "better_hindsight.sender_attempt", "outcome": "retain_timeout"},)
+
+    first = evaluate_watchdog(status=_status(), canary=_canary(), events=failure, state_path=state)
+    quiet = evaluate_watchdog(status=_status(), canary=_canary(), events=(), state_path=state)
+    second = evaluate_watchdog(status=_status(), canary=_canary(), events=failure, state_path=state)
+
+    expected = {
+        "event": "better_hindsight.watchdog",
+        "reasons": ["new_retention_failure"],
+        "result": "alert",
+    }
+    assert first == expected
+    assert quiet is None
+    assert second == expected
+
+
 def test_watchdog_uses_bounded_rolling_recall_timeout_rate(tmp_path: Path) -> None:
     state = tmp_path / "watchdog.json"
     events = tuple(_recall("timeout" if index < 2 else "success") for index in range(10))
