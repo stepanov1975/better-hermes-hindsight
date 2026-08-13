@@ -66,7 +66,7 @@ class _Handler(BaseHTTPRequestHandler):
             if visible:
                 results = [
                     {
-                        "text": type(self).marker,
+                        "text": "Hindsight synthesized memory unit",
                         "document_id": type(self).document_id,
                         "tags": type(self).tags,
                     }
@@ -246,6 +246,49 @@ def test_canary_uses_exact_protocol_proves_owned_recall_and_validates_cleanup() 
 
 
 @pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (
+            {
+                "text": "Hindsight synthesized memory unit",
+                "document_id": "owned-document",
+                "tags": ["owned-tag"],
+            },
+            True,
+        ),
+        (
+            {"text": "marker", "document_id": "wrong", "tags": ["owned-tag"]},
+            False,
+        ),
+        (
+            {"text": "marker", "document_id": "owned-document", "tags": ["wrong"]},
+            False,
+        ),
+        (
+            {
+                "text": "marker",
+                "document_id": "owned-document",
+                "tags": ["owned-tag", "extra"],
+            },
+            False,
+        ),
+    ],
+)
+def test_recall_ownership_requires_exact_document_and_singleton_tag(
+    value: object,
+    expected: bool,
+) -> None:
+    assert (
+        canary_module._owned_recall_result(
+            value,
+            document_id="owned-document",
+            tag="owned-tag",
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
     ("override", "expected"),
     [
         ({"success": True}, "retain_unconfirmed"),
@@ -273,7 +316,7 @@ def test_unconfirmed_retain_is_error_and_always_attempts_exact_cleanup(
 @pytest.mark.parametrize(
     "recall_override",
     [
-        {"results": [{"text": "marker", "document_id": "wrong", "tags": []}]},
+        {"results": [{"text": "marker", "document_id": "wrong", "tags": ["wrong-owner-tag"]}]},
         {"results": [{"text": "wrong", "document_id": "wrong", "tags": ["wrong"]}]},
     ],
 )

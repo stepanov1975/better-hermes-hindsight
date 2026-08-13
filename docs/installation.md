@@ -15,12 +15,12 @@ The dedicated interpreter matters because Better requires `hindsight-client==0.8
 
 ## Install a tagged release
 
-The example below installs `v0.1.0a2`. Replace the release value only with another
+The example below installs `v0.1.0a3`. Replace the release value only with another
 published tag. Do not install from a moving branch.
 
 ```bash
 set -eu
-RELEASE=v0.1.0a2
+RELEASE=v0.1.0a3
 VERSION="${RELEASE#v}"
 PROFILE=better-hindsight
 SOURCE_DIR="$HOME/src/better-hermes-hindsight-$RELEASE"

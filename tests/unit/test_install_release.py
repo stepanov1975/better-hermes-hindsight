@@ -13,7 +13,7 @@ import pytest
 from scripts import install_release
 
 _COMMIT = "1234567890abcdef1234567890abcdef12345678"
-_VERSION = "0.1.0a2"
+_VERSION = "0.1.0a3"
 
 
 def _artifact_fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
@@ -52,7 +52,7 @@ def test_source_identity_requires_exact_release_tag_and_clean_checkout(tmp_path:
     source = tmp_path / "release"
     source.mkdir()
     (source / "pyproject.toml").write_text(
-        '[project]\nname = "fixture"\nversion = "0.1.0a2"\n',
+        '[project]\nname = "fixture"\nversion = "0.1.0a3"\n',
         encoding="utf-8",
     )
     _git(source, "init", "--quiet")
@@ -60,7 +60,7 @@ def test_source_identity_requires_exact_release_tag_and_clean_checkout(tmp_path:
     _git(source, "config", "user.email", "release@example.invalid")
     _git(source, "add", "pyproject.toml")
     _git(source, "commit", "--quiet", "-m", "release fixture")
-    _git(source, "tag", "v0.1.0a2")
+    _git(source, "tag", "v0.1.0a3")
 
     version, commit = install_release._source_identity(source)
     assert version == _VERSION

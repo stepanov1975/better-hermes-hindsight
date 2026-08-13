@@ -120,16 +120,13 @@ def _bank_path(config: CanaryConfig) -> str:
     return f"/v1/default/banks/{bank}"
 
 
-def _owned_recall_result(value: object, *, document_id: str, tag: str, marker: str) -> bool:
+def _owned_recall_result(value: object, *, document_id: str, tag: str) -> bool:
     if not isinstance(value, dict):
         return False
-    text = value.get("text")
     result_document = value.get("document_id")
     tags = value.get("tags")
     return (
-        type(text) is str
-        and marker in text
-        and result_document == document_id
+        result_document == document_id
         and isinstance(tags, list)
         and all(type(item) is str for item in tags)
         and set(cast(list[str], tags)) == {tag}
@@ -249,10 +246,7 @@ def run_canary(config: CanaryConfig) -> dict[str, object]:
             if not isinstance(values, list):
                 result = {"result": "error", "error": "recall_invalid", "poll_count": poll_count}
                 return result
-            if any(
-                _owned_recall_result(item, document_id=document_id, tag=tag, marker=marker)
-                for item in values
-            ):
+            if any(_owned_recall_result(item, document_id=document_id, tag=tag) for item in values):
                 result = {
                     "result": "ok",
                     "version": config.expected_version,

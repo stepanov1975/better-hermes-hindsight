@@ -4,6 +4,12 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+## 0.1.0a3 - 2026-08-13
+
+### Fixed
+
+- Canary now accepts Hindsight 0.8.5 synthesized recall text while still requiring the exact source document ID and unique canary tag.
+
 ## 0.1.0a2 - 2026-08-13
 
 ### Added

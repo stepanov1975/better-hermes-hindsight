@@ -50,7 +50,7 @@ identifiers, or credentials. The principal event names are `better_hindsight.rec
 
 `python -m better_hermes_hindsight.canary` is an explicit synthetic write/read/delete check for a fixed canary bank.
 It verifies Hindsight 0.8.5 health and version, synchronously retains one random synthetic document,
-polls recall until the exact document ID, tag, and marker are visible, then validates exact-document
+polls recall by the random marker until the exact document ID and unique tag are visible, then validates exact-document
 cleanup. Cleanup is attempted after every retain dispatch and has reserved time within one overall
 deadline. Output is one bounded JSON object containing fixed error categories and numeric timing only.
 
