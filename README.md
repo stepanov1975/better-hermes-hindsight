@@ -52,8 +52,8 @@ hermes memory setup better_hindsight
 ```
 
 It does not need another Hermes profile, Python environment, package installation, launcher, or
-gateway procedure. Its internal HTTP adapter does not import the Hindsight Python SDK, so the
-bundled provider and its client remain untouched.
+custom gateway startup procedure. Its internal HTTP adapter does not import the Hindsight Python
+SDK, so the bundled provider and its client remain untouched.
 
 See [installation](docs/installation.md), then configure the endpoint, bank, principal, and
 credential. Leave retention disabled until recall and status work. See

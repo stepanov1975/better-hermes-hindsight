@@ -14,6 +14,27 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 ROOT_PLUGIN_FILES = ("__init__.py", "after-install.md", "cli.py", "plugin.yaml")
+NO_AIOHTTP_DISCOVERY_PROBE = """
+import sys
+
+
+class BlockAiohttp:
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "aiohttp" or fullname.startswith("aiohttp."):
+            raise ModuleNotFoundError(fullname)
+        return None
+
+
+sys.meta_path.insert(0, BlockAiohttp())
+from plugins.memory import load_memory_provider
+
+provider = load_memory_provider("better_hindsight")
+assert provider is not None
+assert provider.name == "better_hindsight"
+assert provider.is_available() is False
+assert "aiohttp" not in sys.modules
+print(type(provider).__module__)
+"""
 
 
 def _git(*args: str, cwd: Path) -> None:
@@ -106,6 +127,16 @@ def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
         cwd=tmp_path,
         environ=environ,
     )
+
+    discovery_without_dependency = _run(
+        [sys.executable, "-c", NO_AIOHTTP_DISCOVERY_PROBE],
+        cwd=tmp_path,
+        environ=environ,
+    )
+    assert discovery_without_dependency.stdout.strip().endswith(
+        "_hermes_user_memory.better_hindsight.better_hermes_hindsight.provider"
+    )
+
     _run(
         [
             sys.executable,

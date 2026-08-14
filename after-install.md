@@ -7,5 +7,6 @@ hermes memory setup better_hindsight
 ```
 
 Then create `~/.hermes/better_hindsight/config.json` as described in
-[`docs/configuration.md`](docs/configuration.md). A gateway restart is needed only when you are ready
-for an already-running gateway process to load the new provider.
+[`docs/configuration.md`](docs/configuration.md). Installation does not restart the gateway. An
+already-running process continues with its loaded provider until a separate normal restart is
+authorized.

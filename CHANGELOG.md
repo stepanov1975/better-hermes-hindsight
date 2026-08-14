@@ -2,6 +2,21 @@
 
 Notable user-visible changes are recorded here. The project follows rolling `main`; versions and tags are optional snapshots rather than compatibility or deployment gates.
 
+## 0.2.1 - 2026-08-14
+
+### Fixed
+
+- Standard memory setup can now discover the provider before Hermes installs the manifest-declared
+  `aiohttp` dependency. The HTTP dependency is imported only when the runtime client is created.
+- Contributing commands use the self-contained top-level package layout rather than the removed
+  `src/` tree.
+
+### Changed
+
+- Release metadata now identifies final releases as production/stable.
+- Gateway guidance distinguishes installation from a separately authorized normal restart of an
+  already-running process.
+
 ## 0.2.0 - 2026-08-14
 
 ### Changed

@@ -8,10 +8,9 @@ import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from importlib.util import find_spec
 from typing import Protocol, TypeVar, cast
 from urllib.parse import quote
-
-import aiohttp
 
 from . import __version__
 from .config import BetterHindsightConfig, ObservationScopes, RecallConfig
@@ -232,6 +231,8 @@ class _AiohttpJsonTransport:
         timeout: float,
         user_agent: str,
     ) -> None:
+        import aiohttp
+
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
@@ -256,6 +257,8 @@ class _AiohttpJsonTransport:
         *,
         json_body: Mapping[str, object] | None = None,
     ) -> JsonResponse:
+        import aiohttp
+
         if self._session.closed:
             raise _JsonTransportError("session_closed")
         try:
@@ -338,7 +341,10 @@ def _status_outcome(status: int) -> str:
 def is_available() -> bool:
     """Return whether the installed runtime dependency is importable."""
 
-    return True
+    try:
+        return find_spec("aiohttp") is not None
+    except (ImportError, ValueError):
+        return False
 
 
 def create_hindsight_client(
