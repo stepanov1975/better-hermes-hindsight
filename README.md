@@ -24,7 +24,7 @@ It is narrower than bundled Hindsight. It does not provide embedded/cloud servic
 
 ## Reliability boundary
 
-Recall fails open: timeout, service failure, invalid data, or unavailable runtime yields no external context rather than stopping Hermes. Recalled records are bounded, redacted, and framed as potentially stale historical evidence.
+Recall fails open: timeout, service failure, invalid data, or unavailable runtime yields no external context rather than stopping Hermes. Queries are bounded by both characters and the exact `cl100k_base` token rule used by supported Hindsight servers. Recalled records are bounded, redacted, and framed as potentially stale historical evidence.
 
 Retention is disabled by default. When enabled, the Hermes callback performs only bounded local redaction, segmentation, and one SQLite admission. Remote delivery runs in the background. Durability begins after admission commits; callbacks Hermes never executes are outside the guarantee.
 
@@ -36,8 +36,11 @@ Retries use a stable document ID and `update_mode="replace"`. A timed-out write 
 - the current intended Hermes checkout;
 - Python supported by that checkout (the maintained development lane uses Python 3.13);
 - an external Hindsight 0.8.5 or 0.9.1 server;
-- `aiohttp>=3.14.1,<4`, which the plugin declares through Hermes's standard memory-plugin
-  dependency mechanism.
+- `aiohttp>=3.14.1,<4` and `tiktoken>=0.12,<0.13`, which the plugin declares through Hermes's
+  standard memory-plugin dependency mechanism.
+
+The plugin packages the official hash-verified `cl100k_base` encoding table, so query counting does
+not make a first-use network request outside the configured recall deadline.
 
 Compatibility is behavioral rather than release-matrix based. Validation records the tested Hermes commit, but another commit is not rejected solely because its identity changed.
 

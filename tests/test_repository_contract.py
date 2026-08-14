@@ -43,7 +43,10 @@ def test_package_and_plugin_metadata_are_consistent() -> None:
     assert root_manifest["kind"] == "exclusive"
     assert root_manifest["version"] == project["version"]
     assert root_manifest["manifest_version"] == 1
-    assert root_manifest["pip_dependencies"] == ["aiohttp>=3.14.1,<4"]
+    assert root_manifest["pip_dependencies"] == [
+        "aiohttp>=3.14.1,<4",
+        "tiktoken>=0.12,<0.13",
+    ]
 
 
 def test_required_operator_documentation_exists() -> None:
@@ -59,6 +62,16 @@ def test_required_operator_documentation_exists() -> None:
         ROOT / "docs" / "development-instance.md",
     }
     assert all(path.is_file() for path in required)
+
+
+def test_vendored_tokenizer_attribution_is_packaged() -> None:
+    project = _project()
+    assert project["license-files"] == ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+
+    notices = (ROOT / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+    assert "cl100k_base.tiktoken" in notices
+    assert "Copyright (c) 2022 OpenAI, Shantanu Jain" in notices
+    assert "The above copyright notice and this permission notice" in notices
 
 
 def test_public_install_guide_uses_only_standard_hermes_plugin_commands() -> None:

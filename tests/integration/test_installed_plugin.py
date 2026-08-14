@@ -14,18 +14,19 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 ROOT_PLUGIN_FILES = ("__init__.py", "after-install.md", "cli.py", "plugin.yaml")
-NO_AIOHTTP_DISCOVERY_PROBE = """
+NO_RUNTIME_DEPENDENCY_DISCOVERY_PROBE = """
 import sys
 
 
-class BlockAiohttp:
+class BlockRuntimeDependencies:
     def find_spec(self, fullname, path=None, target=None):
-        if fullname == "aiohttp" or fullname.startswith("aiohttp."):
+        roots = ("aiohttp", "tiktoken")
+        if any(fullname == root or fullname.startswith(root + ".") for root in roots):
             raise ModuleNotFoundError(fullname)
         return None
 
 
-sys.meta_path.insert(0, BlockAiohttp())
+sys.meta_path.insert(0, BlockRuntimeDependencies())
 from plugins.memory import load_memory_provider
 
 provider = load_memory_provider("better_hindsight")
@@ -33,6 +34,7 @@ assert provider is not None
 assert provider.name == "better_hindsight"
 assert provider.is_available() is False
 assert "aiohttp" not in sys.modules
+assert "tiktoken" not in sys.modules
 print(type(provider).__module__)
 """
 
@@ -100,10 +102,14 @@ def test_root_plugin_surface_is_self_contained_and_version_aligned() -> None:
     assert root_manifest["kind"] == "exclusive"
     assert root_manifest["version"] == project["version"]
     assert root_manifest["manifest_version"] == 1
-    assert root_manifest["pip_dependencies"] == ["aiohttp>=3.14.1,<4"]
+    assert root_manifest["pip_dependencies"] == [
+        "aiohttp>=3.14.1,<4",
+        "tiktoken>=0.12,<0.13",
+    ]
     assert "scripts" not in project
     assert all((ROOT / name).is_file() for name in ROOT_PLUGIN_FILES)
     assert (ROOT / "better_hermes_hindsight" / "provider.py").is_file()
+    assert (ROOT / "better_hermes_hindsight" / "data" / "cl100k_base.tiktoken").is_file()
     assert not (ROOT / "scripts" / "install_release.py").exists()
 
 
@@ -129,7 +135,7 @@ def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
     )
 
     discovery_without_dependency = _run(
-        [sys.executable, "-c", NO_AIOHTTP_DISCOVERY_PROBE],
+        [sys.executable, "-c", NO_RUNTIME_DEPENDENCY_DISCOVERY_PROBE],
         cwd=tmp_path,
         environ=environ,
     )

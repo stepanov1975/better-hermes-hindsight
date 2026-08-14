@@ -12,6 +12,7 @@ from typing import cast
 
 import pytest
 
+import better_hermes_hindsight.client as client_module
 from better_hermes_hindsight import __version__
 from better_hermes_hindsight.client import (
     HINDSIGHT_REQUEST_TIMEOUT_SECONDS,
@@ -171,6 +172,19 @@ assert "hindsight_client_api" not in sys.modules
     )
     assert completed.returncode == 0, completed.stderr
     assert is_available() is True
+
+
+@pytest.mark.parametrize("missing_module", ["aiohttp", "tiktoken"])
+def test_availability_requires_each_runtime_dependency(
+    monkeypatch: pytest.MonkeyPatch, missing_module: str
+) -> None:
+    monkeypatch.setattr(
+        client_module,
+        "find_spec",
+        lambda module: None if module == missing_module else object(),
+    )
+
+    assert is_available() is False
 
 
 def test_client_construction_uses_internal_transport_without_remote_calls(tmp_path: Path) -> None:

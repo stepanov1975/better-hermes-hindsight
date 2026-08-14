@@ -2,6 +2,14 @@
 
 Notable user-visible changes are recorded here. The project follows rolling `main`; versions and tags are optional snapshots rather than compatibility or deployment gates.
 
+## Unreleased
+
+### Fixed
+
+- Recall query projection now enforces Hindsight's `cl100k_base` input-token ceiling in addition to
+  the existing character ceiling, preventing long token-dense queries from being rejected with HTTP
+  400 while preserving bounded head-and-tail context.
+
 ## 0.2.2 - 2026-08-14
 
 ### Added

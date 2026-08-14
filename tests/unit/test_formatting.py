@@ -14,7 +14,9 @@ from better_hermes_hindsight.formatting import (
     CONTEXT_PREAMBLE,
     CONTEXT_SUFFIX,
     QUERY_OMISSION_MARKER,
+    QUERY_TOKEN_ENCODING,
     TEXT_TRUNCATION_MARKER,
+    count_query_tokens,
     format_recall_context,
     project_query,
 )
@@ -89,7 +91,7 @@ def test_query_projection_strips_only_complete_recognized_provider_envelopes() -
         "[another ordinary user note]"
     )
 
-    projected = project_query(query, max_chars=10_000)
+    projected = project_query(query, max_chars=10_000, max_tokens=10_000)
 
     assert "visible head" in projected
     assert "visible tail" in projected
@@ -107,7 +109,7 @@ def test_query_projection_preserves_head_and_tail_with_explicit_bounded_omission
     query = "HEAD-" + ("middle" * 40) + "-TAIL"
     max_chars = len(QUERY_OMISSION_MARKER) + 24
 
-    projected = project_query(query, max_chars=max_chars)
+    projected = project_query(query, max_chars=max_chars, max_tokens=10_000)
 
     assert len(projected) == max_chars
     assert projected.startswith("HEAD-")
@@ -123,7 +125,94 @@ def test_query_projection_does_not_misclassify_unmatched_or_arbitrary_markup() -
         "<custom-provider-envelope>keep me</custom-provider-envelope>"
     )
 
-    assert project_query(query, max_chars=10_000) == query
+    assert project_query(query, max_chars=10_000, max_tokens=10_000) == query
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_tokens"),
+    [
+        ("hello, world", 3),
+        ("<|endoftext|>", 7),
+        ("αβγ Привет 你好", 9),
+        ("[ASYNC DELEGATION BATCH COMPLETE — deleg_0942b371]", 16),
+    ],
+)
+def test_query_token_count_matches_supported_hindsight_contract(
+    query: str, expected_tokens: int
+) -> None:
+    assert QUERY_TOKEN_ENCODING == "cl100k_base"
+    assert count_query_tokens(query) == expected_tokens
+
+
+def test_query_token_count_uses_packaged_encoding_without_registry_download(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import tiktoken
+
+    def forbidden(_name: str) -> object:
+        raise AssertionError("query counting must not download registry encoding data")
+
+    formatting_module._query_encoding.cache_clear()
+    monkeypatch.setattr(tiktoken, "get_encoding", forbidden)
+    try:
+        assert count_query_tokens("offline packaged encoding proof") == 4
+    finally:
+        formatting_module._query_encoding.cache_clear()
+
+
+def test_query_projection_enforces_exact_token_limit_with_one_head_tail_marker() -> None:
+    query = "HEAD-" + ("/var/lib/example structured_event=background-complete " * 200) + "-TAIL"
+
+    projected = project_query(query, max_chars=10_000, max_tokens=80)
+
+    assert projected.startswith("HEAD-")
+    assert projected.endswith("-TAIL")
+    assert projected.count(QUERY_OMISSION_MARKER) == 1
+    assert count_query_tokens(projected) <= 80
+    assert len(projected) <= 10_000
+
+
+def test_query_projection_enforces_character_and_token_limits_together() -> None:
+    query = "HEAD-" + ("dense/path=value;" * 500) + "-TAIL"
+    max_chars = len(QUERY_OMISSION_MARKER) + 48
+
+    projected = project_query(query, max_chars=max_chars, max_tokens=24)
+
+    assert projected.startswith("HEAD-")
+    assert projected.endswith("-TAIL")
+    assert projected.count(QUERY_OMISSION_MARKER) == 1
+    assert len(projected) <= max_chars
+    assert count_query_tokens(projected) <= 24
+
+
+def test_query_projection_bounds_text_before_tokenization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    encoded_lengths: list[int] = []
+    original_encode = formatting_module._encode_query
+
+    def record_encode(query: str) -> list[int]:
+        encoded_lengths.append(len(query))
+        return original_encode(query)
+
+    monkeypatch.setattr(formatting_module, "_encode_query", record_encode)
+    query = "HEAD-" + ("dense/path=value;" * 1_000) + "-TAIL"
+
+    projected = project_query(query, max_chars=100, max_tokens=16)
+
+    assert projected.startswith("HEAD-")
+    assert projected.endswith("-TAIL")
+    assert projected.count(QUERY_OMISSION_MARKER) == 1
+    assert encoded_lengths
+    assert max(encoded_lengths) <= 100
+    assert len(projected) <= 100
+    assert count_query_tokens(projected) <= 16
+
+
+def test_query_projection_fails_open_when_token_budget_cannot_hold_marker_and_content() -> None:
+    query = "HEAD-" + ("middle " * 100) + "-TAIL"
+
+    assert project_query(query, max_chars=10_000, max_tokens=2) == ""
 
 
 def test_automatic_context_is_deterministic_ranked_jsonl_with_only_allowed_fields() -> None:
@@ -158,7 +247,7 @@ def test_automatic_context_is_deterministic_ranked_jsonl_with_only_allowed_field
     assert "untrusted historical evidence" in CONTEXT_PREAMBLE.casefold()
     assert first.count(CONTEXT_BEGIN_MARKER) == 1
     assert first.count(CONTEXT_SUFFIX) == 1
-    assert project_query(first, max_chars=len(first) + 1) == ""
+    assert project_query(first, max_chars=len(first) + 1, max_tokens=10_000) == ""
     assert records == [
         {
             "final_score": 0.9,

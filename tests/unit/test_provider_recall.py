@@ -27,7 +27,11 @@ from better_hermes_hindsight.client import (
     RetainSegment,
 )
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
-from better_hermes_hindsight.formatting import CONTEXT_PREAMBLE
+from better_hermes_hindsight.formatting import (
+    CONTEXT_PREAMBLE,
+    QUERY_OMISSION_MARKER,
+    count_query_tokens,
+)
 from better_hermes_hindsight.provider import (
     AUTHORIZATION_INACTIVE_DIAGNOSTIC,
     CONFIG_INACTIVE_DIAGNOSTIC,
@@ -283,6 +287,34 @@ def test_recall_tool_reuses_projection_timeout_redaction_and_untrusted_envelope(
     assert handle.recalls == [("focused query\n", 0.125)]
 
 
+def test_recall_tool_sends_only_the_configured_token_bounded_query(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    recall = document["recall"]
+    assert isinstance(recall, dict)
+    recall["input_max_chars"] = 10_000
+    recall["input_max_tokens"] = 64
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session", hermes_home=str(tmp_path), platform="cli")
+    query = "HEAD-" + ("/tmp/delegation structured_event=complete " * 200) + "-TAIL"
+
+    provider.handle_tool_call("better_hindsight_recall", {"query": query})
+
+    assert len(handle.recalls) == 1
+    projected, timeout = handle.recalls[0]
+    assert projected.startswith("HEAD-")
+    assert projected.endswith("-TAIL")
+    assert projected.count(QUERY_OMISSION_MARKER) == 1
+    assert count_query_tokens(projected) <= 64
+    assert timeout == 0.125
+    provider.shutdown()
+
+
 @pytest.mark.parametrize(
     ("tool_name", "args", "expected_error"),
     [
@@ -435,6 +467,34 @@ def test_gateway_authorization_uses_separate_identity_kwargs_and_current_query_o
     provider.shutdown()
     assert handle.close_calls == 1
     assert provider.prefetch("after shutdown") == ""
+
+
+def test_prefetch_sends_only_the_configured_token_bounded_query(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    recall = document["recall"]
+    assert isinstance(recall, dict)
+    recall["input_max_chars"] = 10_000
+    recall["input_max_tokens"] = 64
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session", hermes_home=str(tmp_path), platform="cli")
+    query = "HEAD-" + ("/tmp/delegation structured_event=complete " * 200) + "-TAIL"
+
+    provider.prefetch(query)
+
+    assert len(handle.recalls) == 1
+    projected, timeout = handle.recalls[0]
+    assert projected.startswith("HEAD-")
+    assert projected.endswith("-TAIL")
+    assert projected.count(QUERY_OMISSION_MARKER) == 1
+    assert count_query_tokens(projected) <= 64
+    assert timeout == 0.125
+    provider.shutdown()
 
 
 def test_agent_context_never_substitutes_for_missing_gateway_identity(

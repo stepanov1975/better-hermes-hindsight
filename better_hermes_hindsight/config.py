@@ -25,6 +25,7 @@ DEFAULT_BANK_ID = "hermes"
 PAYLOAD_SCHEMA_VERSION = "better-hindsight-turn-v1"
 DEFAULT_RECALL_TIMEOUT_SECONDS = 3.5
 DEFAULT_RECALL_INPUT_MAX_CHARS = 4096
+DEFAULT_RECALL_INPUT_MAX_TOKENS = 500
 DEFAULT_RECALL_CONTEXT_MAX_BYTES = 8192
 DEFAULT_RETAIN_TIMEOUT_SECONDS = 60.0
 DEFAULT_RETAIN_SEGMENT_MAX_BYTES = 65536
@@ -38,6 +39,7 @@ OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES = 1024
 
 MAX_RECALL_TIMEOUT_SECONDS = 30.0
 MAX_RECALL_INPUT_CHARS = 65536
+MAX_RECALL_INPUT_TOKENS = 1_048_576
 MAX_RECALL_CONTEXT_BYTES = 1_048_576
 MAX_RECALL_TOKENS = 1_048_576
 MAX_RETAIN_TIMEOUT_SECONDS = 300.0
@@ -77,6 +79,7 @@ _RECALL_KEYS = {
     "enabled",
     "timeout_seconds",
     "input_max_chars",
+    "input_max_tokens",
     "context_max_bytes",
     "budget",
     "max_tokens",
@@ -172,6 +175,7 @@ class RecallConfig:
     enabled: bool = True
     timeout_seconds: float = DEFAULT_RECALL_TIMEOUT_SECONDS
     input_max_chars: int = DEFAULT_RECALL_INPUT_MAX_CHARS
+    input_max_tokens: int = DEFAULT_RECALL_INPUT_MAX_TOKENS
     context_max_bytes: int = DEFAULT_RECALL_CONTEXT_MAX_BYTES
     budget: RecallBudget | None = None
     max_tokens: int | None = None
@@ -710,6 +714,11 @@ def _parse_recall(value: object) -> RecallConfig:
             values.get("input_max_chars", DEFAULT_RECALL_INPUT_MAX_CHARS),
             "recall.input_max_chars",
             maximum=MAX_RECALL_INPUT_CHARS,
+        ),
+        input_max_tokens=_parse_positive_int(
+            values.get("input_max_tokens", DEFAULT_RECALL_INPUT_MAX_TOKENS),
+            "recall.input_max_tokens",
+            maximum=MAX_RECALL_INPUT_TOKENS,
         ),
         context_max_bytes=_parse_positive_int(
             values.get("context_max_bytes", DEFAULT_RECALL_CONTEXT_MAX_BYTES),

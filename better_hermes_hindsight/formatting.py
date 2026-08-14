@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import re
 from collections.abc import Sequence
+from functools import lru_cache
+from importlib.resources import files
 from typing import Protocol, cast
 
 from .redaction import redact_sensitive_text
@@ -24,7 +28,24 @@ SYSTEM_PROMPT_BLOCK = (
     "over the current conversation."
 )
 QUERY_OMISSION_MARKER = "\n[... query middle omitted ...]\n"
+QUERY_TOKEN_ENCODING = "cl100k_base"  # nosec B105 - public tokenizer name, not a secret.
 TEXT_TRUNCATION_MARKER = " [... memory text truncated ...]"
+
+# Official OpenAI encoding table:
+# https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken
+_QUERY_ENCODING_RESOURCE = "data/cl100k_base.tiktoken"
+_QUERY_ENCODING_SHA256 = "223921b76ee99bde995b7ff738513eef100fb51d18c93597a113bcffe865b2a7"
+_QUERY_ENCODING_PATTERN = (
+    r"'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}++|\p{N}{1,3}+|"
+    r" ?[^\s\p{L}\p{N}]++[\r\n]*+|\s++$|\s*[\r\n]|\s+(?!\S)|\s"
+)
+_QUERY_SPECIAL_TOKENS = {
+    "<|endoftext|>": 100257,
+    "<|fim_prefix|>": 100258,
+    "<|fim_middle|>": 100259,
+    "<|fim_suffix|>": 100260,
+    "<|endofprompt|>": 100276,
+}
 
 _MEMORY_CONTEXT_PATTERN = re.compile(
     re.escape("<memory-context>") + ".*?" + re.escape("</memory-context>"),
@@ -41,29 +62,125 @@ class _RecallResponseLike(Protocol):
     results: object
 
 
-def project_query(query: str, *, max_chars: int) -> str:
-    """Strip recognized provider envelopes and retain a bounded head plus tail.
+class _QueryEncoding(Protocol):
+    def encode(self, text: str, *, disallowed_special: tuple[str, ...]) -> list[int]: ...
+
+    def decode_single_token_bytes(self, token: int) -> bytes: ...
+
+
+@lru_cache(maxsize=1)
+def _query_encoding() -> _QueryEncoding:
+    import tiktoken
+
+    resource_package = __package__ or __name__.rpartition(".")[0]
+    resource = files(resource_package).joinpath(_QUERY_ENCODING_RESOURCE)
+    raw = resource.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != _QUERY_ENCODING_SHA256:
+        raise RuntimeError("Better Hindsight query encoding data is invalid.")
+    try:
+        mergeable_ranks = {
+            base64.b64decode(token, validate=True): int(rank)
+            for line in raw.splitlines()
+            for token, rank in [line.split()]
+        }
+    except (ValueError, TypeError):
+        raise RuntimeError("Better Hindsight query encoding data is invalid.") from None
+    return cast(
+        _QueryEncoding,
+        tiktoken.Encoding(
+            name=QUERY_TOKEN_ENCODING,
+            pat_str=_QUERY_ENCODING_PATTERN,
+            mergeable_ranks=mergeable_ranks,
+            special_tokens=_QUERY_SPECIAL_TOKENS,
+        ),
+    )
+
+
+def count_query_tokens(query: str) -> int:
+    """Count tokens exactly as supported Hindsight recall validation does."""
+
+    if not isinstance(query, str):
+        raise TypeError("Better Hindsight recall query must be text.")
+    return len(_encode_query(query))
+
+
+def project_query(query: str, *, max_chars: int, max_tokens: int) -> str:
+    """Strip provider envelopes and retain a character- and token-bounded head plus tail.
 
     Ordinary bracketed or XML-like user text is preserved. Only complete Hermes memory-context
     blocks and complete Better Hindsight evidence blocks are recognized as provider envelopes.
+    Token counting matches Hindsight 0.8.5 and 0.9.1: cl100k_base with special-token literals
+    treated as ordinary text.
     """
 
     if not isinstance(query, str):
         raise TypeError("Better Hindsight recall query must be text.")
     if isinstance(max_chars, bool) or not isinstance(max_chars, int) or max_chars <= 0:
-        raise ValueError("Better Hindsight recall query limit must be a positive integer.")
+        raise ValueError("Better Hindsight recall character limit must be a positive integer.")
+    if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens <= 0:
+        raise ValueError("Better Hindsight recall token limit must be a positive integer.")
 
     projected = _MEMORY_CONTEXT_PATTERN.sub("", query)
     projected = _BETTER_CONTEXT_PATTERN.sub("", projected)
-    if len(projected) <= max_chars:
-        return projected
+    if not projected:
+        return ""
+
+    char_bounded, tokenizer_input = _project_query_by_chars(projected, max_chars=max_chars)
+    if not char_bounded or count_query_tokens(char_bounded) <= max_tokens:
+        return char_bounded
+    return _project_query_by_tokens(tokenizer_input, max_chars=max_chars, max_tokens=max_tokens)
+
+
+def _encode_query(query: str) -> list[int]:
+    return _query_encoding().encode(query, disallowed_special=())
+
+
+def _project_query_by_chars(query: str, *, max_chars: int) -> tuple[str, str]:
+    if len(query) <= max_chars:
+        return query, query
 
     available_text = max_chars - len(QUERY_OMISSION_MARKER)
     if available_text < 2:
-        return ""
+        return "", ""
     head_chars = (available_text + 1) // 2
     tail_chars = available_text - head_chars
-    return projected[:head_chars] + QUERY_OMISSION_MARKER + projected[-tail_chars:]
+    head = query[:head_chars]
+    tail = query[-tail_chars:]
+    return head + QUERY_OMISSION_MARKER + tail, head + tail
+
+
+def _project_query_by_tokens(query: str, *, max_chars: int, max_tokens: int) -> str:
+    encoding = _query_encoding()
+    query_tokens = _encode_query(query)
+    marker_tokens = _encode_query(QUERY_OMISSION_MARKER)
+    content_tokens = min(len(query_tokens), max_tokens - len(marker_tokens))
+    if content_tokens < 2 or len(QUERY_OMISSION_MARKER) >= max_chars:
+        return ""
+
+    while content_tokens >= 2:
+        head_tokens = (content_tokens + 1) // 2
+        tail_tokens = content_tokens - head_tokens
+        head = _decode_query_tokens(encoding, query_tokens[:head_tokens])
+        tail = _decode_query_tokens(encoding, query_tokens[-tail_tokens:])
+        candidate = head + QUERY_OMISSION_MARKER + tail
+        candidate_tokens = count_query_tokens(candidate)
+        if len(candidate) <= max_chars and candidate_tokens <= max_tokens:
+            return candidate
+
+        reduction = max(1, candidate_tokens - max_tokens)
+        if len(candidate) > max_chars:
+            reduction = max(
+                reduction,
+                (content_tokens * (len(candidate) - max_chars) + len(candidate) - 1)
+                // len(candidate),
+            )
+        content_tokens -= reduction
+    return ""
+
+
+def _decode_query_tokens(encoding: _QueryEncoding, tokens: list[int]) -> str:
+    encoded = b"".join(encoding.decode_single_token_bytes(token) for token in tokens)
+    return encoded.decode("utf-8", errors="ignore")
 
 
 def format_recall_context(response: object, *, max_bytes: int) -> str:
@@ -210,8 +327,10 @@ __all__ = [
     "CONTEXT_PREAMBLE",
     "CONTEXT_SUFFIX",
     "QUERY_OMISSION_MARKER",
+    "QUERY_TOKEN_ENCODING",
     "SYSTEM_PROMPT_BLOCK",
     "TEXT_TRUNCATION_MARKER",
+    "count_query_tokens",
     "format_recall_context",
     "project_query",
 ]

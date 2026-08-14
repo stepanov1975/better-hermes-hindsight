@@ -62,7 +62,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         return PROVIDER_ID
 
     def is_available(self) -> bool:
-        """Check only the exact local SDK dependency; never read config or contact a service."""
+        """Check only local runtime dependencies; never read config or contact a service."""
 
         return is_hindsight_available()
 
@@ -132,7 +132,11 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             return ""
 
         try:
-            projected = project_query(query, max_chars=config.recall.input_max_chars)
+            projected = project_query(
+                query,
+                max_chars=config.recall.input_max_chars,
+                max_tokens=config.recall.input_max_tokens,
+            )
             if not projected.strip():
                 return ""
         except Exception:
@@ -224,7 +228,11 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         if not self._recall_enabled or config is None or self._runtime is None:
             return _tool_json(error=_RECALL_TOOL_UNAVAILABLE)
         try:
-            projected = project_query(query, max_chars=config.recall.input_max_chars)
+            projected = project_query(
+                query,
+                max_chars=config.recall.input_max_chars,
+                max_tokens=config.recall.input_max_tokens,
+            )
         except Exception:
             return _tool_json(error=_RECALL_TOOL_INVALID_QUERY)
         if not projected.strip():

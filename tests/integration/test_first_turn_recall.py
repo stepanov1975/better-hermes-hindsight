@@ -29,6 +29,18 @@ from unittest.mock import MagicMock, patch
 
 from tests.fakes.hindsight_server import FakeHindsightServer
 
+
+class BlockCanonicalPluginPackage:
+    def find_spec(self, fullname, path=None, target=None):
+        root = "better_hermes_hindsight"
+        if fullname == root or fullname.startswith(root + "."):
+            raise ModuleNotFoundError(fullname)
+        return None
+
+
+sys.meta_path.insert(0, BlockCanonicalPluginPackage())
+assert "better_hermes_hindsight" not in sys.modules
+
 scenario_name = sys.argv[1]
 hermes_home = Path(sys.argv[2])
 current_query = sys.argv[3]
@@ -257,6 +269,7 @@ sessions:
             "provider_names": [provider.name for provider in manager.providers],
             "record_count": len(records),
             "scenario": scenario_name,
+            "synthetic_package": package,
         }
     finally:
         if agent is not None and not finalized:
@@ -297,11 +310,12 @@ def _run_scenario(
             error_sentinel,
             MODEL_SECRET_SENTINEL,
         ],
-        cwd=ROOT,
+        cwd=tmp_path,
         env=clean_subprocess_env(
             tmp_path,
             hermes_home=hermes_home,
             no_proxy="127.0.0.1,localhost",
+            extra={"PYTHONPATH": str(ROOT)},
         ),
         check=False,
         capture_output=True,
@@ -327,6 +341,9 @@ def test_current_agent_first_turn_recalls_current_query_before_first_model_reque
         "model",
     ]
     assert payload["provider_names"] == ["better_hindsight"]
+    assert payload["synthetic_package"] == (
+        "_hermes_user_memory.better_hindsight.better_hermes_hindsight"
+    )
     assert payload["record_count"] == 1
     assert payload["finalized"] is True
     assert payload["better_system_policy_in_system_role"] is True

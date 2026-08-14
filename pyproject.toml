@@ -9,7 +9,7 @@ description = "External Hindsight memory provider plugin for Hermes Agent"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [{ name = "Alex Stepanov" }]
 keywords = ["hermes-agent", "hindsight", "memory", "plugin"]
 classifiers = [
@@ -20,7 +20,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
 ]
-dependencies = ["aiohttp>=3.14.1,<4"]
+dependencies = ["aiohttp>=3.14.1,<4", "tiktoken>=0.12,<0.13"]
 
 [project.optional-dependencies]
 dev = [
@@ -38,6 +38,9 @@ Issues = "https://github.com/stepanov1975/better-hermes-hindsight/issues"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["better_hermes_hindsight*"]
+
+[tool.setuptools.package-data]
+better_hermes_hindsight = ["data/*.tiktoken"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

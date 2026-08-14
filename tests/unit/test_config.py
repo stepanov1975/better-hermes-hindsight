@@ -96,6 +96,7 @@ def test_defaults_follow_the_best_effort_product_contract(tmp_path: Path) -> Non
 
     assert not hasattr(config, "integration_mode")
     assert config.recall.enabled is True
+    assert config.recall.input_max_tokens == 500
     assert config.retain.enabled is False
     assert config.retain.timeout_seconds == 60.0
     assert config.outbox.max_pending_rows == 2_000
@@ -303,6 +304,7 @@ def test_complete_typed_configuration_round_trips(tmp_path: Path) -> None:
                 "enabled": False,
                 "timeout_seconds": 2.25,
                 "input_max_chars": 3210,
+                "input_max_tokens": 499,
                 "context_max_bytes": 6543,
                 "budget": "low",
                 "max_tokens": 777,
@@ -344,6 +346,7 @@ def test_complete_typed_configuration_round_trips(tmp_path: Path) -> None:
     assert not hasattr(config.recall, "query_projection")
     assert config.recall.timeout_seconds == 2.25
     assert config.recall.input_max_chars == 3210
+    assert config.recall.input_max_tokens == 499
     assert config.recall.context_max_bytes == 6543
     assert config.recall.budget == "low"
     assert config.recall.max_tokens == 777
@@ -484,6 +487,8 @@ def test_bare_empty_observation_scope_is_rejected(tmp_path: Path) -> None:
         {"recall": {"timeout_seconds": 10**1000}},
         {"recall": {"timeout_seconds": 31}},
         {"recall": {"input_max_chars": 0}},
+        {"recall": {"input_max_tokens": 0}},
+        {"recall": {"input_max_tokens": 1_048_577}},
         {"recall": {"context_max_bytes": 0}},
         {"recall": {"query_projection": "head_tail"}},
         {"recall": {"budget": "extreme"}},

@@ -22,6 +22,11 @@ Hindsight 0.9.1 adds optional `source_facts_truncated` to recall responses and o
 the optional request field. Version 0.2.2 was validated against the official Hindsight 0.9.1 image
 with real retain, outbox restart recovery, recall, stable replay, and disposable-bank cleanup.
 
+Both supported Hindsight versions validate recall query length with `tiktoken`'s `cl100k_base`
+encoding and treat special-token literals as ordinary text. Their default
+`HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS` is 500. Better applies the same count locally through the
+explicit `recall.input_max_tokens` setting before sending a request.
+
 The bundled provider can therefore keep Hermes's `hindsight-client==0.6.1` unchanged. Better is
 loaded directly from its standard Git-plugin checkout and needs no separate runtime or configuration
 isolation.

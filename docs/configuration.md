@@ -49,6 +49,7 @@ This example uses only synthetic/local values and contains no API key. Retention
     "enabled": true,
     "timeout_seconds": 3.5,
     "input_max_chars": 4096,
+    "input_max_tokens": 500,
     "context_max_bytes": 8192
   },
   "retain": {
@@ -77,6 +78,13 @@ This example uses only synthetic/local values and contains no API key. Retention
 Unknown keys, wrong types, unsupported enum values, duplicate principal tuples, non-finite numbers,
 and invalid ranges are errors rather than silent fallbacks.
 
+`recall.input_max_chars` is the local pre-tokenization safety bound. `recall.input_max_tokens` is a
+separate input-query limit and defaults to the 500-token default used by Hindsight 0.8.5 and 0.9.1.
+Better counts with the same `cl100k_base` encoding and treats special-token-looking literals as
+ordinary text. Keep this value at or below the server's
+`HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS`. The existing `recall.max_tokens` setting controls the
+response budget; it does not limit query input.
+
 ## Defaults and finite bounds
 
 | Setting | Default | Validation |
@@ -88,6 +96,7 @@ and invalid ranges are errors rather than silent fallbacks.
 | `recall.enabled` | `true` | Boolean |
 | `recall.timeout_seconds` | `3.5` | Greater than zero, at most 30 seconds |
 | `recall.input_max_chars` | `4096` | 1 through 65,536 characters |
+| `recall.input_max_tokens` | `500` | 1 through 1,048,576 `cl100k_base` tokens; must not exceed the Hindsight server's `HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS` |
 | `recall.context_max_bytes` | `8192` | 1 through 1,048,576 bytes |
 | `retain.enabled` | `false` | Boolean; explicit opt-in only |
 | `retain.timeout_seconds` | `60.0` | Greater than zero, at most 300 seconds |

@@ -35,7 +35,8 @@ Better Hermes Hindsight is an unofficial memory provider optimized for one pract
 
 1. Hermes supplies the current user query and agent context.
 2. The provider verifies enabled context and principal policy.
-3. It projects and bounds the query.
+3. It projects and bounds the query by characters and by Hindsight's exact `cl100k_base` input-token
+   rule, preserving bounded head-and-tail context.
 4. The async client performs one deadline-bounded Hindsight recall.
 5. The formatter projects allowlisted fields, redacts likely credentials, frames records as untrusted evidence, and enforces the output-byte limit.
 6. Errors and timeouts return no external context rather than failing Hermes.
@@ -70,8 +71,9 @@ Durability begins only after admission commits. A network timeout may be ambiguo
 Better is a self-contained standard Hermes Git plugin. Its root entry points and
 `better_hermes_hindsight` implementation package are installed together by `hermes plugins
 install`; no second package installation or runtime environment is part of deployment. Better
-implements its narrow Hindsight 0.8.5/0.9.1 wire contract over `aiohttp` and does not import the
-Hindsight Python SDK, so the untouched bundled provider remains available.
+implements its narrow Hindsight 0.8.5/0.9.1 wire contract over `aiohttp`, uses `tiktoken` only to
+match those servers' recall input validation, and does not import the Hindsight Python SDK, so the
+untouched bundled provider remains available.
 
 The Git commit is the working identity. A tag or version bump is optional and does not define compatibility. Validation records the current Better and Hermes commits and tests behavior against that checkout.
 

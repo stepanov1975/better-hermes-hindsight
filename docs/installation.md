@@ -11,9 +11,14 @@ procedure.
 - an external Hindsight 0.8.5 or 0.9.1 service;
 - `git` available for Hermes's Git-plugin installer.
 
-The plugin declares `aiohttp>=3.14.1,<4` in `plugin.yaml`. Hermes checks and installs declared
-memory-plugin dependencies through its normal memory setup command. Better does not import or
+The plugin declares `aiohttp>=3.14.1,<4` and `tiktoken>=0.12,<0.13` in `plugin.yaml`. Hermes checks
+and installs declared memory-plugin dependencies through its normal memory setup command. Better
+uses `tiktoken` only to match supported Hindsight servers' recall input limit; it does not import or
 replace Hermes's bundled Hindsight client.
+
+The official `cl100k_base` encoding table is packaged with Better and verified by SHA-256 before
+use. Tokenizer initialization therefore does not depend on a first-use download from an external
+encoding service.
 
 ## Install
 
