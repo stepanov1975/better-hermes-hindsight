@@ -27,7 +27,7 @@ Do not reuse production endpoints, credentials, banks, profiles, or content. The
 The test:
 
 1. validates the explicit opt-in and endpoint allowlist;
-2. checks the selected interpreter exposes the intended Hermes host and `hindsight-client==0.8.5`;
+2. checks the selected interpreter exposes the intended Hermes host and SDK-free Better client;
 3. generates a random `better-hindsight-live-...` bank and verifies it is absent;
 4. creates that bank with a unique synthetic ownership display name;
 5. starts the real Hermes memory manager with a temporary home and Better provider;

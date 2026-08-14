@@ -20,21 +20,21 @@ PROFILE=better-hindsight
 "$HOME/.local/bin/$PROFILE" gateway stop
 ```
 
-Select and start the unchanged old deployment using its existing procedure. Verify one bundled-Hindsight recall. Because the Better canary uses a dedicated interpreter/profile, ordinary rollback does not require replacing its Python packages or deleting its plugin checkout.
+Select and start the unchanged old deployment using its existing procedure. Verify one bundled-Hindsight recall. Better does not replace Hermes's bundled Hindsight SDK, so ordinary rollback requires no Python package changes.
 
-## If the same interpreter must return to bundled Hindsight
+## Optional package removal
 
-Only if a dedicated interpreter was not used, stop every process sharing that interpreter before changing packages:
+Provider rollback can leave the inert Better package installed. To remove it completely, stop every process sharing the Hermes interpreter first:
 
 ```bash
+HERMES_PYTHON="$HOME/.hermes/hermes-agent/venv/bin/python"
 hermes --profile "$PROFILE" config set memory.provider hindsight
 hermes --profile "$PROFILE" plugins remove better_hindsight
-uv pip uninstall --python "$HERMES_PYTHON" better-hermes-hindsight hindsight-client
-uv pip install --python "$HERMES_PYTHON" 'hindsight-client==0.6.1'
+uv pip uninstall --python "$HERMES_PYTHON" better-hermes-hindsight
 uv pip check --python "$HERMES_PYTHON"
 ```
 
-Restart only after provider discovery and an actual bundled recall succeed. This fallback is more disruptive and is why the dedicated interpreter is the supported deployment.
+Restart only after provider discovery and an actual bundled recall succeed. Do not uninstall or replace Hermes's bundled `hindsight-client` as part of Better rollback.
 
 ## Return to Better
 

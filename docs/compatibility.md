@@ -15,9 +15,9 @@ The relevant public host contract is Hermes's `MemoryProvider`/`MemoryManager` l
 
 ## Hindsight compatibility
 
-Better intentionally targets external Hindsight server and `hindsight-client==0.8.5`. This remains an exact dependency because the SDK API is materially different from the `0.6.1` client used by bundled Hermes Hindsight.
+Better intentionally targets the external Hindsight 0.8.5 HTTP contract. It implements only recall, synchronous retain, bank-config read, and bank-config patch over `aiohttp`; it does not import or depend on the Hindsight Python SDK.
 
-A Hermes profile does not isolate interpreter packages. Run Better from a dedicated Hermes interpreter/profile when another active profile needs bundled Hindsight's incompatible SDK.
+The bundled provider can therefore keep Hermes's `hindsight-client==0.6.1` in the same interpreter. A separate profile remains useful for configuration and rollback, but a separate Python environment is not required.
 
 ## Update behavior
 
@@ -25,7 +25,7 @@ When Hermes changes:
 
 1. update or select the intended Hermes checkout;
 2. install it into the development interpreter;
-3. reinstall `hindsight-client==0.8.5` if Hermes dependency resolution replaced it;
+3. verify Hermes's installed `aiohttp` satisfies Better's declared range;
 4. run the deterministic suite and isolated live smoke test;
 5. fix only demonstrated interface or behavior breakage.
 

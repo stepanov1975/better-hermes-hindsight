@@ -6,11 +6,9 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from hindsight_client_api.models.recall_response import RecallResponse
-from hindsight_client_api.models.recall_result import RecallResult
-from hindsight_client_api.models.recall_scores import RecallScores
 
 import better_hermes_hindsight.formatting as formatting_module
+from better_hermes_hindsight.client import RecallResponse, RecallResult, RecallScores
 from better_hermes_hindsight.formatting import (
     CONTEXT_BEGIN_MARKER,
     CONTEXT_PREAMBLE,

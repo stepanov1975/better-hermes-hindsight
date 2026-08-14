@@ -67,7 +67,7 @@ Durability begins only after admission commits. A network timeout may be ambiguo
 
 ## Deployment model
 
-The Hermes Git-plugin directory and the installed Python package are separate concerns. For the rolling development deployment, install the package editable from the same checkout and install that checkout as the Hermes plugin. A dedicated Hermes interpreter is required because Better uses `hindsight-client==0.8.5` while bundled Hermes currently uses an incompatible client version.
+The Hermes Git-plugin directory and the installed Python package are separate concerns. For the rolling development deployment, install the package editable from the same checkout and install that checkout as the Hermes plugin. Better implements its narrow Hindsight 0.8.5 wire contract over `aiohttp` and does not import the Hindsight Python SDK, so it can share the normal Hermes interpreter with the untouched bundled provider.
 
 The Git commit is the working identity. A tag or version bump is optional and does not define compatibility. Validation records the current Better and Hermes commits and tests behavior against that checkout.
 

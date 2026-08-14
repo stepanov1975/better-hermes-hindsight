@@ -29,8 +29,8 @@ The existing runtime should not be rewritten merely to reduce line count. Simpli
 - Use the Git commit as the deployable identity. Version bumps and tags are optional snapshots.
 - Editable installs are development-only. Ordinary-user deployment uses a tagged release
   wheel plus the exact tagged checkout through `scripts/install_release.py`.
-- Keep `hindsight-client==0.8.5` exact because the SDK/server contract is real.
-- Keep the dedicated interpreter/profile and isolated Hindsight instance because bundled Hermes currently requires an incompatible Hindsight SDK.
+- Keep the narrow internal HTTP contract aligned with Hindsight server 0.8.5.
+- Run Better in the existing Hermes interpreter alongside the untouched bundled Hindsight client; keep live-write validation on an isolated Hindsight service/bank.
 
 ## Validation bar
 

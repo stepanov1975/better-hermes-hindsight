@@ -14,13 +14,17 @@ from typing import NoReturn
 
 import pytest
 from agent.memory_provider import MemoryProvider
-from hindsight_client_api.models.recall_response import RecallResponse
-from hindsight_client_api.models.recall_result import RecallResult
-from hindsight_client_api.models.recall_scores import RecallScores
 
 import better_hermes_hindsight.hermes_plugin as hermes_plugin
 import better_hermes_hindsight.provider as provider_module
-from better_hermes_hindsight.client import HindsightClientError, RetainConfirmation, RetainSegment
+from better_hermes_hindsight.client import (
+    HindsightClientError,
+    RecallResponse,
+    RecallResult,
+    RecallScores,
+    RetainConfirmation,
+    RetainSegment,
+)
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.formatting import CONTEXT_PREAMBLE
 from better_hermes_hindsight.provider import (

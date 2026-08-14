@@ -19,12 +19,12 @@ import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from importlib import metadata
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import pytest
+from aiohttp import ClientSession, ClientTimeout
 
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.outbox import OutboxRow, ProfileLockOwner, SQLiteOutbox
@@ -32,7 +32,6 @@ from better_hermes_hindsight.retention import RetainedSegment, build_retained_se
 from better_hermes_hindsight.runtime import finalize_process_runtime
 
 ROOT = Path(__file__).resolve().parents[2]
-_HINDSIGHT_VERSION = "0.8.5"
 _RETAIN_TAGS = ("better-hindsight-live",)
 _SEGMENT_MAX_BYTES = 384
 _DRAIN_TIMEOUT_SECONDS = 45.0
@@ -128,72 +127,74 @@ def _with_disposable_bank(inputs: DevelopmentInputs) -> DevelopmentInputs:
     )
 
 
-def _payload(value: object) -> dict[str, Any]:
-    if isinstance(value, dict):
-        return cast(dict[str, Any], value)
-    dump = getattr(value, "model_dump", None)
-    if callable(dump):
-        loaded = dump(mode="json")
-        if isinstance(loaded, dict):
-            return cast(dict[str, Any], loaded)
-    raise AssertionError("public SDK response was not an object")
+async def _raw_json(
+    session: ClientSession,
+    method: str,
+    url: str,
+    *,
+    json_body: object | None = None,
+) -> tuple[int, dict[str, Any] | None]:
+    async with session.request(
+        method,
+        url,
+        json=json_body,
+        allow_redirects=False,
+    ) as response:
+        if response.status == 404:
+            await response.read()
+            return response.status, None
+        if response.status < 200 or response.status >= 300:
+            await response.read()
+            raise AssertionError("isolated Hindsight bank request failed")
+        payload = await response.json()
+        if type(payload) is not dict:
+            raise AssertionError("isolated Hindsight bank response was not an object")
+        return response.status, cast(dict[str, Any], payload)
 
 
-def _new_sdk(inputs: DevelopmentInputs) -> Any:
-    from hindsight_client import Hindsight
-
-    return Hindsight(
-        base_url=inputs.api_url,
-        api_key=inputs.api_key,
-        timeout=30.0,
-        user_agent="better-hermes-hindsight-live-test",
+def _live_session(inputs: DevelopmentInputs) -> ClientSession:
+    return ClientSession(
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {inputs.api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "better-hermes-hindsight-live-test",
+        },
+        timeout=ClientTimeout(total=30.0),
+        trust_env=False,
     )
 
 
-def _api_status(exception: Exception) -> int | None:
-    value = getattr(exception, "status", None)
-    return value if type(value) is int else None
-
-
 def _create_disposable_bank(inputs: DevelopmentInputs) -> None:
-    from hindsight_client_api.exceptions import ApiException
-
     async def create() -> None:
-        sdk = _new_sdk(inputs)
-        try:
-            version = _payload(await sdk.aget_version())
-            if version.get("api_version") != _HINDSIGHT_VERSION:
+        async with _live_session(inputs) as session:
+            _status, version = await _raw_json(session, "GET", f"{inputs.api_url}/version")
+            if version is None or version.get("api_version") != "0.8.5":
                 raise AssertionError("isolated Hindsight server is not version 0.8.5")
-            try:
-                await sdk.banks.get_bank_profile(bank_id=inputs.bank_id)
-            except ApiException as exception:
-                if _api_status(exception) != 404:
-                    raise
-            else:
+            bank_url = f"{inputs.api_url}/v1/default/banks/{quote(inputs.bank_id, safe='')}"
+            status, _profile = await _raw_json(session, "GET", f"{bank_url}/profile")
+            if status != 404:
                 raise AssertionError("generated disposable bank already exists")
-            created = _payload(
-                await sdk.acreate_bank(bank_id=inputs.bank_id, name=inputs.ownership_name)
+            _status, created = await _raw_json(
+                session,
+                "PUT",
+                bank_url,
+                json_body={"name": inputs.ownership_name},
             )
-            if created.get("bank_id") != inputs.bank_id:
+            if created is None or created.get("bank_id") != inputs.bank_id:
                 raise AssertionError("Hindsight created an unexpected bank")
-        finally:
-            await sdk.aclose()
 
     asyncio.run(create())
 
 
 def _delete_disposable_bank(inputs: DevelopmentInputs) -> None:
-    from hindsight_client_api.exceptions import ApiException
-
     async def delete() -> None:
-        sdk = _new_sdk(inputs)
-        try:
-            try:
-                profile = _payload(await sdk.banks.get_bank_profile(bank_id=inputs.bank_id))
-            except ApiException as exception:
-                if _api_status(exception) == 404:
-                    return
-                raise
+        async with _live_session(inputs) as session:
+            bank_url = f"{inputs.api_url}/v1/default/banks/{quote(inputs.bank_id, safe='')}"
+            status, profile = await _raw_json(session, "GET", f"{bank_url}/profile")
+            if status == 404:
+                return
+            assert profile is not None
             if (
                 profile.get("bank_id") != inputs.bank_id
                 or profile.get("name") != inputs.ownership_name
@@ -201,13 +202,10 @@ def _delete_disposable_bank(inputs: DevelopmentInputs) -> None:
                 raise AssertionError(
                     "refusing to delete a bank without the live-test ownership marker"
                 )
-            try:
-                await sdk.adelete_bank(bank_id=inputs.bank_id)
-            except ApiException as exception:
-                if _api_status(exception) != 404:
-                    raise
-        finally:
-            await sdk.aclose()
+            await _raw_json(session, "DELETE", bank_url)
+            status, _profile = await _raw_json(session, "GET", f"{bank_url}/profile")
+            if status != 404:
+                raise AssertionError("isolated Hindsight bank still exists after cleanup")
 
     try:
         asyncio.run(delete())
@@ -366,11 +364,14 @@ def _remote_documents(
     expected_ids = {segment.document_id for segment in expected}
 
     async def read() -> dict[str, dict[str, Any]]:
-        sdk = _new_sdk(inputs)
-        try:
-            listed = _payload(
-                await sdk.documents.list_documents(bank_id=inputs.bank_id, limit=100, offset=0)
+        async with _live_session(inputs) as session:
+            bank_url = f"{inputs.api_url}/v1/default/banks/{quote(inputs.bank_id, safe='')}"
+            _status, listed = await _raw_json(
+                session,
+                "GET",
+                f"{bank_url}/documents?limit=100&offset=0",
             )
+            assert listed is not None
             items = listed.get("items")
             if not isinstance(items, list):
                 raise AssertionError("Hindsight did not return a document list")
@@ -381,16 +382,17 @@ def _remote_documents(
             }
             if listed_ids != expected_ids:
                 raise AssertionError("remote document identities did not converge")
-            return {
-                document_id: _payload(
-                    await sdk.documents.get_document(
-                        bank_id=inputs.bank_id, document_id=document_id
-                    )
+            documents: dict[str, dict[str, Any]] = {}
+            for document_id in sorted(expected_ids):
+                _status, document = await _raw_json(
+                    session,
+                    "GET",
+                    f"{bank_url}/documents/{quote(document_id, safe='')}",
                 )
-                for document_id in sorted(expected_ids)
-            }
-        finally:
-            await sdk.aclose()
+                if document is None:
+                    raise AssertionError("Hindsight document disappeared during live proof")
+                documents[document_id] = document
+            return documents
 
     return asyncio.run(read())
 
@@ -437,8 +439,6 @@ def _run_live_child() -> int:
     manager: Any | None = None
     barrier: ProfileLockOwner | None = None
     try:
-        if metadata.version("hindsight-client") != _HINDSIGHT_VERSION:
-            raise AssertionError("dedicated interpreter does not use hindsight-client 0.8.5")
         home, config = _prepare_home(inputs)
         expected = _expected_segments((_SHORT_TURN, _LONG_TURN))
 
@@ -467,10 +467,7 @@ def _run_live_child() -> int:
             raise AssertionError("stable replay changed remote document identities")
 
         result = {
-            "better": metadata.version("better-hermes-hindsight"),
             "documents": len(documents),
-            "hermes": metadata.version("hermes-agent"),
-            "hindsight_client": metadata.version("hindsight-client"),
             "segments": len(expected),
             "status": "ok",
         }
@@ -619,7 +616,6 @@ def test_isolated_hindsight_smoke(tmp_path: Path) -> None:
             ) from None
         assert completed.returncode == 0, payload
         assert payload["status"] == "ok"
-        assert payload["hindsight_client"] == _HINDSIGHT_VERSION
         assert payload["documents"] == payload["segments"]
     finally:
         _delete_disposable_bank(inputs)

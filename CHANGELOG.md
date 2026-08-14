@@ -4,6 +4,15 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+### Changed
+
+- Replaced the `hindsight-client==0.8.5` runtime dependency with a narrow asynchronous HTTP adapter for the four Hindsight 0.8.5 operations Better uses.
+- Better can now share the normal Hermes interpreter with bundled `hindsight-client==0.6.1`; a separate profile remains optional for operational separation.
+
+### Fixed
+
+- HTTP failures, malformed or oversized JSON, cancellation, and response-schema errors preserve Better's bounded fail-open and durable-retry behavior without exposing raw service errors.
+
 ## 0.1.0a3 - 2026-08-13
 
 ### Fixed

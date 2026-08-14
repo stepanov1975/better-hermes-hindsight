@@ -1,4 +1,4 @@
-"""Released-Hermes callback-to-real-SDK retention proofs against the loopback fake."""
+"""Released-Hermes callback-to-real-client retention proofs against the loopback fake."""
 
 from __future__ import annotations
 
@@ -10,14 +10,12 @@ import threading
 import time
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass
-from importlib import metadata
 from pathlib import Path
 from typing import Any, TypeVar
 
 import pytest
 from agent.memory_manager import MemoryManager
 
-from better_hermes_hindsight.client import HINDSIGHT_SDK_VERSION
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.outbox import OutboxOpenError, OutboxRow, SQLiteOutbox
 from better_hermes_hindsight.provider import BetterHindsightMemoryProvider
@@ -143,7 +141,6 @@ def _assert_pinned_release_identity() -> None:
     source = inspect.getsourcefile(MemoryManager)
     assert source is not None
     assert Path(source).resolve() == selected_distribution_file(release, "agent/memory_manager.py")
-    assert metadata.version("hindsight-client") == HINDSIGHT_SDK_VERSION
 
 
 def _isolate_environment(

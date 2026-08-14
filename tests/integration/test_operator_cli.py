@@ -178,13 +178,8 @@ no_client_modes = {
     "status_uninitialized",
 }
 if mode in no_client_modes:
-    import hindsight_client
-
     client_module.create_hindsight_client = forbidden(
         "local/import/help CLI path constructed a Hindsight client"
-    )
-    hindsight_client.Hindsight = forbidden(
-        "local/import/help CLI path constructed the pinned SDK client"
     )
 
 if mode in config_forbidden_modes:
@@ -205,55 +200,42 @@ def guarded_thread_start(thread):
 
 threading.Thread.start = guarded_thread_start
 
-sdk_instances = []
-sdk_modes = {"apply_verified", "check_equal"}
+client_instances = []
+client_modes = {"apply_verified", "check_equal"}
 
-if mode in sdk_modes:
-    import hindsight_client
-    from hindsight_client_api.models.bank_config_response import BankConfigResponse
-
-    class FakeBanks:
-        def __init__(self):
+if mode in client_modes:
+    class FakeTransport:
+        def __init__(self, **kwargs):
+            assert kwargs["base_url"] == "http://127.0.0.1:9"
+            assert kwargs["api_key"] == "synthetic-operator-cli-api-key"
             retain_value = desired_retain if mode == "check_equal" else "remote retain mission"
             self.state = {
                 "observations_mission": desired_observations,
                 "retain_mission": retain_value,
             }
             self.calls = []
+            self.close_calls = 0
+            client_instances.append(self)
 
         def response(self):
-            return BankConfigResponse(
-                bank_id=fixture_bank_id,
-                config=dict(self.state),
-                overrides={},
-            )
+            return {"bank_id": fixture_bank_id, "config": dict(self.state), "overrides": {}}
 
-        async def get_bank_config(self, **kwargs):
-            assert kwargs == {"bank_id": fixture_bank_id}
-            self.calls.append("get")
-            return self.response()
-
-        async def update_bank_config(self, **kwargs):
-            assert kwargs["bank_id"] == fixture_bank_id
-            request = kwargs["bank_config_update"]
-            updates = request.updates
-            assert type(updates) is dict
+        async def request(self, method, path, *, json_body=None):
+            assert path == f"/v1/default/banks/{fixture_bank_id}/config"
+            if method == "GET":
+                self.calls.append("get")
+                return self.response()
+            assert method == "PATCH"
+            assert type(json_body) is dict
+            assert type(json_body["updates"]) is dict
             self.calls.append("patch")
-            self.state.update(updates)
+            self.state.update(json_body["updates"])
             return self.response()
 
-    class FakeHindsight:
-        def __init__(self, **kwargs):
-            assert kwargs["base_url"] == "http://127.0.0.1:9"
-            assert kwargs["api_key"] == "synthetic-operator-cli-api-key"
-            self.banks = FakeBanks()
-            self.close_calls = 0
-            sdk_instances.append(self)
-
-        async def aclose(self):
+        async def close(self):
             self.close_calls += 1
 
-    hindsight_client.Hindsight = FakeHindsight
+    client_module._AiohttpJsonTransport = FakeTransport
 
 caught = None
 try:
@@ -276,13 +258,13 @@ expected_calls = {
     "check_equal": ["get"],
 }
 if mode in expected_calls:
-    assert len(sdk_instances) == 1
-    assert sdk_instances[0].banks.calls == expected_calls[mode]
-    assert sdk_instances[0].close_calls == 1
+    assert len(client_instances) == 1
+    assert client_instances[0].calls == expected_calls[mode]
+    assert client_instances[0].close_calls == 1
 else:
-    assert sdk_instances == []
+    assert client_instances == []
 
-if mode in sdk_modes:
+if mode in client_modes:
     assert started_threads == ["better-hindsight-event-loop"]
     assert not any(
         thread.name.startswith("better-hindsight-") and thread.is_alive()

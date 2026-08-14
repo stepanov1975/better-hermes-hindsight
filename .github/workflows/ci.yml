@@ -47,14 +47,13 @@ jobs:
         run: |
           uv sync --frozen --extra dev
           uv pip install --python .venv/bin/python -e .compat/hermes-current
-          uv pip install --python .venv/bin/python 'hindsight-client==0.8.5'
           uv pip check --python .venv/bin/python
 
       - name: Record tested source identities
         run: |
           echo "Better $(git rev-parse HEAD)"
           echo "Hermes $(git -C .compat/hermes-current rev-parse HEAD)"
-          .venv/bin/python -c 'from importlib.metadata import version; print("Hermes package", version("hermes-agent")); print("Hindsight client", version("hindsight-client"))'
+          .venv/bin/python -c 'from importlib.metadata import version; print("Hermes package", version("hermes-agent")); print("aiohttp", version("aiohttp"))'
 
       - name: Validate
         run: |

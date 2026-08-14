@@ -91,11 +91,9 @@ import better_hermes_hindsight.client as client_module
 import better_hermes_hindsight.config as config_module
 import better_hermes_hindsight.outbox as outbox_module
 import better_hermes_hindsight.runtime as runtime_module
-import hindsight_client
 
 config_module.load_config = forbidden("released discovery validated provider configuration")
 client_module.create_hindsight_client = forbidden("released discovery constructed a client")
-hindsight_client.Hindsight = forbidden("released discovery constructed the pinned SDK client")
 runtime_module.acquire_process_runtime = forbidden("released discovery acquired a runtime")
 runtime_module.OutboxSender.start = forbidden("released discovery started a sender")
 outbox_module.SQLiteOutbox.open = classmethod(

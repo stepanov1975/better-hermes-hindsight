@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install one verified Better Hindsight release into a dedicated Hermes interpreter."""
+"""Install one verified Better Hindsight release into a selected Hermes interpreter."""
 
 from __future__ import annotations
 
@@ -147,7 +147,7 @@ def _verify_install(
         f'#!/bin/sh\nexec {shlex.quote(str(hermes))} -p {shlex.quote(profile)} "$@"\n'
     )
     if launcher.read_text(encoding="utf-8") != expected_launcher:
-        raise RuntimeError("generated launcher does not match the dedicated interpreter")
+        raise RuntimeError("generated launcher does not match the selected interpreter")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -171,7 +171,7 @@ def main(argv: list[str] | None = None) -> int:
     launcher = (args.launcher or (_user_home() / ".local/bin" / args.profile)).resolve()
     uv = _find_uv()
     if uv is None or not python.is_file() or not hermes.is_file():
-        parser.error("uv, the dedicated Python, and its sibling hermes launcher are required")
+        parser.error("uv, the selected Python, and its sibling hermes launcher are required")
 
     version, commit = _source_identity(source_dir)
     expected_wheel = f"better_hermes_hindsight-{version}-py3-none-any.whl"

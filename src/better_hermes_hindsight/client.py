@@ -1,41 +1,65 @@
-"""Narrow public adapter for ``hindsight-client==0.8.5``.
-
-The SDK is imported lazily when a concrete client is created. Importing this module and checking
-availability do not construct a client, contact a service, or install anything.
-"""
+"""Narrow asynchronous HTTP client for the Hindsight 0.8.5 server API."""
 
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from importlib import metadata
 from typing import Protocol, TypeVar, cast
+from urllib.parse import quote
+
+import aiohttp
 
 from better_hermes_hindsight import __version__
 from better_hermes_hindsight.config import BetterHindsightConfig, ObservationScopes, RecallConfig
 
-HINDSIGHT_DISTRIBUTION = "hindsight-client"
-HINDSIGHT_SDK_VERSION = "0.8.5"
 HINDSIGHT_REQUEST_TIMEOUT_SECONDS = 300.0
+HINDSIGHT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 MISSION_UPDATE_FIELDS = frozenset({"retain_mission", "observations_mission"})
 
 
-class HindsightClientError(RuntimeError):
-    """A fixed, sanitized failure at the Hindsight adapter boundary."""
+@dataclass(frozen=True, slots=True)
+class RecallScores:
+    """Strictly decoded ranking scores used by recall formatting."""
 
-    def __init__(self, category: str, message: str) -> None:
-        self.category = category
-        super().__init__(message)
+    final: float | int
+    reranker: float | int | None = None
+    semantic: float | int | None = None
+    keyword: float | int | None = None
 
 
-class MissionUpdateError(ValueError):
-    """A mission update attempted to use unsupported bank configuration surface."""
+@dataclass(frozen=True, slots=True)
+class RecallResult:
+    """Allowlisted Hindsight recall result fields used by the provider."""
+
+    id: str
+    text: str
+    type: str | None = None
+    entities: list[str] | None = None
+    context: str | None = None
+    occurred_start: str | None = None
+    occurred_end: str | None = None
+    mentioned_at: str | None = None
+    document_id: str | None = None
+    metadata: dict[str, str] | None = None
+    chunk_id: str | None = None
+    tags: list[str] | None = None
+    source_fact_ids: list[str] | None = None
+    scores: RecallScores | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RecallResponse:
+    """Narrow decoded recall response consumed by provider and formatter code."""
+
+    results: list[RecallResult]
+    source_facts: dict[str, RecallResult] | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class RetainSegment:
-    """One immutable retained source segment with its stable document identity."""
+    """One immutable outbox segment ready for Hindsight delivery."""
 
     content: str
     document_id: str
@@ -47,14 +71,14 @@ class RetainSegment:
 
 @dataclass(frozen=True, slots=True)
 class RetainConfirmation:
-    """Sanitized typed result of exact synchronous retain-response validation."""
+    """Typed proof that one synchronous retain response was confirmed."""
 
     confirmed: bool
 
 
 @dataclass(frozen=True, slots=True)
 class MissionValue:
-    """One exact remote mission value without value-bearing representation."""
+    """Presence-preserving mission value from the bank config."""
 
     present: bool
     value: str | None = field(repr=False)
@@ -62,132 +86,153 @@ class MissionValue:
 
 @dataclass(frozen=True, slots=True)
 class MissionSnapshot:
-    """Validated allowlisted mission values from resolved bank configuration."""
+    """Allowlisted bank mission fields used for exact operator readback."""
 
     retain_mission: MissionValue
     observations_mission: MissionValue
 
 
+class HindsightClientError(RuntimeError):
+    """Sanitized fixed-category client failure safe for logs and operator output."""
+
+    __slots__ = ("category",)
+
+    def __init__(self, category: str, message: str) -> None:
+        super().__init__(message)
+        self.category = category
+
+
+class MissionUpdateError(ValueError):
+    """Raised before transport when a mission update violates the narrow policy."""
+
+
 class HindsightClientProtocol(Protocol):
-    """The complete Hindsight surface used by the shared process runtime."""
+    """Complete Hindsight surface used by the shared process runtime."""
 
-    async def recall(self, query: str) -> object:
-        """Recall against the configured bank."""
+    async def recall(self, query: str) -> object: ...
 
-    async def retain_segment(self, segment: RetainSegment) -> RetainConfirmation:
-        """Synchronously confirm one replace-mode retained segment."""
-        ...
+    async def retain_segment(self, segment: RetainSegment) -> RetainConfirmation: ...
 
-    async def get_bank_config(self) -> object:
-        """Read the configured bank configuration."""
+    async def get_bank_config(self) -> object: ...
 
-    async def update_bank_missions(self, updates: Mapping[str, str]) -> None:
-        """Update only allowlisted retain and observations mission fields."""
+    async def update_bank_missions(self, updates: Mapping[str, str]) -> None: ...
 
-    async def close(self) -> None:
-        """Close the client on its owning event loop."""
+    async def close(self) -> None: ...
 
 
 class MissionClientProtocol(Protocol):
-    """The exact typed mission surface used only by explicit management commands."""
+    """Exact typed mission surface used by explicit management commands."""
 
     async def get_bank_config(self) -> MissionSnapshot: ...
 
     async def update_bank_missions(self, updates: Mapping[str, str]) -> None: ...
 
 
-class HindsightSdkFactory(Protocol):
-    """Constructor shape of the pinned public Hindsight SDK client."""
+class JsonTransportProtocol(Protocol):
+    """Internal JSON transport boundary used by the adapter and deterministic tests."""
+
+    async def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: Mapping[str, object] | None = None,
+    ) -> object: ...
+
+    async def close(self) -> None: ...
+
+
+class JsonTransportFactory(Protocol):
+    """Constructor shape for the internal JSON transport."""
 
     def __call__(
         self,
         *,
         base_url: str,
-        api_key: str | None = None,
-        timeout: float = HINDSIGHT_REQUEST_TIMEOUT_SECONDS,
-        user_agent: str | None = None,
-    ) -> object: ...
+        api_key: str | None,
+        timeout: float,
+        user_agent: str,
+    ) -> JsonTransportProtocol: ...
 
 
-class _BanksApiProtocol(Protocol):
-    async def get_bank_config(self, **kwargs: object) -> object: ...
+class _AiohttpJsonTransport:
+    """One bounded, no-redirect aiohttp session for JSON requests."""
 
-    async def update_bank_config(self, **kwargs: object) -> object: ...
+    __slots__ = ("_base_url", "_session")
 
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str | None,
+        timeout: float,
+        user_agent: str,
+    ) -> None:
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": user_agent,
+        }
+        if api_key is not None:
+            headers["Authorization"] = f"Bearer {api_key}"
+        self._base_url = base_url.rstrip("/")
+        self._session = aiohttp.ClientSession(
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=timeout),
+            trust_env=False,
+        )
 
-class _HindsightSdkProtocol(Protocol):
-    banks: _BanksApiProtocol
+    def __repr__(self) -> str:
+        return "_AiohttpJsonTransport()"
 
-    async def arecall(self, **kwargs: object) -> object: ...
+    async def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: Mapping[str, object] | None = None,
+    ) -> object:
+        async with self._session.request(
+            method,
+            f"{self._base_url}{path}",
+            json=json_body,
+            allow_redirects=False,
+        ) as response:
+            if response.status != 200:
+                response.close()
+                raise RuntimeError("Hindsight returned an unexpected status.")
+            media_type = response.headers.get("Content-Type", "").partition(";")[0].strip().lower()
+            if media_type != "application/json" and not media_type.endswith("+json"):
+                response.close()
+                raise RuntimeError("Hindsight returned a non-JSON response.")
+            body = bytearray()
+            async for chunk in response.content.iter_chunked(64 * 1024):
+                body.extend(chunk)
+                if len(body) > HINDSIGHT_MAX_RESPONSE_BYTES:
+                    response.close()
+                    raise RuntimeError("Hindsight response exceeded the size limit.")
+            return cast(object, json.loads(body))
 
-    async def aretain_batch(self, **kwargs: object) -> object: ...
-
-    async def aclose(self) -> None: ...
-
-
-_T = TypeVar("_T")
-
-_CLIENT_FAILURES: dict[str, tuple[str, str]] = {
-    "recall": ("recall_failed", "Better Hindsight recall failed."),
-    "retain": ("retain_failed", "Better Hindsight retain failed."),
-    "bank_config": (
-        "bank_config_failed",
-        "Better Hindsight bank configuration read failed.",
-    ),
-    "mission_update": (
-        "mission_update_failed",
-        "Better Hindsight mission update failed.",
-    ),
-    "client_close": (
-        "client_close_failed",
-        "Better Hindsight client close failed.",
-    ),
-}
+    async def close(self) -> None:
+        await self._session.close()
 
 
 def is_available() -> bool:
-    """Return whether the exact pinned SDK is importable without creating a client."""
+    """Return whether the installed runtime dependency is importable."""
 
-    try:
-        if metadata.version(HINDSIGHT_DISTRIBUTION) != HINDSIGHT_SDK_VERSION:
-            return False
-        from hindsight_client import Hindsight
-        from hindsight_client_api.models.bank_config_response import BankConfigResponse
-        from hindsight_client_api.models.bank_config_update import BankConfigUpdate
-    except Exception:
-        return False
-    return Hindsight is not None and BankConfigResponse is not None and BankConfigUpdate is not None
+    return True
 
 
 def create_hindsight_client(
     config: BetterHindsightConfig,
     *,
-    sdk_factory: HindsightSdkFactory | None = None,
+    transport_factory: JsonTransportFactory | None = None,
 ) -> HindsightClientAdapter:
-    """Construct the one concrete SDK client used by a process runtime.
+    """Construct the process runtime's narrow Hindsight HTTP client on its owning event loop."""
 
-    The caller must invoke this function on the runtime's owning event loop. The SDK constructor is
-    local-only; bank reads remain explicit adapter operations.
-    """
-
-    factory = sdk_factory
-    if factory is None:
-        if not is_available():
-            raise HindsightClientError(
-                "sdk_unavailable",
-                "Better Hindsight requires hindsight-client==0.8.5.",
-            )
-        try:
-            from hindsight_client import Hindsight
-        except Exception:
-            raise HindsightClientError(
-                "sdk_unavailable",
-                "Better Hindsight requires hindsight-client==0.8.5.",
-            ) from None
-        factory = cast(HindsightSdkFactory, Hindsight)
-
+    factory = transport_factory or _AiohttpJsonTransport
     try:
-        sdk_client = factory(
+        transport = factory(
             base_url=config.api_url,
             api_key=config.api_key,
             timeout=HINDSIGHT_REQUEST_TIMEOUT_SECONDS,
@@ -200,207 +245,348 @@ def create_hindsight_client(
             "client_initialization_failed",
             "Better Hindsight client initialization failed.",
         ) from None
-
-    return HindsightClientAdapter(config=config, sdk_client=sdk_client)
+    return HindsightClientAdapter(config=config, transport=transport)
 
 
 class HindsightClientAdapter:
-    """Adapter exposing only the audited public Hindsight 0.8.5 operations."""
+    """Narrow provider adapter over one internal JSON transport."""
 
-    _retain_scopes: ObservationScopes
+    __slots__ = (
+        "_bank_id",
+        "_bank_path",
+        "_recall_config",
+        "_retain_scopes",
+        "_retain_tags",
+        "_transport",
+    )
 
-    __slots__ = ("_bank_id", "_recall_config", "_retain_scopes", "_retain_tags", "_sdk")
-
-    def __init__(self, *, config: BetterHindsightConfig, sdk_client: object) -> None:
+    def __init__(self, *, config: BetterHindsightConfig, transport: JsonTransportProtocol) -> None:
         self._bank_id = config.bank_id
+        self._bank_path = f"/v1/default/banks/{quote(config.bank_id, safe='')}"
         self._recall_config = config.recall
         self._retain_scopes = config.retain.observation_scopes
         self._retain_tags = config.retain.tags
-        self._sdk = cast(_HindsightSdkProtocol, sdk_client)
+        self._transport = transport
 
     def __repr__(self) -> str:
         return "HindsightClientAdapter()"
 
-    async def recall(self, query: str) -> object:
-        """Call public ``arecall`` with only explicitly configured optional controls.
+    async def recall(self, query: str) -> RecallResponse:
+        """Recall current-query memories with the exact established 0.8.5 request defaults."""
 
-        Omission is guaranteed at this adapter boundary. Hindsight 0.8.5's public method applies
-        and serializes some SDK defaults after this call; the fake HTTP contract test owns that
-        wire behavior.
-        """
-
-        kwargs = _build_recall_kwargs(self._recall_config)
-        return await _mapped_call(
+        payload = _recall_body(query, self._recall_config)
+        response = await _mapped_call(
             "recall",
-            lambda: self._sdk.arecall(bank_id=self._bank_id, query=query, **kwargs),
+            lambda: self._transport.request(
+                "POST",
+                f"{self._bank_path}/memories/recall",
+                json_body=payload,
+            ),
         )
+        try:
+            return _decode_recall_response(response)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            raise HindsightClientError(
+                "recall_failed",
+                "Better Hindsight recall failed.",
+            ) from None
 
     async def retain_segment(self, segment: RetainSegment) -> RetainConfirmation:
-        """Retain exactly one stable, replace-mode segment with synchronous confirmation."""
+        """Synchronously retain one stable replace-mode segment and validate confirmation."""
 
         item: dict[str, object] = {
             "content": segment.content,
-            "document_id": segment.document_id,
+            "timestamp": None,
+            "context": None,
             "metadata": {
                 "better_hindsight_payload_schema": segment.payload_schema,
                 "better_hindsight_segment_count": str(segment.segment_count),
                 "better_hindsight_segment_index": str(segment.segment_index),
                 "better_hindsight_source_sha256": segment.source_sha256,
             },
-            "update_mode": "replace",
+            "document_id": segment.document_id,
+            "entities": None,
             "tags": list(self._retain_tags),
+            "observation_scopes": _observation_scopes_wire(self._retain_scopes),
+            "strategy": None,
+            "update_mode": "replace",
         }
-        encoded_scopes = _encode_observation_scopes(self._retain_scopes)
-        if encoded_scopes is not None:
-            item["observation_scopes"] = encoded_scopes
-
-        async def retain() -> RetainConfirmation:
-            response = await self._sdk.aretain_batch(
-                bank_id=self._bank_id,
-                items=[item],
-                retain_async=False,
-            )
-            return _retain_confirmation(response, expected_bank_id=self._bank_id)
-
-        return await _mapped_call(
+        response = await _mapped_call(
             "retain",
-            retain,
+            lambda: self._transport.request(
+                "POST",
+                f"{self._bank_path}/memories",
+                json_body={"items": [item], "async": False, "document_tags": None},
+            ),
+        )
+        try:
+            payload = _exact_dict(response)
+            success = _required_exact(payload, "success", bool)
+            bank_id = _required_exact(payload, "bank_id", str)
+            items_count = _required_exact(payload, "items_count", int)
+            asynchronous = _required_exact(payload, "async", bool)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            raise HindsightClientError(
+                "retain_failed",
+                "Better Hindsight retain failed.",
+            ) from None
+        return RetainConfirmation(
+            confirmed=(
+                success is True
+                and bank_id == self._bank_id
+                and items_count == 1
+                and asynchronous is False
+            )
         )
 
     async def get_bank_config(self) -> MissionSnapshot:
-        """Read and exactly validate missions through the SDK's public async banks API."""
+        """Read and exactly validate allowlisted mission values."""
 
-        async def get() -> MissionSnapshot:
-            response = await self._sdk.banks.get_bank_config(bank_id=self._bank_id)
-            return _mission_snapshot(response, expected_bank_id=self._bank_id)
-
-        return await _mapped_call(
-            "bank_config",
-            get,
+        response = await _mapped_call(
+            "mission_read",
+            lambda: self._transport.request("GET", f"{self._bank_path}/config"),
         )
+        try:
+            _, bank_id, config = _validate_bank_config_response_shape(response)
+            if bank_id != self._bank_id:
+                raise TypeError
+            return MissionSnapshot(
+                retain_mission=_mission_value(config, "retain_mission"),
+                observations_mission=_mission_value(config, "observations_mission"),
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            raise HindsightClientError(
+                "bank_config_failed",
+                "Better Hindsight bank configuration read failed.",
+            ) from None
 
     async def update_bank_missions(self, updates: Mapping[str, str]) -> None:
-        """Apply only configured retain and observations mission changes.
+        """Patch only non-empty allowlisted mission fields; exact readback remains caller-owned."""
 
-        The PATCH response is intentionally ignored. Operator success depends on a separate,
-        exact GET readback of the configured missions.
-        """
-
-        copied_updates = dict(updates)
-        if (
-            not copied_updates
-            or not set(copied_updates).issubset(MISSION_UPDATE_FIELDS)
-            or any(
-                not isinstance(value, str) or not value.strip() for value in copied_updates.values()
-            )
-        ):
-            raise MissionUpdateError(
-                "Better Hindsight only retain and observations mission updates are supported; "
-                "each update must be a configured non-empty mission."
-            )
-
-        async def update() -> None:
-            from hindsight_client_api.models.bank_config_update import BankConfigUpdate
-
-            request = BankConfigUpdate(updates=copied_updates)
-            await self._sdk.banks.update_bank_config(
-                bank_id=self._bank_id,
-                bank_config_update=request,
-            )
-
-        await _mapped_call("mission_update", update)
+        copied = _validate_mission_updates(updates)
+        response = await _mapped_call(
+            "mission_update",
+            lambda: self._transport.request(
+                "PATCH",
+                f"{self._bank_path}/config",
+                json_body={"updates": copied},
+            ),
+        )
+        try:
+            _validate_bank_config_response_shape(response)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            raise HindsightClientError(
+                "mission_update_failed",
+                "Better Hindsight mission update failed.",
+            ) from None
 
     async def close(self) -> None:
-        """Close the public SDK client on the caller's event loop."""
+        """Close the owned transport on the caller's event loop."""
 
-        await _mapped_call("client_close", self._sdk.aclose)
+        await _mapped_call("client_close", self._transport.close)
 
 
-def _build_recall_kwargs(config: RecallConfig) -> dict[str, object]:
-    kwargs: dict[str, object] = {}
-    if config.budget is not None:
-        kwargs["budget"] = config.budget
-    if config.max_tokens is not None:
-        kwargs["max_tokens"] = config.max_tokens
-    if config.types is not None:
-        kwargs["types"] = list(config.types)
-    if config.tags is not None:
-        kwargs["tags"] = list(config.tags)
-    if config.tag_mode is not None:
-        kwargs["tags_match"] = config.tag_mode
-    if config.prefer_observations is not None:
-        kwargs["prefer_observations"] = config.prefer_observations
+def _recall_body(query: str, config: RecallConfig) -> dict[str, object]:
+    source_facts: dict[str, object] | None = None
+    if config.include_source_facts:
+        source_facts = {
+            "max_tokens": config.max_source_facts_tokens or 4096,
+            "max_tokens_per_observation": -1,
+        }
+    min_scores: dict[str, object] | None = None
     if config.min_scores is not None:
-        kwargs["min_scores"] = config.min_scores.as_dict()
-    if config.include_source_facts is not None:
-        kwargs["include_source_facts"] = config.include_source_facts
-    if config.max_source_facts_tokens is not None:
-        kwargs["max_source_facts_tokens"] = config.max_source_facts_tokens
-    return kwargs
+        scores = config.min_scores.as_dict()
+        min_scores = {
+            "semantic": scores.get("semantic"),
+            "keyword": scores.get("keyword"),
+            "reranker": scores.get("reranker"),
+            "final": scores.get("final"),
+        }
+    return {
+        "query": query,
+        "types": list(config.types) if config.types is not None else None,
+        "prefer_observations": config.prefer_observations or False,
+        "budget": config.budget or "mid",
+        "max_tokens": config.max_tokens or 4096,
+        "trace": False,
+        "query_timestamp": None,
+        "include": {"entities": None, "chunks": None, "source_facts": source_facts},
+        "tags": list(config.tags) if config.tags is not None else None,
+        "tags_match": config.tag_mode or "any",
+        "tag_groups": None,
+        "min_scores": min_scores,
+    }
 
 
-def _encode_observation_scopes(scopes: ObservationScopes) -> object | None:
-    if scopes is None or scopes == "combined":
+def _decode_recall_response(value: object) -> RecallResponse:
+    payload = _exact_dict(value)
+    raw_results = _required_exact(payload, "results", list)
+    results = [_decode_recall_result(item) for item in raw_results]
+    raw_source_facts = payload.get("source_facts")
+    source_facts: dict[str, RecallResult] | None
+    if raw_source_facts is None:
+        source_facts = None
+    else:
+        facts = _exact_dict(raw_source_facts)
+        source_facts = {}
+        for key, item in facts.items():
+            if type(key) is not str:
+                raise TypeError
+            source_facts[key] = _decode_recall_result(item)
+    return RecallResponse(results=results, source_facts=source_facts)
+
+
+def _decode_recall_result(value: object) -> RecallResult:
+    payload = _exact_dict(value)
+    return RecallResult(
+        id=_required_exact(payload, "id", str),
+        text=_required_exact(payload, "text", str),
+        type=_optional_exact(payload, "type", str),
+        entities=_optional_string_list(payload, "entities"),
+        context=_optional_exact(payload, "context", str),
+        occurred_start=_optional_exact(payload, "occurred_start", str),
+        occurred_end=_optional_exact(payload, "occurred_end", str),
+        mentioned_at=_optional_exact(payload, "mentioned_at", str),
+        document_id=_optional_exact(payload, "document_id", str),
+        metadata=_optional_string_dict(payload, "metadata"),
+        chunk_id=_optional_exact(payload, "chunk_id", str),
+        tags=_optional_string_list(payload, "tags"),
+        source_fact_ids=_optional_string_list(payload, "source_fact_ids"),
+        scores=_optional_scores(payload.get("scores")),
+    )
+
+
+def _optional_scores(value: object) -> RecallScores | None:
+    if value is None:
+        return None
+    payload = _exact_dict(value)
+    return RecallScores(
+        final=_required_number(payload, "final"),
+        reranker=_optional_number(payload, "reranker"),
+        semantic=_optional_number(payload, "semantic"),
+        keyword=_optional_number(payload, "keyword"),
+    )
+
+
+def _exact_dict(value: object) -> dict[object, object]:
+    if type(value) is not dict:
+        raise TypeError
+    return cast(dict[object, object], value)
+
+
+T = TypeVar("T")
+
+
+def _required_exact(payload: Mapping[object, object], key: str, kind: type[T]) -> T:
+    value = payload[key]
+    if type(value) is not kind:
+        raise TypeError
+    return value
+
+
+def _optional_exact(payload: Mapping[object, object], key: str, kind: type[T]) -> T | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if type(value) is not kind:
+        raise TypeError
+    return value
+
+
+def _required_number(payload: Mapping[object, object], key: str) -> float | int:
+    value = payload[key]
+    if type(value) not in (float, int):
+        raise TypeError
+    return cast(float | int, value)
+
+
+def _optional_number(payload: Mapping[object, object], key: str) -> float | int | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if type(value) not in (float, int):
+        raise TypeError
+    return cast(float | int, value)
+
+
+def _optional_string_list(payload: Mapping[object, object], key: str) -> list[str] | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if type(value) is not list or any(type(item) is not str for item in value):
+        raise TypeError
+    return cast(list[str], value)
+
+
+def _optional_string_dict(payload: Mapping[object, object], key: str) -> dict[str, str] | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    if type(value) is not dict or any(
+        type(item_key) is not str or type(item_value) is not str
+        for item_key, item_value in value.items()
+    ):
+        raise TypeError
+    return cast(dict[str, str], value)
+
+
+def _mission_value(config: Mapping[object, object], field: str) -> MissionValue:
+    if field not in config:
+        return MissionValue(present=False, value=None)
+    value = config[field]
+    if value is not None and type(value) is not str:
+        raise TypeError
+    return MissionValue(present=True, value=value)
+
+
+def _validate_bank_config_response_shape(
+    payload: object,
+) -> tuple[dict[object, object], str, dict[object, object]]:
+    """Validate required BankConfigResponse fields formerly checked by the SDK."""
+
+    mapping = _exact_dict(payload)
+    bank_id = _required_exact(mapping, "bank_id", str)
+    config = _required_exact(mapping, "config", dict)
+    _required_exact(mapping, "overrides", dict)
+    return mapping, bank_id, config
+
+
+def _validate_mission_updates(updates: Mapping[str, str]) -> dict[str, str]:
+    if type(updates) is not dict or not updates or not set(updates).issubset(MISSION_UPDATE_FIELDS):
+        raise MissionUpdateError("Mission updates must contain only allowlisted changed fields.")
+    copied: dict[str, str] = {}
+    for mission_field, value in updates.items():
+        if type(mission_field) is not str or type(value) is not str or not value.strip():
+            raise MissionUpdateError("Mission updates require non-empty string values.")
+        copied[mission_field] = value
+    return copied
+
+
+def _observation_scopes_wire(scopes: ObservationScopes) -> str | list[list[str]] | None:
+    if scopes is None or isinstance(scopes, str):
         return scopes
     return [list(scope) for scope in scopes]
 
 
-def _retain_confirmation(response: object, *, expected_bank_id: str) -> RetainConfirmation:
-    missing = object()
-    success = getattr(response, "success", missing)
-    bank_id = getattr(response, "bank_id", missing)
-    items_count = getattr(response, "items_count", missing)
-    var_async = getattr(response, "var_async", missing)
-    if any(value is missing for value in (success, bank_id, items_count, var_async)):
-        raise ValueError("malformed retain response")
-    return RetainConfirmation(
-        confirmed=(
-            type(success) is bool
-            and success is True
-            and type(bank_id) is str
-            and bank_id == expected_bank_id
-            and type(items_count) is int
-            and items_count == 1
-            and type(var_async) is bool
-            and var_async is False
-        )
-    )
-
-
-def _mission_snapshot(
-    response: object,
-    *,
-    expected_bank_id: str,
-) -> MissionSnapshot:
-    from hindsight_client_api.models.bank_config_response import BankConfigResponse
-
-    if type(response) is not BankConfigResponse:
-        raise ValueError("malformed bank configuration response")
-    bank_id = response.bank_id
-    config = response.config
-    if type(bank_id) is not str or bank_id != expected_bank_id or type(config) is not dict:
-        raise ValueError("malformed bank configuration response")
-    mission_config = cast(dict[str, object], config)
-    snapshot = MissionSnapshot(
-        retain_mission=_mission_value(mission_config, "retain_mission"),
-        observations_mission=_mission_value(mission_config, "observations_mission"),
-    )
-    return snapshot
-
-
-def _mission_value(config: dict[str, object], name: str) -> MissionValue:
-    if name not in config:
-        return MissionValue(present=False, value=None)
-    value = config[name]
-    if value is None:
-        return MissionValue(present=True, value=None)
-    if type(value) is not str:
-        raise ValueError("malformed bank configuration response")
-    return MissionValue(present=True, value=value)
-
-
-async def _mapped_call(operation: str, call: Callable[[], Awaitable[_T]]) -> _T:
-    category, message = _CLIENT_FAILURES[operation]
+async def _mapped_call(operation: str, call: Callable[[], Awaitable[T]]) -> T:
+    category, message = {
+        "recall": ("recall_failed", "Better Hindsight recall failed."),
+        "retain": ("retain_failed", "Better Hindsight retain failed."),
+        "mission_read": (
+            "bank_config_failed",
+            "Better Hindsight bank configuration read failed.",
+        ),
+        "mission_update": ("mission_update_failed", "Better Hindsight mission update failed."),
+        "client_close": ("client_close_failed", "Better Hindsight client close failed."),
+    }[operation]
     try:
         return await call()
     except asyncio.CancelledError:
@@ -410,16 +596,19 @@ async def _mapped_call(operation: str, call: Callable[[], Awaitable[_T]]) -> _T:
 
 
 __all__ = [
-    "HINDSIGHT_DISTRIBUTION",
-    "HINDSIGHT_SDK_VERSION",
+    "HINDSIGHT_REQUEST_TIMEOUT_SECONDS",
     "HindsightClientAdapter",
     "HindsightClientError",
     "HindsightClientProtocol",
-    "MISSION_UPDATE_FIELDS",
+    "JsonTransportFactory",
+    "JsonTransportProtocol",
     "MissionClientProtocol",
     "MissionSnapshot",
     "MissionUpdateError",
     "MissionValue",
+    "RecallResponse",
+    "RecallResult",
+    "RecallScores",
     "RetainConfirmation",
     "RetainSegment",
     "create_hindsight_client",

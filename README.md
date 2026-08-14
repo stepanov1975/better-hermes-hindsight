@@ -35,24 +35,24 @@ Retries use a stable document ID and `update_mode="replace"`. A timed-out write 
 - Linux/POSIX;
 - the current intended Hermes checkout;
 - Python supported by that checkout (the maintained development lane uses Python 3.13);
-- external Hindsight server and `hindsight-client==0.8.5`;
-- a dedicated Hermes interpreter/profile when bundled Hindsight's incompatible SDK must remain available elsewhere; and
+- an external Hindsight 0.8.5 server;
+- `aiohttp>=3.14.1,<4`, which is compatible with the current Hermes messaging environment; and
 - `uv` for installation and development.
 
 Compatibility is behavioral rather than release-matrix based. Validation records the tested Hermes commit, but another commit is not rejected solely because its identity changed.
 
 ## Installation
 
-Install a tagged GitHub prerelease with its checksum-verified wheel and dedicated-interpreter
-installer. The installer creates or updates the isolated profile, installs the exact plugin
+Install a tagged GitHub prerelease with its checksum-verified wheel into the existing Hermes
+interpreter. The installer creates or updates the selected profile, installs the exact plugin
 bridge, selects `better_hindsight`, and writes an interpreter-bound launcher. It never
 creates a bank, stores a credential, enables retention, starts a gateway, or schedules a
 canary/watchdog.
 
-Current Hermes intentionally refuses wheel/sdist installation, so the dedicated interpreter
-links the official installer-managed Hermes source using Hermes's supported editable
-development mechanism. Better Hindsight itself is installed non-editably from the verified
-release wheel.
+Better's internal HTTP adapter does not import the Hindsight Python SDK, so Hermes's bundled
+`hindsight-client==0.6.1` can remain installed for the bundled provider. The published
+`v0.1.0a3` release predates this change and still requires its documented isolated interpreter;
+use the shared-interpreter procedure only with a newer release containing the internal client.
 
 See the exact commands in [installation](docs/installation.md), then configure the endpoint,
 bank, principal, and credential for that profile. Leave retention disabled until recall and
@@ -98,7 +98,7 @@ See [implementation status](IMPLEMENTATION.md), [design](DESIGN.md), and [contri
 
 ## Safety
 
-Never commit endpoints, credentials, private bank names, principal identifiers, raw memories, transcripts, databases, logs, or local runtime state. Live writes require explicit opt-in and the existing isolated Hindsight environment with synthetic content.
+Never commit endpoints, credentials, private bank names, principal identifiers, raw memories, transcripts, databases, logs, or local runtime state. Live writes require explicit opt-in and an isolated Hindsight service/bank with synthetic content.
 
 ## License
 

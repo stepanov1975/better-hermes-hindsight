@@ -1,4 +1,4 @@
-"""Loopback HTTP contract tests against the real pinned Hindsight 0.8.5 client."""
+"""Loopback HTTP contracts for the SDK-free Hindsight 0.8.5 adapter."""
 
 from __future__ import annotations
 
@@ -11,20 +11,17 @@ import socket
 import traceback
 from collections.abc import Awaitable, Callable, Iterator
 from pathlib import Path
-from typing import Protocol, cast
+from typing import cast
 
 import pytest
-from aiohttp import ClientConnectorError, ClientError, ClientSession
-from hindsight_client import Hindsight
-from hindsight_client_api.exceptions import ServiceException
-from hindsight_client_api.models.recall_response import RecallResponse
-from pydantic import ValidationError
+from aiohttp import ClientError, ClientSession
 
 import better_hermes_hindsight.client as client_module
 from better_hermes_hindsight import __version__
 from better_hermes_hindsight.client import (
     HindsightClientAdapter,
     HindsightClientError,
+    RecallResponse,
     RetainConfirmation,
     RetainSegment,
     create_hindsight_client,
@@ -39,7 +36,6 @@ from tests.fakes.hindsight_server import (
     MissionPatchFault,
     MissionReadbackFault,
     MissionReadFault,
-    RecallFault,
     RequestRecord,
     RetainFault,
 )
@@ -47,15 +43,6 @@ from tests.fakes.hindsight_server import (
 FIXTURE_BANK_ID = "fixture-bank"
 FIXTURE_API_KEY = "fixture-api-key"
 FIXTURE_USER_AGENT = f"better-hermes-hindsight/{__version__}"
-
-
-class _AsyncClosable(Protocol):
-    async def aclose(self) -> None:
-        """Close one real generated SDK client."""
-
-
-async def _close_sdk(sdk: object) -> None:
-    await cast(_AsyncClosable, sdk).aclose()
 
 
 @pytest.fixture(autouse=True)
@@ -806,71 +793,6 @@ def test_real_adapter_maps_invalid_retain_wire_responses_to_fixed_error_then_rec
         assert runtime_sentinel not in surface
 
 
-def test_real_sdk_adapter_retain_delay_is_one_shot_recorded_and_deterministic(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-    runtime_sentinel: str,
-) -> None:
-    caplog.set_level(logging.DEBUG)
-
-    async def scenario() -> tuple[str, str]:
-        server = FakeHindsightServer(
-            bank_id=FIXTURE_BANK_ID,
-            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
-            error_sentinel=runtime_sentinel,
-            expected_api_key=None,
-        )
-        await server.start()
-        config = _config(tmp_path, base_url=server.base_url, api_key=None)
-        sdk = Hindsight(
-            base_url=server.base_url,
-            timeout=0.05,
-            user_agent=FIXTURE_USER_AGENT,
-        )
-        adapter = HindsightClientAdapter(config=config, sdk_client=sdk)
-        call: asyncio.Task[RetainConfirmation] | None = None
-        try:
-            segment = _segment()
-            server.arm_retain_fault("delay")
-            with pytest.raises(RuntimeError, match="retain fault is already armed"):
-                server.arm_retain_fault("http_503")
-
-            try:
-                call = asyncio.create_task(adapter.retain_segment(segment))
-                await server.wait_for_retain_delay_entered()
-                with pytest.raises(RuntimeError, match="delayed retain handler is still active"):
-                    server.arm_retain_fault("http_503")
-                failure = await call
-                raise AssertionError(f"retain unexpectedly succeeded: {failure!r}")
-            except HindsightClientError as failure:
-                assert failure.category == "retain_failed"
-                assert str(failure) == "Better Hindsight retain failed."
-                assert failure.__cause__ is None
-                assert failure.__suppress_context__ is True
-                error_surface = "\n".join(
-                    (repr(failure), "".join(traceback.format_exception(failure)))
-                )
-            finally:
-                await _release_retain_delay(server)
-                if call is not None and not call.done():
-                    call.cancel()
-                    await asyncio.gather(call, return_exceptions=True)
-
-            recovered = await adapter.retain_segment(segment)
-            assert recovered == RetainConfirmation(confirmed=True)
-            assert len(server.records) == 2
-            assert server.records[0].json_body == server.records[1].json_body
-            report_surface = repr(server.safe_report())
-            return error_surface, report_surface
-        finally:
-            await adapter.close()
-            await server.close()
-
-    error_surface, report_surface = asyncio.run(scenario())
-    for surface in (error_surface, report_surface, caplog.text):
-        assert runtime_sentinel not in surface
-
-
 def test_query_only_recall_freezes_sdk_defaults_nulls_and_absent_auth(
     tmp_path: Path,
     runtime_sentinel: str,
@@ -1349,102 +1271,10 @@ def test_fake_enforces_body_record_and_safe_report_bounds(
     assert runtime_sentinel not in all_output
 
 
-@pytest.mark.parametrize(
-    ("fault", "expected_type"),
-    [
-        ("malformed_json", json.JSONDecodeError),
-        ("malformed_schema", ValidationError),
-        ("http_503", ServiceException),
-    ],
-)
-def test_real_sdk_exposes_source_grounded_raw_response_failures(
-    fault: RecallFault,
-    expected_type: type[BaseException],
-    caplog: pytest.LogCaptureFixture,
+def test_adapter_rejects_oversized_response_and_next_request_succeeds(
+    tmp_path: Path,
     runtime_sentinel: str,
-) -> None:
-    caplog.set_level(logging.DEBUG)
-
-    async def scenario() -> None:
-        server = FakeHindsightServer(
-            bank_id=FIXTURE_BANK_ID,
-            disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
-            error_sentinel=runtime_sentinel,
-            expected_api_key=FIXTURE_API_KEY,
-        )
-        await server.start()
-        sdk = Hindsight(
-            base_url=server.base_url,
-            api_key=FIXTURE_API_KEY,
-            timeout=1.0,
-            user_agent=FIXTURE_USER_AGENT,
-        )
-        try:
-            server.arm_recall_fault(fault)
-            failure = await _capture_failure(
-                lambda: sdk.arecall(bank_id=FIXTURE_BANK_ID, query="fault query")
-            )
-            assert type(failure) is expected_type
-            if isinstance(failure, json.JSONDecodeError):
-                assert runtime_sentinel in failure.doc
-            elif isinstance(failure, ValidationError):
-                assert runtime_sentinel in str(failure)
-            elif isinstance(failure, ServiceException):
-                body = failure.body
-                if isinstance(body, bytes):
-                    assert runtime_sentinel.encode() in body
-                else:
-                    assert isinstance(body, str)
-                    assert runtime_sentinel in body
-
-            recovered = await sdk.arecall(
-                bank_id=FIXTURE_BANK_ID,
-                query=f"after {fault}",
-            )
-            assert recovered.results[0].text == "fixture observation"
-            assert len(server.records) == 2
-        finally:
-            await _close_sdk(sdk)
-            await server.close()
-
-    asyncio.run(scenario())
-    assert runtime_sentinel not in caplog.text
-
-
-def test_real_sdk_connection_refusal_recovers_with_same_client(
-    runtime_sentinel: str,
-) -> None:
-    async def scenario() -> None:
-        with _reserved_refusing_loopback() as (reserved_socket, base_url):
-            server = FakeHindsightServer(
-                bank_id=FIXTURE_BANK_ID,
-                disposable_bank_id=f"disposable-{secrets.token_hex(12)}",
-                error_sentinel=runtime_sentinel,
-                expected_api_key=None,
-            )
-            sdk = Hindsight(base_url=base_url, timeout=1.0)
-            try:
-                failure = await _capture_failure(
-                    lambda: sdk.arecall(bank_id=FIXTURE_BANK_ID, query="refused query")
-                )
-                assert type(failure) is ClientConnectorError
-
-                await server.start(bound_socket=reserved_socket)
-                recovered = await sdk.arecall(
-                    bank_id=FIXTURE_BANK_ID,
-                    query="after connection refusal",
-                )
-                assert recovered.results[0].text == "fixture observation"
-                assert len(server.records) == 1
-            finally:
-                await _close_sdk(sdk)
-                await server.close()
-
-    asyncio.run(scenario())
-
-
-def test_real_sdk_transport_timeout_releases_handler_and_next_request_succeeds(
-    runtime_sentinel: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
         server = FakeHindsightServer(
@@ -1454,32 +1284,25 @@ def test_real_sdk_transport_timeout_releases_handler_and_next_request_succeeds(
             expected_api_key=None,
         )
         await server.start()
-        sdk = Hindsight(base_url=server.base_url, timeout=0.25)
-        capture: asyncio.Task[BaseException] | None = None
+        adapter: HindsightClientAdapter | None = None
         try:
-            try:
-                server.arm_recall_fault("delay")
-                capture = asyncio.create_task(
-                    _capture_failure(
-                        lambda: sdk.arecall(
-                            bank_id=FIXTURE_BANK_ID,
-                            query="transport timeout",
-                        )
-                    )
-                )
-                await server.wait_for_delay_entered()
-                failure = await capture
-                assert type(failure) is TimeoutError
-            finally:
-                await _release_delay(server)
-                if capture is not None and not capture.done():
-                    capture.cancel()
-                    await asyncio.gather(capture, return_exceptions=True)
+            adapter = create_hindsight_client(
+                _config(tmp_path, base_url=server.base_url, api_key=None)
+            )
+            monkeypatch.setattr(client_module, "HINDSIGHT_MAX_RESPONSE_BYTES", 64)
+            failure = await _capture_failure(lambda: adapter.recall("oversized response"))
+            assert type(failure) is HindsightClientError
+            assert isinstance(failure, HindsightClientError)
+            assert failure.category == "recall_failed"
+            assert str(failure) == "Better Hindsight recall failed."
+            assert failure.__cause__ is None
 
-            response = await sdk.arecall(bank_id=FIXTURE_BANK_ID, query="after timeout")
+            monkeypatch.setattr(client_module, "HINDSIGHT_MAX_RESPONSE_BYTES", 16 * 1024 * 1024)
+            response = await adapter.recall("after oversized response")
             assert response.results[0].text == "fixture observation"
         finally:
-            await _close_sdk(sdk)
+            if adapter is not None:
+                await adapter.close()
             await server.close()
 
     asyncio.run(scenario())
