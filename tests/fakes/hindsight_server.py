@@ -1,4 +1,4 @@
-"""Small deterministic aiohttp fake for the pinned Hindsight 0.8.5 wire contract."""
+"""Small deterministic aiohttp fake for the supported Hindsight wire contract."""
 
 from __future__ import annotations
 

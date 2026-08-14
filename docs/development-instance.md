@@ -1,6 +1,6 @@
 # Isolated live validation
 
-The live test targets an isolated Hindsight 0.8.5 service, datastore, credential, and disposable bank namespace from the normal Hermes development environment. It uses synthetic content and creates a random bank for each run.
+The live test targets an isolated supported Hindsight service, datastore, credential, and disposable bank namespace from the normal Hermes development environment. It uses synthetic content, requires an exact expected API version, and creates a random bank for each run.
 
 ## Required opt-in
 
@@ -11,6 +11,7 @@ export BETTER_HINDSIGHT_ALLOW_DEV_WRITES=1
 export BETTER_HINDSIGHT_REQUIRE_LIVE_PROOF=1
 export BETTER_HINDSIGHT_DEV_API_URL=http://isolated-host:8888
 export BETTER_HINDSIGHT_DEV_API_KEY='...'
+export BETTER_HINDSIGHT_DEV_EXPECTED_VERSION=0.9.1
 export BETTER_HINDSIGHT_DEV_HERMES_PYTHON=/path/to/current/hermes/python
 ```
 
@@ -26,8 +27,8 @@ Do not reuse production endpoints, credentials, banks, or content. The API key v
 
 The test:
 
-1. validates the explicit opt-in and endpoint allowlist;
-2. checks the selected interpreter exposes the intended Hermes host and SDK-free Better client;
+1. validates the explicit opt-in, supported exact Hindsight version, and endpoint allowlist;
+2. checks the selected interpreter exposes the intended Hermes host and self-contained SDK-free Better plugin;
 3. generates a random `better-hindsight-live-...` bank and verifies it is absent;
 4. creates that bank with a unique synthetic ownership display name;
 5. starts the real Hermes memory manager with a temporary home and Better provider;

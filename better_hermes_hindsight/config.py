@@ -134,7 +134,7 @@ def _error(message: str) -> ConfigError:
 
 @dataclass(frozen=True, slots=True)
 class RecallMinScores:
-    """Optional Hindsight 0.8.5 score floors; omitted stages impose no floor."""
+    """Optional supported-Hindsight score floors; omitted stages impose no floor."""
 
     semantic: float | None = None
     keyword: float | None = None
@@ -167,7 +167,7 @@ class AllowedPrincipal:
 
 @dataclass(frozen=True, slots=True)
 class RecallConfig:
-    """Bounded local recall policy plus optional Hindsight 0.8.5 controls."""
+    """Bounded local recall policy plus optional supported-Hindsight controls."""
 
     enabled: bool = True
     timeout_seconds: float = DEFAULT_RECALL_TIMEOUT_SECONDS

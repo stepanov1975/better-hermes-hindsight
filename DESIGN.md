@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Better Hermes Hindsight is an unofficial memory provider optimized for one practical deployment: a Linux Hermes installation using an external Hindsight 0.8.5 service. It aims to improve recall timing and retention reliability without modifying Hermes core.
+Better Hermes Hindsight is an unofficial memory provider optimized for one practical deployment: a Linux Hermes installation using a supported external Hindsight service. It aims to improve recall timing and retention reliability without modifying Hermes core.
 
 “Better” is contextual, not universal. Bundled Hindsight remains preferable when embedded/cloud operation, model-facing retain/reflect, or minimum maintenance is more important.
 
@@ -70,7 +70,7 @@ Durability begins only after admission commits. A network timeout may be ambiguo
 Better is a self-contained standard Hermes Git plugin. Its root entry points and
 `better_hermes_hindsight` implementation package are installed together by `hermes plugins
 install`; no second package installation or runtime environment is part of deployment. Better
-implements its narrow Hindsight 0.8.5 wire contract over `aiohttp` and does not import the
+implements its narrow Hindsight 0.8.5/0.9.1 wire contract over `aiohttp` and does not import the
 Hindsight Python SDK, so the untouched bundled provider remains available.
 
 The Git commit is the working identity. A tag or version bump is optional and does not define compatibility. Validation records the current Better and Hermes commits and tests behavior against that checkout.
@@ -78,7 +78,7 @@ The Git commit is the working identity. A tag or version bump is optional and do
 ## Accepted limitations
 
 The intended deployment is personal Linux/POSIX with one trusted local operator/principal, one bank,
-one external Hindsight 0.8.5 service, a stable Hermes-home/outbox pathname topology, and the normal Hermes
+one supported external Hindsight service, a stable Hermes-home/outbox pathname topology, and the normal Hermes
 memory-provider lifecycle. Passive status is an operational snapshot under that model, not a defense
 against concurrent pathname replacement or an adversarial local writer. `codex_app_server`, typed
 provenance, automatic migration/deletion, and cross-platform sender election are outside the initial

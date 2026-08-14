@@ -15,7 +15,12 @@ The relevant public host contract is Hermes's `MemoryProvider`/`MemoryManager` l
 
 ## Hindsight compatibility
 
-Better intentionally targets the external Hindsight 0.8.5 HTTP contract. It implements only recall, synchronous retain, bank-config read, and bank-config patch over `aiohttp`; it does not import or depend on the Hindsight Python SDK.
+Better intentionally targets the exact external Hindsight 0.8.5 and 0.9.1 HTTP contracts. It implements only recall, synchronous retain, bank-config read, and bank-config patch over `aiohttp`; it does not import or depend on the Hindsight Python SDK. Other Hindsight versions are unsupported until their used operations are reviewed and the isolated live proof passes.
+
+Hindsight 0.9.1 adds optional `source_facts_truncated` to recall responses and optional
+`operation_id` to retain requests. Better ignores the additive response field and continues to omit
+the optional request field. Version 0.2.2 was validated against the official Hindsight 0.9.1 image
+with real retain, outbox restart recovery, recall, stable replay, and disposable-bank cleanup.
 
 The bundled provider can therefore keep Hermes's `hindsight-client==0.6.1` unchanged. Better is
 loaded directly from its standard Git-plugin checkout and needs no separate runtime or configuration
@@ -35,4 +40,4 @@ CI may follow Hermes `main` and therefore occasionally report an upstream compat
 
 ## Supported deployment
 
-The practical target is Linux/POSIX, one configured principal, one static bank, one external Hindsight 0.8.5 service, and the normal Hermes memory-provider execution path. Other platforms and runtimes are best effort and do not block use in the intended environment.
+The practical target is Linux/POSIX, one configured principal, one static bank, one external Hindsight 0.8.5 or 0.9.1 service, and the normal Hermes memory-provider execution path. Other platforms and runtimes are best effort and do not block use in the intended environment.

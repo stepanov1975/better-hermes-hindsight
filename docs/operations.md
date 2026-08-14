@@ -54,7 +54,8 @@ names are `better_hindsight.http_request`, `better_hindsight.client_lifecycle`,
 ## External end-to-end canary
 
 `hermes better_hindsight canary` is an explicit synthetic write/read/delete check for a
-fixed canary bank. It verifies exact Hindsight API version `0.8.5`, then uses the installed
+fixed canary bank. It accepts only supported Hindsight API versions (`0.8.5` and `0.9.1`) and
+reports the exact observed version, then uses the installed
 `HindsightClientAdapter` for synchronous retention and recall. That exercises the production
 `aiohttp` transport, wire defaults, strict response decoding, and client lifecycle rather than a
 parallel canary implementation. Raw bounded HTTP remains only for health/version preflight and exact

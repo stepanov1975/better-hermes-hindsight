@@ -1,4 +1,4 @@
-"""Narrow asynchronous HTTP client for the Hindsight 0.8.5 server API."""
+"""Narrow asynchronous HTTP client for the supported Hindsight server APIs."""
 
 from __future__ import annotations
 
@@ -402,7 +402,7 @@ class HindsightClientAdapter:
         return "HindsightClientAdapter()"
 
     async def recall(self, query: str) -> RecallResponse:
-        """Recall current-query memories with the exact established 0.8.5 request defaults."""
+        """Recall current-query memories with the exact supported request defaults."""
 
         payload = _recall_body(query, self._recall_config)
         return await _observed_http_call(

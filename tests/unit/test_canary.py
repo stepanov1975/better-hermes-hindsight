@@ -1,4 +1,4 @@
-"""Deterministic fake-server tests for the strict Hindsight 0.8.5 E2E canary."""
+"""Deterministic fake-server tests for the strict supported-Hindsight E2E canary."""
 
 from __future__ import annotations
 
@@ -18,7 +18,11 @@ from typing import ClassVar
 import pytest
 
 from better_hermes_hindsight import canary as canary_module
-from better_hermes_hindsight.canary import CanaryConfig, run_canary
+from better_hermes_hindsight.canary import (
+    SUPPORTED_HINDSIGHT_API_VERSIONS,
+    CanaryConfig,
+    run_canary,
+)
 from better_hermes_hindsight.client import (
     HindsightClientError,
     RecallResponse,
@@ -227,12 +231,15 @@ def _assert_private_absent(result: dict[str, object]) -> None:
     assert not any(tag in rendered for tag in _Handler.tags)
 
 
-def test_canary_uses_exact_protocol_proves_owned_recall_and_validates_cleanup() -> None:
-    with _server(visible_after=2) as api_url:
+@pytest.mark.parametrize("api_version", sorted(SUPPORTED_HINDSIGHT_API_VERSIONS))
+def test_canary_uses_exact_protocol_proves_owned_recall_and_validates_cleanup(
+    api_version: str,
+) -> None:
+    with _server(visible_after=2, version={"api_version": api_version}) as api_url:
         result = run_canary(_config(api_url))
 
     assert result["result"] == "ok"
-    assert result["version"] == "0.8.5"
+    assert result["version"] == api_version
     assert result["poll_count"] == 2
     assert all(
         type(result[field]) is int

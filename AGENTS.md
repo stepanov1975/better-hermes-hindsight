@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Better Hermes Hindsight is an unofficial memory provider for Alex's Linux, single-principal Hermes deployment. It connects Hermes to an external Hindsight 0.8.5 service, performs bounded current-query recall, and can retain completed turns through a durable SQLite outbox.
+Better Hermes Hindsight is an unofficial memory provider for Alex's Linux, single-principal Hermes deployment. It connects Hermes to a supported external Hindsight service, performs bounded current-query recall, and can retain completed turns through a durable SQLite outbox.
 
 The project follows Hermes development rather than promising compatibility with a permanent release matrix.
 
@@ -19,7 +19,7 @@ There is no canonical-plan hash, immutable candidate, or mandatory release check
 
 Keep the provider narrow:
 
-- external/self-hosted Hindsight 0.8.5 only;
+- external/self-hosted Hindsight API versions 0.8.5 and 0.9.1 only;
 - Linux/POSIX deployment;
 - one configured principal and one static bank;
 - normal Hermes memory-provider lifecycle;

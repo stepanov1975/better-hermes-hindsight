@@ -1,4 +1,4 @@
-"""Strict adapter-backed E2E canary for an isolated Hindsight 0.8.5 bank."""
+"""Strict adapter-backed E2E canary for a supported isolated Hindsight bank."""
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from .client import (
 )
 from .config import BetterHindsightConfig, RecallConfig, RetainConfig
 
-_EXPECTED_VERSION: Final = "0.8.5"
+SUPPORTED_HINDSIGHT_API_VERSIONS: Final = frozenset({"0.8.5", "0.9.1"})
 _MAX_BODY_BYTES: Final = 64 * 1024
 _MAX_OUTPUT_VALUE: Final = 2_147_483_647
 
@@ -55,7 +55,7 @@ class CanaryConfig:
     api_url: str = field(repr=False)
     bank_id: str = field(repr=False)
     api_key: str | None = field(default=None, repr=False)
-    expected_version: str = _EXPECTED_VERSION
+    expected_version: str | None = None
     timeout_seconds: float = 15.0
     poll_interval_seconds: float = 0.5
     max_polls: int = 20
@@ -65,7 +65,10 @@ class CanaryConfig:
         parsed = urllib.parse.urlsplit(self.api_url)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
             raise ValueError("invalid canary API URL")
-        if not self.bank_id or self.expected_version != _EXPECTED_VERSION:
+        if not self.bank_id or (
+            self.expected_version is not None
+            and self.expected_version not in SUPPORTED_HINDSIGHT_API_VERSIONS
+        ):
             raise ValueError("invalid canary destination")
         if (
             not math.isfinite(self.timeout_seconds)
@@ -150,6 +153,7 @@ def _owned_recall_result(value: RecallResult, *, document_id: str, tag: str) -> 
 async def _run_adapter_cycle(
     config: CanaryConfig,
     *,
+    api_version: str,
     attempt: _CanaryAttemptState,
     document_id: str,
     marker: str,
@@ -240,7 +244,7 @@ async def _run_adapter_cycle(
             ):
                 result = {
                     "result": "ok",
-                    "version": config.expected_version,
+                    "version": api_version,
                     "retain_ms": retain_ms,
                     "recall_visible_ms": _milliseconds(recall_started, time.monotonic()),
                     "poll_count": poll_count,
@@ -312,11 +316,13 @@ def run_canary(config: CanaryConfig) -> dict[str, object]:
         status, version = _request_json(
             config, "GET", "/version", timeout=_remaining(operation_deadline)
         )
+        api_version = version.get("api_version") if isinstance(version, dict) else None
         if (
             status != 200
             or not isinstance(version, dict)
-            or type(version.get("api_version")) is not str
-            or version.get("api_version") != config.expected_version
+            or type(api_version) is not str
+            or api_version not in SUPPORTED_HINDSIGHT_API_VERSIONS
+            or (config.expected_version is not None and api_version != config.expected_version)
         ):
             result = {"result": "error", "error": "version_invalid", "health_ms": health_ms}
             return result
@@ -324,6 +330,7 @@ def run_canary(config: CanaryConfig) -> dict[str, object]:
         result = asyncio.run(
             _run_adapter_cycle(
                 config,
+                api_version=api_version,
                 attempt=attempt,
                 document_id=document_id,
                 marker=marker,

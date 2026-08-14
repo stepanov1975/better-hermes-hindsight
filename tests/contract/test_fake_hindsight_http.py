@@ -1,4 +1,4 @@
-"""Loopback HTTP contracts for the SDK-free Hindsight 0.8.5 adapter."""
+"""Loopback HTTP contracts for the SDK-free supported-Hindsight adapter."""
 
 from __future__ import annotations
 

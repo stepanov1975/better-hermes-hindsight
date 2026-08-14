@@ -163,10 +163,10 @@ added later by Hermes. Initialization remains local and network-free: server-ver
 bank checks belong to explicit diagnostics or isolated live-proof setup, not another cold pre-model
 request.
 
-## Hindsight 0.8.5 recall controls
+## Supported Hindsight recall controls
 
 The following optional fields remain `null` when omitted. The adapter omits them rather than
-replacing Hindsight 0.8.5 SDK/server defaults:
+replacing the supported Hindsight 0.8.5/0.9.1 server defaults:
 
 - `recall.budget`: `low`, `mid`, or `high`;
 - `recall.max_tokens`: integer from 1 through 1,048,576;

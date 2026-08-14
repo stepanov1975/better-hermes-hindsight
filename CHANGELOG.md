@@ -2,6 +2,26 @@
 
 Notable user-visible changes are recorded here. The project follows rolling `main`; versions and tags are optional snapshots rather than compatibility or deployment gates.
 
+## 0.2.2 - 2026-08-14
+
+### Added
+
+- Added explicit support for exact Hindsight API version 0.9.1 after contract review and a live
+  retain, restart recovery, recall, stable replay, and cleanup proof against the official image.
+- Added regression coverage for the optional 0.9.1 `source_facts_truncated` recall field and the
+  optional retain `operation_id` request field.
+
+### Changed
+
+- The canary accepts only the supported Hindsight API versions 0.8.5 and 0.9.1 and reports the
+  observed version.
+- The isolated live proof requires an explicit expected Hindsight version.
+
+### Fixed
+
+- The isolated live proof now copies the complete self-contained plugin payload into its temporary
+  Hermes home and finalizes the runtime module actually loaded by Hermes.
+
 ## 0.2.1 - 2026-08-14
 
 ### Fixed

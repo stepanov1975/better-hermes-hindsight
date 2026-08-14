@@ -1,4 +1,4 @@
-"""Opt-in smoke test against the isolated Hindsight 0.8.5 environment.
+"""Opt-in smoke test against an exact supported Hindsight environment.
 
 The test intentionally proves only the deployment's useful path: current Hermes
 discovers the provider, pending rows survive a provider restart, delivery reaches
@@ -12,7 +12,6 @@ import asyncio
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -26,17 +25,18 @@ from urllib.parse import quote, urlsplit
 import pytest
 from aiohttp import ClientSession, ClientTimeout
 
+from better_hermes_hindsight.canary import SUPPORTED_HINDSIGHT_API_VERSIONS
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.outbox import OutboxRow, ProfileLockOwner, SQLiteOutbox
 from better_hermes_hindsight.retention import RetainedSegment, build_retained_segments
-from better_hermes_hindsight.runtime import finalize_process_runtime
+from tests.integration.helpers import materialize_standard_plugin, write_host_selection
 
 ROOT = Path(__file__).resolve().parents[2]
 _RETAIN_TAGS = ("better-hindsight-live",)
 _SEGMENT_MAX_BYTES = 384
 _DRAIN_TIMEOUT_SECONDS = 45.0
 _CHILD_TIMEOUT_SECONDS = 150.0
-_ROOT_PLUGIN_FILES = ("__init__.py", "cli.py", "plugin.yaml")
+
 _LIVE_CHILD_SCRIPT = r"""
 import sys
 import types
@@ -67,6 +67,7 @@ _LONG_TURN = (
 class DevelopmentInputs:
     api_url: str
     api_key: str
+    expected_version: str
     hermes_python: Path
     allowed_endpoints: tuple[str, ...]
     bank_id: str = ""
@@ -79,6 +80,7 @@ def _development_inputs(environ: Mapping[str, str]) -> DevelopmentInputs | None:
         "BETTER_HINDSIGHT_ALLOW_DEV_WRITES",
         "BETTER_HINDSIGHT_DEV_API_URL",
         "BETTER_HINDSIGHT_DEV_API_KEY",
+        "BETTER_HINDSIGHT_DEV_EXPECTED_VERSION",
         "BETTER_HINDSIGHT_DEV_HERMES_PYTHON",
     )
     values = {name: environ.get(name, "") for name in names}
@@ -93,6 +95,9 @@ def _development_inputs(environ: Mapping[str, str]) -> DevelopmentInputs | None:
         raise RuntimeError("live proof configuration is incomplete")
 
     api_url = values["BETTER_HINDSIGHT_DEV_API_URL"].rstrip("/")
+    expected_version = values["BETTER_HINDSIGHT_DEV_EXPECTED_VERSION"]
+    if expected_version not in SUPPORTED_HINDSIGHT_API_VERSIONS:
+        raise RuntimeError("isolated Hindsight version is unsupported")
     parsed = urlsplit(api_url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise RuntimeError("live proof endpoint must be an absolute HTTP(S) URL")
@@ -110,6 +115,7 @@ def _development_inputs(environ: Mapping[str, str]) -> DevelopmentInputs | None:
     return DevelopmentInputs(
         api_url=api_url,
         api_key=values["BETTER_HINDSIGHT_DEV_API_KEY"],
+        expected_version=expected_version,
         hermes_python=Path(os.path.abspath(hermes_python)),
         allowed_endpoints=allowed,
     )
@@ -120,6 +126,7 @@ def _with_disposable_bank(inputs: DevelopmentInputs) -> DevelopmentInputs:
     return DevelopmentInputs(
         api_url=inputs.api_url,
         api_key=inputs.api_key,
+        expected_version=inputs.expected_version,
         hermes_python=inputs.hermes_python,
         allowed_endpoints=inputs.allowed_endpoints,
         bank_id=f"better-hindsight-live-{token[:16]}",
@@ -169,8 +176,8 @@ def _create_disposable_bank(inputs: DevelopmentInputs) -> None:
     async def create() -> None:
         async with _live_session(inputs) as session:
             _status, version = await _raw_json(session, "GET", f"{inputs.api_url}/version")
-            if version is None or version.get("api_version") != "0.8.5":
-                raise AssertionError("isolated Hindsight server is not version 0.8.5")
+            if version is None or version.get("api_version") != inputs.expected_version:
+                raise AssertionError("isolated Hindsight server version did not match opt-in")
             bank_url = f"{inputs.api_url}/v1/default/banks/{quote(inputs.bank_id, safe='')}"
             status, _profile = await _raw_json(session, "GET", f"{bank_url}/profile")
             if status != 404:
@@ -252,15 +259,12 @@ def _profile_document(inputs: DevelopmentInputs) -> dict[str, Any]:
 def _prepare_home(inputs: DevelopmentInputs) -> tuple[Path, BetterHindsightConfig]:
     home = Path(os.environ["HERMES_HOME"])
     config_dir = home / "better_hindsight"
-    plugin_dir = home / "plugins" / "better_hindsight"
     config_dir.mkdir(parents=True, mode=0o700)
-    plugin_dir.mkdir(parents=True, mode=0o700)
     (config_dir / "config.json").write_text(
         json.dumps(_profile_document(inputs), sort_keys=True), encoding="utf-8"
     )
-    (home / "config.yaml").write_text("memory:\n  provider: better_hindsight\n", encoding="utf-8")
-    for name in _ROOT_PLUGIN_FILES:
-        shutil.copy2(ROOT / name, plugin_dir / name)
+    write_host_selection(home)
+    materialize_standard_plugin(source=ROOT, hermes_home=home)
     config = load_config(home, environ={"HINDSIGHT_API_KEY": inputs.api_key})
     return home, config
 
@@ -283,18 +287,20 @@ def _start_manager(home: Path) -> tuple[Any, Any]:
         )
         return manager, provider
     except BaseException:
-        _stop_manager(manager)
+        _stop_manager(manager, provider)
         raise
 
 
-def _stop_manager(manager: Any) -> None:
+def _stop_manager(manager: Any, provider: Any) -> None:
     failure: BaseException | None = None
     try:
         manager.shutdown_all()
     except BaseException as exception:
         failure = exception
     try:
-        if finalize_process_runtime() is not True and failure is None:
+        package = provider.__class__.__module__.rsplit(".", 1)[0]
+        runtime = __import__(f"{package}.runtime", fromlist=["finalize_process_runtime"])
+        if runtime.finalize_process_runtime() is not True and failure is None:
             failure = AssertionError("Better Hindsight runtime did not finalize")
     except BaseException as exception:
         if failure is None:
@@ -431,26 +437,29 @@ def _run_live_child() -> int:
     inputs = DevelopmentInputs(
         api_url=os.environ["BETTER_HINDSIGHT_CHILD_API_URL"],
         api_key=os.environ["HINDSIGHT_API_KEY"],
+        expected_version=os.environ["BETTER_HINDSIGHT_CHILD_EXPECTED_VERSION"],
         hermes_python=Path(os.environ["BETTER_HINDSIGHT_CHILD_HERMES_PYTHON"]),
         allowed_endpoints=(),
         bank_id=os.environ["BETTER_HINDSIGHT_CHILD_BANK_ID"],
         ownership_name=os.environ["BETTER_HINDSIGHT_CHILD_OWNERSHIP_NAME"],
     )
     manager: Any | None = None
+    provider: Any | None = None
     barrier: ProfileLockOwner | None = None
     try:
         home, config = _prepare_home(inputs)
         expected = _expected_segments((_SHORT_TURN, _LONG_TURN))
 
         barrier = _acquire_sender_barrier(config)
-        manager, _ = _start_manager(home)
+        manager, provider = _start_manager(home)
         _sync_turn(manager, _SHORT_TURN)
         _sync_turn(manager, _LONG_TURN)
         pending = _wait_for_rows(config, lambda rows: len(rows) == len(expected))
         if any(row.state != "pending" for row in pending):
             raise AssertionError("retained rows were not durably pending")
-        _stop_manager(manager)
+        _stop_manager(manager, provider)
         manager = None
+        provider = None
         barrier.release()
         barrier = None
 
@@ -470,6 +479,7 @@ def _run_live_child() -> int:
             "documents": len(documents),
             "segments": len(expected),
             "status": "ok",
+            "version": inputs.expected_version,
         }
         print(json.dumps(result, sort_keys=True))
         return 0
@@ -477,8 +487,8 @@ def _run_live_child() -> int:
         print(json.dumps({"failure": type(exception).__name__, "status": "failed"}, sort_keys=True))
         return 2
     finally:
-        if manager is not None:
-            _stop_manager(manager)
+        if manager is not None and provider is not None:
+            _stop_manager(manager, provider)
         if barrier is not None:
             barrier.release()
 
@@ -493,6 +503,7 @@ def _child_environment(inputs: DevelopmentInputs, home: Path) -> dict[str, str]:
             "NO_PROXY": "*",
             "BETTER_HINDSIGHT_CHILD_API_URL": inputs.api_url,
             "BETTER_HINDSIGHT_CHILD_BANK_ID": inputs.bank_id,
+            "BETTER_HINDSIGHT_CHILD_EXPECTED_VERSION": inputs.expected_version,
             "BETTER_HINDSIGHT_CHILD_HERMES_PYTHON": os.fspath(inputs.hermes_python),
             "BETTER_HINDSIGHT_CHILD_OWNERSHIP_NAME": inputs.ownership_name,
             "PYTHONDONTWRITEBYTECODE": "1",
@@ -522,6 +533,7 @@ def test_live_proof_preserves_selected_interpreter_symlink(tmp_path: Path) -> No
             "BETTER_HINDSIGHT_ALLOW_DEV_WRITES": "1",
             "BETTER_HINDSIGHT_DEV_API_URL": "http://127.0.0.1:8888",
             "BETTER_HINDSIGHT_DEV_API_KEY": "synthetic-live-key",
+            "BETTER_HINDSIGHT_DEV_EXPECTED_VERSION": "0.9.1",
             "BETTER_HINDSIGHT_DEV_HERMES_PYTHON": os.fspath(selected_python),
         }
     )
@@ -540,6 +552,7 @@ def test_child_environment_does_not_forward_unrelated_credentials(
     inputs = DevelopmentInputs(
         api_url="http://127.0.0.1:8888",
         api_key="synthetic-live-key",
+        expected_version="0.9.1",
         hermes_python=Path("/synthetic/hermes/python"),
         allowed_endpoints=(),
         bank_id="better-hindsight-live-synthetic",
@@ -561,6 +574,7 @@ def test_live_smoke_attempts_cleanup_when_create_result_is_uncertain(
     inputs = DevelopmentInputs(
         api_url="http://127.0.0.1:8888",
         api_key="synthetic-live-key",
+        expected_version="0.9.1",
         hermes_python=Path("/synthetic/hermes/python"),
         allowed_endpoints=(),
         bank_id="better-hindsight-live-synthetic",
@@ -616,6 +630,7 @@ def test_isolated_hindsight_smoke(tmp_path: Path) -> None:
             ) from None
         assert completed.returncode == 0, payload
         assert payload["status"] == "ok"
+        assert payload["version"] == inputs.expected_version
         assert payload["documents"] == payload["segments"]
     finally:
         _delete_disposable_bank(inputs)

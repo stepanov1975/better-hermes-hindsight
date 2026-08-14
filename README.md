@@ -3,7 +3,7 @@
 [![CI](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/ci.yml/badge.svg)](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/ci.yml)
 [![Secret scan](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/security.yml/badge.svg)](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/security.yml)
 
-Better Hermes Hindsight is an unofficial Hermes memory provider for an external/self-hosted Hindsight 0.8.5 service. It is developed against a rolling Hermes checkout for a Linux, single-principal deployment.
+Better Hermes Hindsight is an unofficial Hermes memory provider for supported external/self-hosted Hindsight services. It is developed against a rolling Hermes checkout for a Linux, single-principal deployment.
 
 The provider ID is `better_hindsight`, deliberately separate from bundled `hindsight`, so the existing provider and bank remain available for rollback.
 
@@ -35,7 +35,7 @@ Retries use a stable document ID and `update_mode="replace"`. A timed-out write 
 - Linux/POSIX;
 - the current intended Hermes checkout;
 - Python supported by that checkout (the maintained development lane uses Python 3.13);
-- an external Hindsight 0.8.5 server;
+- an external Hindsight 0.8.5 or 0.9.1 server;
 - `aiohttp>=3.14.1,<4`, which the plugin declares through Hermes's standard memory-plugin
   dependency mechanism.
 

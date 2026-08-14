@@ -1,4 +1,4 @@
-"""Contracts for the SDK-free narrow Hindsight 0.8.5 adapter boundary."""
+"""Contracts for the SDK-free narrow supported-Hindsight adapter boundary."""
 
 from __future__ import annotations
 
@@ -220,6 +220,7 @@ def test_recall_serializes_full_contract_and_decodes_internal_models(tmp_path: P
     transport.responses[("POST", path)] = {
         "results": [_recall_result_payload()],
         "source_facts": {"fact-1": {"id": "fact-1", "text": "source fact"}},
+        "source_facts_truncated": True,
         "trace": None,
         "entities": None,
         "chunks": None,
@@ -394,6 +395,9 @@ def test_retain_uses_exact_replace_batch_and_typed_confirmation(
             },
         )
     ]
+    request_body = transport.calls[0][2]
+    assert request_body is not None
+    assert "operation_id" not in request_body
 
 
 @pytest.mark.parametrize(

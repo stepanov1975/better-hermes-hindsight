@@ -26,7 +26,7 @@ DESIRED_OBSERVATIONS_MISSION = "Observe exact synthetic operator patterns."
 
 EXPECTED_UNINITIALIZED_STATUS = (
     '{"age_bucket":"none","command":"status","counts":{"mismatch":0,"pending":0,'
-    '"retry":0,"sending":0},"deployed":{"commit":"unknown","version":"0.2.1"},'
+    '"retry":0,"sending":0},"deployed":{"commit":"unknown","version":"0.2.2"},'
     '"error_counts":{"retain_failed":0,"retain_timeout":0,"retain_unconfirmed":0},'
     '"last_error_category":"none","logical_queued_bytes":0,"max_attempt_count":0,'
     '"next_retry_bucket":"none","outbox":"uninitialized","result":"ok",'
