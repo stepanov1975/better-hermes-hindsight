@@ -18,12 +18,12 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal, cast
 
-from better_hermes_hindsight.config import (
+from .config import (
     OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES,
     PAYLOAD_SCHEMA_VERSION,
     BetterHindsightConfig,
 )
-from better_hermes_hindsight.retention import (
+from .retention import (
     DOCUMENT_ID_PREFIX,
     RetainedSegment,
     derive_segment_payload_hash,

@@ -10,9 +10,20 @@ import sys
 import tomllib
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[2]
-ROOT_PLUGIN_FILES = ("__init__.py", "cli.py", "plugin.yaml")
-PACKAGED_PLUGIN = ROOT / "src/better_hermes_hindsight/hermes_plugin"
+ROOT_PLUGIN_FILES = ("__init__.py", "after-install.md", "cli.py", "plugin.yaml")
+
+
+def _git(*args: str, cwd: Path) -> None:
+    subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def _run(
@@ -41,10 +52,14 @@ def _plugin_repository(tmp_path: Path) -> Path:
     source.mkdir()
     for name in ROOT_PLUGIN_FILES:
         shutil.copy2(ROOT / name, source / name)
+    shutil.copytree(
+        ROOT / "better_hermes_hindsight",
+        source / "better_hermes_hindsight",
+    )
     _run(["git", "init", "--quiet"], cwd=source)
     _run(["git", "config", "user.name", "Task 5 fixture"], cwd=source)
     _run(["git", "config", "user.email", "fixture@example.invalid"], cwd=source)
-    _run(["git", "add", *ROOT_PLUGIN_FILES], cwd=source)
+    _run(["git", "add", "."], cwd=source)
     _run(["git", "commit", "--quiet", "-m", "fixture plugin"], cwd=source)
     return source
 
@@ -56,27 +71,19 @@ def _hermes_environment(home: Path) -> dict[str, str]:
     return environ
 
 
-def _flat_manifest(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        key, separator, value = line.partition(":")
-        assert separator and key and value.strip()
-        values[key] = value.strip()
-    return values
-
-
-def test_root_plugin_surface_is_thin_and_version_aligned() -> None:
-    root_manifest = _flat_manifest(ROOT / "plugin.yaml")
-    packaged_manifest = _flat_manifest(PACKAGED_PLUGIN / "plugin.yaml")
+def test_root_plugin_surface_is_self_contained_and_version_aligned() -> None:
+    root_manifest = yaml.safe_load((ROOT / "plugin.yaml").read_text(encoding="utf-8"))
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
 
-    assert root_manifest == packaged_manifest
     assert root_manifest["name"] == "better_hindsight"
     assert root_manifest["kind"] == "exclusive"
     assert root_manifest["version"] == project["version"]
-    assert set(root_manifest) == {"name", "kind", "version", "description"}
+    assert root_manifest["manifest_version"] == 1
+    assert root_manifest["pip_dependencies"] == ["aiohttp>=3.14.1,<4"]
     assert "scripts" not in project
     assert all((ROOT / name).is_file() for name in ROOT_PLUGIN_FILES)
+    assert (ROOT / "better_hermes_hindsight" / "provider.py").is_file()
+    assert not (ROOT / "scripts" / "install_release.py").exists()
 
 
 def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
@@ -95,60 +102,110 @@ def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
             "plugins",
             "install",
             source.as_uri(),
-            "--no-enable",
         ],
-        cwd=ROOT,
+        cwd=tmp_path,
+        environ=environ,
+    )
+    _run(
+        [
+            sys.executable,
+            "-m",
+            "hermes_cli.main",
+            "memory",
+            "setup",
+            "better_hindsight",
+        ],
+        cwd=tmp_path,
         environ=environ,
     )
 
     installed = home / "plugins/better_hindsight"
     assert installed.is_dir()
     assert all((installed / name).is_file() for name in ROOT_PLUGIN_FILES)
+    assert (installed / "better_hermes_hindsight" / "provider.py").is_file()
     assert (installed / ".git").is_dir()
 
-    (home / "config.yaml").write_text(
-        "memory:\n  provider: better_hindsight\n",
-        encoding="utf-8",
-    )
+    assert "provider: better_hindsight" in (home / "config.yaml").read_text(encoding="utf-8")
+
     probe = _run(
         [
             sys.executable,
             "-c",
             (
-                "import json; "
+                "import json, sys; "
                 "from plugins.memory import discover_plugin_cli_commands, load_memory_provider; "
                 "provider = load_memory_provider('better_hindsight'); "
                 "commands = discover_plugin_cli_commands(); "
                 "print(json.dumps({'provider_name': provider.name, "
                 "'provider_type': type(provider).__name__, "
+                "'provider_module': type(provider).__module__, "
+                "'top_level_loaded': 'better_hermes_hindsight' in sys.modules, "
                 "'commands': [item['name'] for item in commands]}, sort_keys=True))"
             ),
         ],
-        cwd=ROOT,
+        cwd=tmp_path,
         environ=environ,
     )
     payload = json.loads(probe.stdout.strip().splitlines()[-1])
     assert payload == {
         "commands": ["better_hindsight"],
+        "provider_module": (
+            "_hermes_user_memory.better_hindsight.better_hermes_hindsight.provider"
+        ),
         "provider_name": "better_hindsight",
         "provider_type": "BetterHindsightMemoryProvider",
+        "top_level_loaded": False,
     }
+
+    (source / "update-marker.txt").write_text("updated\n", encoding="utf-8")
+    _git("add", "update-marker.txt", cwd=source)
+    _git("commit", "-m", "update fixture", cwd=source)
+    _run(
+        [sys.executable, "-m", "hermes_cli.main", "plugins", "update", "better_hindsight"],
+        cwd=tmp_path,
+        environ=environ,
+    )
+    assert (installed / "update-marker.txt").read_text(encoding="utf-8") == "updated\n"
 
     help_result = _run(
         [sys.executable, "-m", "hermes_cli.main", "better_hindsight", "--help"],
-        cwd=ROOT,
+        cwd=tmp_path,
         environ=environ,
     )
-    assert "{status,missions}" in help_result.stdout
+    assert "{status,canary,watchdog,missions}" in help_result.stdout
     assert "status" in help_result.stdout
     assert "missions" in help_result.stdout
 
+    canary_result = subprocess.run(
+        [sys.executable, "-m", "hermes_cli.main", "better_hindsight", "canary"],
+        cwd=tmp_path,
+        env=environ,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert canary_result.returncode == 1
+    assert canary_result.stdout.strip() == '{"error":"not_enabled","result":"error"}'
+
+    _run(
+        [
+            sys.executable,
+            "-m",
+            "hermes_cli.main",
+            "config",
+            "set",
+            "memory.provider",
+            "holographic",
+        ],
+        cwd=tmp_path,
+        environ=environ,
+    )
     _run(
         [sys.executable, "-m", "hermes_cli.main", "plugins", "remove", "better_hindsight"],
-        cwd=ROOT,
+        cwd=tmp_path,
         environ=environ,
     )
     assert not installed.exists()
-    assert (home / "config.yaml").read_text(encoding="utf-8") == (
-        "memory:\n  provider: better_hindsight\n"
-    )
+    config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert config["memory"]["provider"] == "holographic"

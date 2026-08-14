@@ -16,9 +16,9 @@ Compared with bundled Hindsight, this plugin deliberately focuses on:
 - opt-in automatic retention through a durable SQLite outbox;
 - deterministic segmentation and reconstructable source metadata;
 - stable replace-mode retries after timeout or restart;
-- explicit principal and destination policy; and
+- explicit principal and destination policy;
 - operator-only status and mission management; and
-- privacy-safe structured diagnostics plus opt-in synthetic canary/alert evaluator executables.
+- privacy-safe structured diagnostics plus opt-in synthetic canary and alert-evaluator commands.
 
 It is narrower than bundled Hindsight. It does not provide embedded/cloud service management, model-facing retain or reflect tools, multi-user bank routing, previous-query background recall, migrations, or automatic deletion.
 
@@ -36,43 +36,44 @@ Retries use a stable document ID and `update_mode="replace"`. A timed-out write 
 - the current intended Hermes checkout;
 - Python supported by that checkout (the maintained development lane uses Python 3.13);
 - an external Hindsight 0.8.5 server;
-- `aiohttp>=3.14.1,<4`, which is compatible with the current Hermes messaging environment; and
-- `uv` for installation and development.
+- `aiohttp>=3.14.1,<4`, which the plugin declares through Hermes's standard memory-plugin
+  dependency mechanism.
 
 Compatibility is behavioral rather than release-matrix based. Validation records the tested Hermes commit, but another commit is not rejected solely because its identity changed.
 
 ## Installation
 
-Install a tagged GitHub prerelease with its checksum-verified wheel into the existing Hermes
-interpreter. The installer creates or updates the selected profile, installs the exact plugin
-bridge, selects `better_hindsight`, and writes an interpreter-bound launcher. It never
-creates a bank, stores a credential, enables retention, starts a gateway, or schedules a
-canary/watchdog.
+Better Hermes Hindsight is a regular, self-contained Hermes memory plugin. Install it into the
+current Hermes configuration with the same plugin commands used for other Git plugins:
 
-Better's internal HTTP adapter does not import the Hindsight Python SDK, so Hermes's bundled
-`hindsight-client==0.6.1` can remain installed for the bundled provider. The published
-`v0.1.0a3` release predates this change and still requires its documented isolated interpreter;
-use the shared-interpreter procedure with `v0.1.0a5` or newer. `v0.1.0a4` contains the internal
-client but its installer can reject an unrelated dependency mismatch already present in Hermes.
+```bash
+hermes plugins install stepanov1975/better-hermes-hindsight
+hermes memory setup better_hindsight
+```
 
-See the exact commands in [installation](docs/installation.md), then configure the endpoint,
-bank, principal, and credential for that profile. Leave retention disabled until recall and
-status work against the isolated service. See [configuration](docs/configuration.md).
+It does not need another Hermes profile, Python environment, package installation, launcher, or
+gateway procedure. Its internal HTTP adapter does not import the Hindsight Python SDK, so the
+bundled provider and its client remain untouched.
+
+See [installation](docs/installation.md), then configure the endpoint, bank, principal, and
+credential. Leave retention disabled until recall and status work. See
+[configuration](docs/configuration.md).
 
 ## Operator commands
 
 ```text
-hermes --profile <profile> better_hindsight status
-hermes --profile <profile> better_hindsight missions check
-hermes --profile <profile> better_hindsight missions apply --confirm
+hermes better_hindsight status
+hermes better_hindsight missions check
+hermes better_hindsight missions apply --confirm
+hermes better_hindsight canary
+hermes better_hindsight watchdog --help
 ```
 
 `status` reads the existing outbox without initializing or draining it. Mission changes are never automatic and require explicit confirmation. There is no retry-now, row-deletion, arbitrary-bank, or model-facing write command.
 
-The included `python -m better_hermes_hindsight.canary` and
-`python -m better_hermes_hindsight.watchdog` modules provide an adapter-backed synthetic E2E check
-and transition-only alert evaluation over privacy-safe per-operation HTTP, lifecycle, recall, and
-retention events. Neither is scheduled or activated by installation.
+The included `hermes better_hindsight canary` and `hermes better_hindsight watchdog` commands
+provide an adapter-backed synthetic E2E check and transition-only alert evaluation over
+privacy-safe per-operation HTTP, lifecycle, recall, and retention events. Neither is scheduled or activated by installation.
 
 See [operations](docs/operations.md) and [rollback](docs/rollback.md).
 
@@ -85,8 +86,8 @@ The initial product is external-service-only, Linux/POSIX, one principal, one st
 ```bash
 uv sync --extra dev
 uv lock --check
-uv run --frozen --extra dev python -m ruff check src tests scripts __init__.py cli.py
-uv run --frozen --extra dev python -m ruff format --check src tests scripts __init__.py cli.py
+uv run --frozen --extra dev python -m ruff check better_hermes_hindsight tests scripts __init__.py cli.py
+uv run --frozen --extra dev python -m ruff format --check better_hermes_hindsight tests scripts __init__.py cli.py
 uv run --frozen --extra dev python -m mypy
 uv run --frozen --extra dev python -m pytest -p no:cacheprovider
 rm -rf dist
@@ -95,8 +96,8 @@ uvx --from twine twine check dist/*.whl dist/*.tar.gz
 uv run --frozen --extra dev python scripts/check_sdist.py dist/*.tar.gz
 ```
 
-Development follows rolling `main`; ordinary-user deployment uses immutable tagged GitHub
-prereleases. PyPI publication is not required.
+Development follows rolling `main`; ordinary-user deployment uses Hermes's standard Git-plugin
+installer. PyPI publication is not required.
 
 See [implementation status](IMPLEMENTATION.md), [design](DESIGN.md), and [contributing](CONTRIBUTING.md).
 

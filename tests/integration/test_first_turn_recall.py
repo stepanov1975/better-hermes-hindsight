@@ -9,8 +9,7 @@ from pathlib import Path
 
 import pytest
 
-import better_hermes_hindsight.hermes_plugin as packaged_plugin
-from tests.integration.helpers import clean_subprocess_env, materialize_packaged_shim
+from tests.integration.helpers import clean_subprocess_env, materialize_standard_plugin
 
 ROOT = Path(__file__).resolve().parents[2]
 MODEL_SECRET_SENTINEL = "synthetic-model-secret-must-not-leak"
@@ -19,6 +18,7 @@ CURRENT_QUERY = "current first-turn fixture query"
 _FIRST_TURN_SCRIPT = r'''
 import asyncio
 import copy
+import importlib
 import json
 import secrets
 import sys
@@ -50,13 +50,6 @@ def response(content):
 
 
 async def scenario():
-    from better_hermes_hindsight.formatting import (
-        CONTEXT_BEGIN_MARKER,
-        CONTEXT_PREAMBLE,
-        CONTEXT_SUFFIX,
-    )
-    from better_hermes_hindsight.runtime import finalize_process_runtime
-
     bank_id = "fixture-bank"
     server = FakeHindsightServer(
         bank_id=bank_id,
@@ -67,6 +60,7 @@ async def scenario():
     await server.start()
     agent = None
     finalized = False
+    finalize_process_runtime = None
     try:
         recall_timeout = 0.075 if scenario_name == "delay" else 0.5
         config_dir = hermes_home / "better_hindsight"
@@ -133,6 +127,15 @@ sessions:
         manager = agent._memory_manager
         assert manager is not None
         assert [provider.name for provider in manager.providers] == ["better_hindsight"]
+        provider = manager.providers[0]
+        package = type(provider).__module__.rsplit(".", 1)[0]
+        assert package == "_hermes_user_memory.better_hindsight.better_hermes_hindsight"
+        formatting = importlib.import_module(f"{package}.formatting")
+        runtime = importlib.import_module(f"{package}.runtime")
+        CONTEXT_BEGIN_MARKER = formatting.CONTEXT_BEGIN_MARKER
+        CONTEXT_PREAMBLE = formatting.CONTEXT_PREAMBLE
+        CONTEXT_SUFFIX = formatting.CONTEXT_SUFFIX
+        finalize_process_runtime = runtime.finalize_process_runtime
         assert server.records == ()
 
         events = ["initialize"]
@@ -230,6 +233,7 @@ sessions:
         # Current Hermes owns provider shutdown from the public agent lifecycle. Better Hindsight
         # separately releases its process-scoped runtime after the host drops the provider handle.
         await asyncio.to_thread(agent.close)
+        assert finalize_process_runtime is not None
         finalized = await asyncio.to_thread(finalize_process_runtime)
         assert finalized is True
 
@@ -260,11 +264,11 @@ sessions:
                 await asyncio.to_thread(agent.close)
             except Exception:
                 pass
-            try:
-                from better_hermes_hindsight.runtime import finalize_process_runtime
-                await asyncio.to_thread(finalize_process_runtime)
-            except Exception:
-                pass
+            if finalize_process_runtime is not None:
+                try:
+                    await asyncio.to_thread(finalize_process_runtime)
+                except Exception:
+                    pass
         await server.close()
 
 
@@ -277,10 +281,9 @@ def _run_scenario(
     scenario: str,
 ) -> tuple[dict[str, object], subprocess.CompletedProcess[str]]:
     hermes_home = tmp_path / "hermes-home"
-    materialize_packaged_shim(
-        source=Path(packaged_plugin.__file__).resolve().parent,
+    materialize_standard_plugin(
+        source=ROOT,
         hermes_home=hermes_home,
-        names=("__init__.py", "plugin.yaml"),
     )
     error_sentinel = f"synthetic-fake-error-{scenario}-must-not-leak"
     completed = subprocess.run(

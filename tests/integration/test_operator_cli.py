@@ -11,15 +11,14 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-import better_hermes_hindsight.hermes_plugin as packaged_plugin
 from tests.hermes_compat import EXPECTED_HERMES_COMMIT, EXPECTED_HERMES_VERSION
 from tests.integration.helpers import (
     clean_subprocess_env,
-    materialize_packaged_shim,
+    materialize_standard_plugin,
     write_host_selection,
 )
 
-SHIM_FILES = ("__init__.py", "cli.py", "plugin.yaml")
+ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_BANK_ID = "operator-cli-fixture-bank"
 FIXTURE_API_KEY = "synthetic-operator-cli-api-key"
 DESIRED_RETAIN_MISSION = "Retain exact synthetic operator preferences."
@@ -27,7 +26,7 @@ DESIRED_OBSERVATIONS_MISSION = "Observe exact synthetic operator patterns."
 
 EXPECTED_UNINITIALIZED_STATUS = (
     '{"age_bucket":"none","command":"status","counts":{"mismatch":0,"pending":0,'
-    '"retry":0,"sending":0},"deployed":{"commit":"unknown","version":"0.1.0a5"},'
+    '"retry":0,"sending":0},"deployed":{"commit":"unknown","version":"0.2.0"},'
     '"error_counts":{"retain_failed":0,"retain_timeout":0,"retain_unconfirmed":0},'
     '"last_error_category":"none","logical_queued_bytes":0,"max_attempt_count":0,'
     '"next_retry_bucket":"none","outbox":"uninitialized","result":"ok",'
@@ -118,7 +117,8 @@ import hermes_cli.main as released_main
 main_source = inspect.getsourcefile(released_main)
 assert main_source is not None
 assert Path(main_source).resolve() == release_path("hermes_cli/main.py")
-assert Path(os.environ["HERMES_HOME"]).resolve() == expected_home
+actual_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+assert actual_home.resolve() == expected_home
 
 
 def forbidden(label):
@@ -159,30 +159,42 @@ def guarded_flock(descriptor, operation):
 
 fcntl.flock = guarded_flock
 
-import better_hermes_hindsight.client as client_module
-import better_hermes_hindsight.config as config_module
-import better_hermes_hindsight.outbox as outbox_module
-import better_hermes_hindsight.runtime as runtime_module
+client_module = None
+config_module = None
+outbox_module = None
+runtime_module = None
+if expect_discovery:
+    import importlib
 
-runtime_module.acquire_process_runtime = forbidden(
-    "operator CLI used the provider process singleton runtime"
-)
-outbox_module.SQLiteOutbox.open = classmethod(
-    forbidden("operator CLI opened the read-write provider outbox")
-)
-runtime_module.OutboxSender.start = forbidden("operator CLI started a sender")
+    from plugins.memory import discover_plugin_cli_commands
+
+    commands = discover_plugin_cli_commands()
+    assert [command["name"] for command in commands] == ["better_hindsight"]
+    package = "_hermes_user_memory.better_hindsight.better_hermes_hindsight"
+    client_module = importlib.import_module(f"{package}.client")
+    config_module = importlib.import_module(f"{package}.config")
+    outbox_module = importlib.import_module(f"{package}.outbox")
+    runtime_module = importlib.import_module(f"{package}.runtime")
+
+    runtime_module.acquire_process_runtime = forbidden(
+        "operator CLI used the provider process singleton runtime"
+    )
+    outbox_module.SQLiteOutbox.open = classmethod(
+        forbidden("operator CLI opened the read-write provider outbox")
+    )
+    runtime_module.OutboxSender.start = forbidden("operator CLI started a sender")
 
 no_client_modes = {
     "help",
     "status_ready",
     "status_uninitialized",
 }
-if mode in no_client_modes:
+if mode in no_client_modes and client_module is not None:
     client_module.create_hindsight_client = forbidden(
         "local/import/help CLI path constructed a Hindsight client"
     )
 
-if mode in config_forbidden_modes:
+if mode in config_forbidden_modes and config_module is not None:
     config_module.load_config = forbidden(
         "CLI import/help/argparse validated Better Hindsight configuration"
     )
@@ -417,10 +429,9 @@ def _assert_handler_output(
 def _prepare_explicit_home(root: Path) -> tuple[Path, Path]:
     hermes_home = root / "hermes-home"
     write_host_selection(hermes_home)
-    shim = materialize_packaged_shim(
-        source=Path(packaged_plugin.__file__).resolve().parent,
+    shim = materialize_standard_plugin(
+        source=ROOT,
         hermes_home=hermes_home,
-        names=SHIM_FILES,
     )
     return hermes_home, shim
 
@@ -485,36 +496,33 @@ def test_released_plugin_help_discovers_only_the_underscore_command_without_side
     assert _snapshot_tree(hermes_home / "better_hindsight") == before_profile
 
 
-def test_named_profile_selection_drives_discovery_and_absent_status_without_creating_state(
+def test_default_home_discovers_plugin_and_reports_absent_status_without_creating_state(
     tmp_path: Path,
 ) -> None:
     default_home = tmp_path / "home" / ".hermes"
-    write_host_selection(default_home, provider="hindsight")
-    selected_home = default_home / "profiles" / "operator_fixture"
-    write_host_selection(selected_home)
-    shim = materialize_packaged_shim(
-        source=Path(packaged_plugin.__file__).resolve().parent,
-        hermes_home=selected_home,
-        names=SHIM_FILES,
+    write_host_selection(default_home)
+    plugin = materialize_standard_plugin(
+        source=ROOT,
+        hermes_home=default_home,
     )
-    _write_plugin_config(selected_home)
-    before_shim = _snapshot_tree(shim)
-    before_profile = _snapshot_tree(selected_home / "better_hindsight")
+    _write_plugin_config(default_home)
+    before_plugin = _snapshot_tree(plugin)
+    before_state = _snapshot_tree(default_home / "better_hindsight")
 
     completed = _run_released_cli(
         tmp_path,
-        expected_home=selected_home,
-        argv=["--profile", "operator_fixture", "better_hindsight", "status"],
+        expected_home=default_home,
+        argv=["better_hindsight", "status"],
         mode="status_uninitialized",
         expect_discovery=True,
         exported_hermes_home=None,
     )
 
     _assert_handler_output(completed, exit_code=0, stdout=EXPECTED_UNINITIALIZED_STATUS)
-    assert _snapshot_tree(shim) == before_shim
-    assert _snapshot_tree(selected_home / "better_hindsight") == before_profile
-    assert not (selected_home / "better_hindsight" / "outbox.sqlite3").exists()
-    assert not (selected_home / "better_hindsight" / "outbox.sqlite3.lock").exists()
+    assert _snapshot_tree(plugin) == before_plugin
+    assert _snapshot_tree(default_home / "better_hindsight") == before_state
+    assert not (default_home / "better_hindsight" / "outbox.sqlite3").exists()
+    assert not (default_home / "better_hindsight" / "outbox.sqlite3.lock").exists()
 
 
 def test_existing_status_uses_only_read_only_sqlite_and_existing_lock_probe_without_mutation(

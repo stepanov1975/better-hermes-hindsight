@@ -13,9 +13,9 @@ from urllib.parse import quote
 
 import aiohttp
 
-from better_hermes_hindsight import __version__
-from better_hermes_hindsight.config import BetterHindsightConfig, ObservationScopes, RecallConfig
-from better_hermes_hindsight.telemetry import elapsed_milliseconds, emit_event
+from . import __version__
+from .config import BetterHindsightConfig, ObservationScopes, RecallConfig
+from .telemetry import elapsed_milliseconds, emit_event
 
 HINDSIGHT_REQUEST_TIMEOUT_SECONDS = 300.0
 HINDSIGHT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024

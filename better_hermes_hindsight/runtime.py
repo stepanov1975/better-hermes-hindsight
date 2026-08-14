@@ -13,15 +13,15 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Generic, NoReturn, Protocol, TypeVar
 
-from better_hermes_hindsight.client import (
+from .client import (
     HindsightClientError,
     HindsightClientProtocol,
     RetainConfirmation,
     RetainSegment,
     create_hindsight_client,
 )
-from better_hermes_hindsight.config import BetterHindsightConfig
-from better_hermes_hindsight.outbox import (
+from .config import BetterHindsightConfig
+from .outbox import (
     AdmissionResult,
     AdmissionStatus,
     OutboxClaimResult,
@@ -35,8 +35,8 @@ from better_hermes_hindsight.outbox import (
     ProfileLockStatus,
     SQLiteOutbox,
 )
-from better_hermes_hindsight.retention import RetainedSegment, build_retained_segments
-from better_hermes_hindsight.telemetry import elapsed_milliseconds, emit_event
+from .retention import RetainedSegment, build_retained_segments
+from .telemetry import elapsed_milliseconds, emit_event
 
 ASYNC_CANCELLATION_DRAIN_SECONDS = 0.05
 logger = logging.getLogger(__name__)

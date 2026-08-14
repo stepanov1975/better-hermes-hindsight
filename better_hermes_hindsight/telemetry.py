@@ -8,7 +8,7 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
-from better_hermes_hindsight import __version__
+from . import __version__
 
 
 def emit_event(logger: logging.Logger, event: str, **fields: object) -> None:
@@ -44,31 +44,11 @@ def _valid_commit(value: object) -> str | None:
     return candidate
 
 
-def _installed_commit(hermes_home: Path) -> str | None:
-    candidates = (
-        (hermes_home / "better_hindsight/install.json", "commit"),
-        (hermes_home / "plugins/.install-metadata.json", "better_hindsight"),
-    )
-    for path, key in candidates:
-        try:
-            document = json.loads(path.read_text(encoding="utf-8"))
-            value = document.get(key)
-            if key == "better_hindsight" and isinstance(value, dict):
-                value = value.get("revision")
-            candidate = _valid_commit(value)
-            if candidate is not None:
-                return candidate
-        except (OSError, TypeError, ValueError):
-            continue
-    return None
-
-
 def deployed_identity(hermes_home: Path | None = None) -> dict[str, str]:
-    """Return bounded package identity without exposing installation paths."""
+    """Return bounded plugin identity without exposing installation paths."""
 
+    del hermes_home
     candidate = _valid_commit(os.environ.get("BETTER_HINDSIGHT_COMMIT"))
-    if candidate is None and hermes_home is not None:
-        candidate = _installed_commit(hermes_home)
     return {"commit": candidate or "unknown", "version": __version__[:64]}
 
 

@@ -1,1 +1,6 @@
+include __init__.py
+include after-install.md
+include cli.py
+include plugin.yaml
+recursive-include better_hermes_hindsight *.py
 prune tests

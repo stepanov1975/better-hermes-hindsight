@@ -11,22 +11,22 @@ from typing import Any, cast
 
 from agent.memory_provider import MemoryProvider
 
-from better_hermes_hindsight import PROVIDER_ID
-from better_hermes_hindsight.client import HindsightClientError
-from better_hermes_hindsight.client import is_available as is_hindsight_available
-from better_hermes_hindsight.config import BetterHindsightConfig, load_config
-from better_hermes_hindsight.formatting import (
+from . import PROVIDER_ID
+from .client import HindsightClientError
+from .client import is_available as is_hindsight_available
+from .config import BetterHindsightConfig, load_config
+from .formatting import (
     SYSTEM_PROMPT_BLOCK,
     format_recall_context,
     project_query,
 )
-from better_hermes_hindsight.runtime import (
+from .runtime import (
     AsyncCallTimeoutError,
     ProcessRuntimeHandle,
     RuntimeConfigurationConflict,
     acquire_process_runtime,
 )
-from better_hermes_hindsight.telemetry import elapsed_milliseconds, emit_event
+from .telemetry import elapsed_milliseconds, emit_event
 
 logger = logging.getLogger(__name__)
 

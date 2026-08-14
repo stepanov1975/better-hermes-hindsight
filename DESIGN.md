@@ -63,18 +63,22 @@ Durability begins only after admission commits. A network timeout may be ambiguo
   creation, migration, queue recovery, or row writes, and must surface blocked work as degraded rather
   than healthy. SQLite may update existing SHM coordination state while reading active WAL content.
 - Mission application requires `--confirm`, patches only allowlisted drifted fields, and verifies readback.
-- Live tests use synthetic content and the existing isolated Hindsight environment, never production data.
+- Live tests use synthetic content and an isolated Hindsight environment, never production data.
 
 ## Deployment model
 
-The Hermes Git-plugin directory and the installed Python package are separate concerns. For the rolling development deployment, install the package editable from the same checkout and install that checkout as the Hermes plugin. Better implements its narrow Hindsight 0.8.5 wire contract over `aiohttp` and does not import the Hindsight Python SDK, so it can share the normal Hermes interpreter with the untouched bundled provider.
+Better is a self-contained standard Hermes Git plugin. Its root entry points and
+`better_hermes_hindsight` implementation package are installed together by `hermes plugins
+install`; no second package installation or runtime environment is part of deployment. Better
+implements its narrow Hindsight 0.8.5 wire contract over `aiohttp` and does not import the
+Hindsight Python SDK, so the untouched bundled provider remains available.
 
 The Git commit is the working identity. A tag or version bump is optional and does not define compatibility. Validation records the current Better and Hermes commits and tests behavior against that checkout.
 
 ## Accepted limitations
 
 The intended deployment is personal Linux/POSIX with one trusted local operator/principal, one bank,
-one external Hindsight 0.8.5 service, a stable profile/outbox pathname topology, and the normal Hermes
+one external Hindsight 0.8.5 service, a stable Hermes-home/outbox pathname topology, and the normal Hermes
 memory-provider lifecycle. Passive status is an operational snapshot under that model, not a defense
 against concurrent pathname replacement or an adversarial local writer. `codex_app_server`, typed
 provenance, automatic migration/deletion, and cross-platform sender election are outside the initial

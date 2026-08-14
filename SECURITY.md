@@ -8,9 +8,9 @@ Do not open a public issue containing credentials, private endpoints, principal 
 
 ## Deployment boundary
 
-The supported deployment is a trusted Linux Hermes profile with one configured principal and an external Hindsight 0.8.5 service. The configured Hindsight credential may have broader server permissions than the plugin exposes; `single_principal` is plugin policy, not server-side authorization.
+The supported deployment is a trusted Linux Hermes installation with one configured principal and an external Hindsight 0.8.5 service. The configured Hindsight credential may have broader server permissions than the plugin exposes; `single_principal` is plugin policy, not server-side authorization.
 
-Use a dedicated Hermes profile where operational separation is useful and the least-privileged Hindsight credential available. Keep secrets in environment variables, never in repository configuration. Use HTTPS when the service crosses an untrusted network; plaintext HTTP is appropriate only on an explicitly trusted network.
+Install Better through the standard Hermes plugin lifecycle and use the least-privileged Hindsight credential available. Keep secrets in environment variables, never in repository configuration. Use HTTPS when the service crosses an untrusted network; plaintext HTTP is appropriate only on an explicitly trusted network.
 
 ## Preserved controls
 

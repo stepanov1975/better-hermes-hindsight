@@ -19,8 +19,12 @@ def main() -> int:
     required = (
         "/pyproject.toml",
         "/README.md",
-        "/src/better_hermes_hindsight/__init__.py",
-        "/src/better_hermes_hindsight/hermes_plugin/plugin.yaml",
+        "/__init__.py",
+        "/after-install.md",
+        "/cli.py",
+        "/plugin.yaml",
+        "/better_hermes_hindsight/__init__.py",
+        "/better_hermes_hindsight/provider.py",
     )
     missing = [suffix for suffix in required if not any(name.endswith(suffix) for name in names)]
     if missing:

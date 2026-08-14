@@ -7,7 +7,7 @@ import math
 import os
 import sys
 import tempfile
-from argparse import ArgumentParser
+from argparse import ArgumentParser, Namespace
 from collections.abc import Iterable, Mapping
 from contextlib import suppress
 from pathlib import Path
@@ -286,10 +286,9 @@ def _read_events(path: Path) -> list[dict[str, object]]:
     return events
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Evaluate bounded JSON artifacts and emit only alert transitions or recovery."""
+def register_cli_arguments(parser: ArgumentParser) -> None:
+    """Register watchdog options on a standalone or Hermes subcommand parser."""
 
-    parser = ArgumentParser(prog="better-hindsight-watchdog", allow_abbrev=False)
     parser.add_argument("--status-json", type=Path, required=True)
     parser.add_argument("--canary-json", type=Path, required=True)
     parser.add_argument("--events-jsonl", type=Path, required=True)
@@ -298,7 +297,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--recall-error-rate", type=float, default=0.2)
     parser.add_argument("--recall-timeout-rate", type=float, default=0.2)
     parser.add_argument("--recall-window", type=int, default=100)
-    args = parser.parse_args(argv)
+
+
+def run_from_namespace(args: Namespace) -> int:
+    """Evaluate parsed watchdog inputs and emit an alert transition or recovery."""
+
     try:
         result = evaluate_watchdog(
             status=_read_json_object(args.status_json),
@@ -319,7 +322,15 @@ def main(argv: list[str] | None = None) -> int:
     return 1 if result.get("result") == "alert" else 0
 
 
-__all__ = ["evaluate_watchdog", "main"]
+def main(argv: list[str] | None = None) -> int:
+    """Evaluate bounded JSON artifacts and emit only alert transitions or recovery."""
+
+    parser = ArgumentParser(prog="better-hindsight-watchdog", allow_abbrev=False)
+    register_cli_arguments(parser)
+    return run_from_namespace(parser.parse_args(argv))
+
+
+__all__ = ["evaluate_watchdog", "main", "register_cli_arguments", "run_from_namespace"]
 
 
 if __name__ == "__main__":  # pragma: no cover

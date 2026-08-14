@@ -7,7 +7,7 @@ import re
 from collections.abc import Sequence
 from typing import Protocol, cast
 
-from better_hermes_hindsight.redaction import redact_sensitive_text
+from .redaction import redact_sensitive_text
 
 CONTEXT_BEGIN_MARKER = "[BETTER_HINDSIGHT_HISTORICAL_EVIDENCE_BEGIN]"
 CONTEXT_PREAMBLE = (

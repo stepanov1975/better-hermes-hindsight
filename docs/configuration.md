@@ -1,6 +1,6 @@
 # Configuration
 
-Better Hermes Hindsight configuration is explicit, profile-scoped, and local-external-only. Loading
+Better Hermes Hindsight configuration is explicit, Hermes-home-scoped, and local-external-only. Loading
 configuration does not contact Hindsight, create a client, import Hermes, discover a `.env` file, or
 search the current working directory.
 
@@ -10,7 +10,7 @@ directly by `recall.enabled` and `retain.enabled`.
 
 ## Sources and precedence
 
-`load_config(hermes_home=...)` reads non-secret profile settings only from:
+`load_config(hermes_home=...)` reads non-secret local settings only from:
 
 ```text
 $HERMES_HOME/better_hindsight/config.json
@@ -21,7 +21,7 @@ Values resolve in this order, highest precedence first:
 1. explicitly injected non-secret test values;
 2. the existing process variables `HINDSIGHT_API_URL`, `HINDSIGHT_API_KEY`, and
    `HINDSIGHT_BANK_ID`;
-3. profile `config.json`; and
+3. the plugin's local `config.json`; and
 4. documented defaults.
 
 `HINDSIGHT_API_KEY` is the only supported API-key source. JSON is rejected if a secret-bearing key
@@ -29,7 +29,7 @@ appears at any nesting level. The loader never writes credentials, and typed con
 representations omit the API key, endpoint, bank ID, outbox path, principal identifiers, and raw
 mission text.
 
-## Minimal profile example
+## Minimal configuration example
 
 This example uses only synthetic/local values and contains no API key. Retention remains off.
 
@@ -121,7 +121,7 @@ field exactly, and requires fresh exact readback.
 
 Mission commands require `single_principal=true` regardless of recall or retention enablement and use
 `retain.timeout_seconds` as one total remote-operation deadline. Mission values, endpoint, bank,
-credential, profile path, and raw SDK errors never appear in command JSON. Omitting both mission
+credential, Hermes path, and raw SDK errors never appear in command JSON. Omitting both mission
 values makes apply a fixed no-write error; it does not infer or install default policy.
 
 For automatic retention, this deadline is consumed by the sender around one remote synchronous retain
@@ -230,13 +230,13 @@ failure fails open for the conversation and emits only the fixed warning
 `Better Hindsight local retention admission was rejected.` The warning contains no turn payload,
 session identifier, endpoint, bank, credential, or path.
 
-The profile-local outbox uses private SQLite schema version 1. A new/version-0 database is initialized
+The Hermes-home-local outbox uses private SQLite schema version 1. A new/version-0 database is initialized
 to v1, reopening v1 is idempotent, and unknown nonzero versions are rejected without an invented
 legacy migration. On the sender/write path, the configured path is revalidated inside `hermes_home`
 when opened, including symlink escapes. The pre-created database is opened existing-only, and its
 no-follow device/inode identity is checked immediately after connection but before schema writes and
 again after initialization. Newly created outbox directories use mode `0700` on POSIX; the database
-and reserved profile lock file use `0600`. Pre-existing parent-directory modes are not changed, and
+and reserved ownership lock file use `0600`. Pre-existing parent-directory modes are not changed, and
 an existing file is permission-corrected only after it passes confinement and private-schema
 validation; a rejected foreign file is left unchanged.
 
@@ -250,7 +250,7 @@ trusted local operator and a stable outbox pathname and sidecar topology during 
 concurrent pathname/topology replacement is outside that operational model.
 
 Sender delivery is implemented after local admission. A retain-enabled process starts one daemon
-sender, and a profile-wide POSIX advisory lock elects the sole process allowed to recover, claim,
+sender, and a Hermes-home-wide POSIX advisory lock elects the sole process allowed to recover, claim,
 complete, or reschedule rows. Bounded cross-process polling lets that owner discover rows admitted by
 another process. Only rows matching the current destination fingerprint and payload schema are
 claimed; mismatched rows remain durable and unconfirmed.
@@ -269,5 +269,5 @@ do not check or apply them. Operators can compare configured and remote values w
 `hermes better_hindsight missions apply --confirm` command. The model-facing recall tool cannot
 invoke either operation, and no retain, reflect, mission, or configuration tool is exposed.
 
-Development writes require an isolated Hindsight instance and Hermes profile. Production uses a
-separate canary instance and bank while the old deployment remains untouched for rollback.
+Development writes require an isolated Hindsight instance and synthetic bank. Production canary
+checks likewise use synthetic content and an explicitly designated bank.

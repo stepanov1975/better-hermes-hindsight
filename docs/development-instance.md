@@ -1,6 +1,6 @@
 # Isolated live validation
 
-The live test targets only the already isolated Hermes installation, interpreter, Hindsight 0.8.5 service, datastore, credential, and disposable bank namespace. It uses synthetic content and creates a random bank for each run.
+The live test targets an isolated Hindsight 0.8.5 service, datastore, credential, and disposable bank namespace from the normal Hermes development environment. It uses synthetic content and creates a random bank for each run.
 
 ## Required opt-in
 
@@ -11,7 +11,7 @@ export BETTER_HINDSIGHT_ALLOW_DEV_WRITES=1
 export BETTER_HINDSIGHT_REQUIRE_LIVE_PROOF=1
 export BETTER_HINDSIGHT_DEV_API_URL=http://isolated-host:8888
 export BETTER_HINDSIGHT_DEV_API_KEY='...'
-export BETTER_HINDSIGHT_DEV_HERMES_PYTHON=/path/to/isolated/hermes/python
+export BETTER_HINDSIGHT_DEV_HERMES_PYTHON=/path/to/current/hermes/python
 ```
 
 For a non-loopback endpoint, also provide an exact comma-separated allowlist:
@@ -20,7 +20,7 @@ For a non-loopback endpoint, also provide an exact comma-separated allowlist:
 export BETTER_HINDSIGHT_DEV_ALLOWED_ENDPOINTS=http://isolated-host:8888
 ```
 
-Do not reuse production endpoints, credentials, banks, profiles, or content. The API key value must never be printed.
+Do not reuse production endpoints, credentials, banks, or content. The API key value must never be printed.
 
 ## What the smoke test proves
 

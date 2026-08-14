@@ -3,7 +3,7 @@
 ## Status
 
 ```bash
-hermes --profile <profile> better_hindsight status
+hermes better_hindsight status
 ```
 
 Status passively inspects an existing schema-v1 outbox. It does not initialize or migrate schemas,
@@ -20,7 +20,7 @@ pathname and sidecar topology for the short inspection. It is a passive operatio
 forensic snapshot across concurrent pathname or topology replacement.
 
 The result includes queue counts, logical queued bytes, oldest-item age bucket, per-category error
-counts, maximum attempt count, next-retry bucket, installed package identity, and a point-in-time
+counts, maximum attempt count, next-retry bucket, plugin identity, and a point-in-time
 sender-ownership probe. It reports `result: "degraded"` and exits 1 for a destination mismatch,
 retrying or sending work, first-attempt work aged at least one hour, or due work when sender
 ownership cannot be probed. `sender_ownership: "held"` is only a lock snapshot, not a sender
@@ -53,7 +53,7 @@ names are `better_hindsight.http_request`, `better_hindsight.client_lifecycle`,
 
 ## External end-to-end canary
 
-`python -m better_hermes_hindsight.canary` is an explicit synthetic write/read/delete check for a
+`hermes better_hindsight canary` is an explicit synthetic write/read/delete check for a
 fixed canary bank. It verifies exact Hindsight API version `0.8.5`, then uses the installed
 `HindsightClientAdapter` for synchronous retention and recall. That exercises the production
 `aiohttp` transport, wire defaults, strict response decoding, and client lifecycle rather than a
@@ -80,7 +80,7 @@ remain separate operational changes requiring authorization.
 
 ## Low-noise alert evaluator
 
-`python -m better_hermes_hindsight.watchdog` accepts three bounded files: the latest status and
+`hermes better_hindsight watchdog` accepts three bounded files: the latest status and
 canary JSON objects plus JSONL containing only newly collected structured events. It alerts on degraded
 local status, each new sender retention failure, adapter contract failure, sender-loop failure, or
 client lifecycle failure; configurable rolling recall timeout and non-timeout error rates; or failed
@@ -95,7 +95,7 @@ produce one JSON line and exit 1; unchanged state is silent; recovery produces o
 Example evaluator invocation after a caller has atomically produced bounded artifacts:
 
 ```bash
-python -m better_hermes_hindsight.watchdog \
+hermes better_hindsight watchdog \
   --status-json /run/better-hindsight/status.json \
   --canary-json /run/better-hindsight/canary.json \
   --events-jsonl /run/better-hindsight/new-events.jsonl \
@@ -120,8 +120,8 @@ The elected sender resets stale `sending` rows after acquiring ownership and ret
 ## Missions
 
 ```bash
-hermes --profile <profile> better_hindsight missions check
-hermes --profile <profile> better_hindsight missions apply --confirm
+hermes better_hindsight missions check
+hermes better_hindsight missions apply --confirm
 ```
 
 `check` performs a read and reports `equal`, `drift`, or `missing`. `apply --confirm` patches only configured drifted mission fields and requires an exact GET readback before reporting success. Mission commands use a client-only runtime and never start the retention sender.
@@ -130,4 +130,4 @@ There is no automatic mission application, retry-now, drain, arbitrary-row, row-
 
 ## Live validation
 
-Use fake-service tests first. The opt-in procedure in [development-instance](development-instance.md) targets only the existing isolated Hermes/Hindsight environment and synthetic content. If cleanup fails, retain the reported generated bank identifier for manual cleanup; never infer or delete a resource in the existing production deployment.
+Use fake-service tests first. The opt-in procedure in [development-instance](development-instance.md) targets only an isolated Hindsight environment and synthetic content. If cleanup fails, retain the reported generated bank identifier for manual cleanup; never infer or delete a resource in the existing production deployment.

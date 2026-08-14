@@ -9,16 +9,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol, TypeVar, cast
 
-from better_hermes_hindsight.client import (
+from .client import (
     HindsightClientProtocol,
     MissionClientProtocol,
     MissionSnapshot,
     MissionValue,
 )
-from better_hermes_hindsight.config import BetterHindsightConfig
-from better_hermes_hindsight.outbox import OutboxInspection, inspect_outbox
-from better_hermes_hindsight.runtime import create_operator_runtime
-from better_hermes_hindsight.telemetry import deployed_identity, error_counts
+from .config import BetterHindsightConfig
+from .outbox import OutboxInspection, inspect_outbox
+from .runtime import create_operator_runtime
+from .telemetry import deployed_identity, error_counts
 
 _T = TypeVar("_T")
 _MissionField = Literal["retain_mission", "observations_mission"]

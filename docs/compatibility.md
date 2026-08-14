@@ -17,7 +17,9 @@ The relevant public host contract is Hermes's `MemoryProvider`/`MemoryManager` l
 
 Better intentionally targets the external Hindsight 0.8.5 HTTP contract. It implements only recall, synchronous retain, bank-config read, and bank-config patch over `aiohttp`; it does not import or depend on the Hindsight Python SDK.
 
-The bundled provider can therefore keep Hermes's `hindsight-client==0.6.1` in the same interpreter. A separate profile remains useful for configuration and rollback, but a separate Python environment is not required.
+The bundled provider can therefore keep Hermes's `hindsight-client==0.6.1` unchanged. Better is
+loaded directly from its standard Git-plugin checkout and needs no separate runtime or configuration
+isolation.
 
 ## Update behavior
 

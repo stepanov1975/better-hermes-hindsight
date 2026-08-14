@@ -35,17 +35,15 @@ def _manifest(path: Path) -> dict[str, object]:
 def test_package_and_plugin_metadata_are_consistent() -> None:
     project = _project()
     root_manifest = _manifest(ROOT / "plugin.yaml")
-    packaged_manifest = _manifest(
-        ROOT / "src" / "better_hermes_hindsight" / "hermes_plugin" / "plugin.yaml"
-    )
 
     assert project["name"] == "better-hermes-hindsight"
     assert better_hermes_hindsight.PROVIDER_ID == "better_hindsight"
     assert better_hermes_hindsight.__version__ == project["version"]
-    assert root_manifest == packaged_manifest
     assert root_manifest["name"] == better_hermes_hindsight.PROVIDER_ID
     assert root_manifest["kind"] == "exclusive"
     assert root_manifest["version"] == project["version"]
+    assert root_manifest["manifest_version"] == 1
+    assert root_manifest["pip_dependencies"] == ["aiohttp>=3.14.1,<4"]
 
 
 def test_required_operator_documentation_exists() -> None:
@@ -63,15 +61,19 @@ def test_required_operator_documentation_exists() -> None:
     assert all(path.is_file() for path in required)
 
 
-def test_public_install_guide_fetches_the_complete_immutable_release_set() -> None:
+def test_public_install_guide_uses_only_standard_hermes_plugin_commands() -> None:
     text = (ROOT / "docs" / "installation.md").read_text(encoding="utf-8")
 
-    assert 'VERSION="${RELEASE#v}"' in text
-    assert "better_hermes_hindsight-$VERSION-py3-none-any.whl" in text
-    assert "better_hermes_hindsight-$VERSION.tar.gz" in text
-    assert '(cd "$ASSET_DIR" && sha256sum --check SHA256SUMS)' in text
-    assert "Do not install from a moving branch" in text
-    assert 'uv pip install --python "$APP_DIR/venv/bin/python" -e "$SOURCE_DIR"' not in text
+    assert "hermes plugins install stepanov1975/better-hermes-hindsight" in text
+    assert "hermes memory setup better_hindsight" in text
+    for forbidden in (
+        "--profile",
+        "install_release.py",
+        "uv pip install",
+        "python -m venv",
+        "~/.local/bin/better-hindsight",
+    ):
+        assert forbidden not in text
 
 
 def test_local_markdown_links_resolve() -> None:

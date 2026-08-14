@@ -26,7 +26,7 @@ Keep the provider narrow:
 - bounded current-query recall;
 - optional durable automatic retention;
 - one read-only model tool, `better_hindsight_recall`;
-- operator-only status and mission commands.
+- operator-only status, mission, canary, and watchdog commands.
 
 Do not add embedded service management, cloud routing, multi-user bank templates, model-facing retain/reflect, migration frameworks, automatic deletion, Windows support, previous-query background recall, or Hermes-core patches without a concrete use case.
 
@@ -41,8 +41,9 @@ Preserve these properties:
 - outbox rows have stable destination-bound identity and survive restart;
 - retries use stable document IDs with replace mode and do not claim exactly-once delivery;
 - destination mismatches are never replayed automatically;
-- operator writes require explicit confirmation and exact readback;
-- tests never use production endpoints, credentials, banks, profiles, or transcripts.
+- mission writes require explicit confirmation and exact readback;
+- canary writes require explicit environment opt-in and use synthetic content;
+- tests never use production endpoints, credentials, banks, or transcripts.
 
 Do not infer direct-user versus synthetic provenance from text patterns. If Hermes does not provide typed provenance, document and accept that limitation.
 
@@ -61,8 +62,8 @@ For runtime changes, normally run:
 
 ```bash
 uv lock --check
-uv run --frozen --extra dev python -m ruff check src tests scripts __init__.py cli.py
-uv run --frozen --extra dev python -m ruff format --check src tests scripts __init__.py cli.py
+uv run --frozen --extra dev python -m ruff check better_hermes_hindsight tests scripts __init__.py cli.py
+uv run --frozen --extra dev python -m ruff format --check better_hermes_hindsight tests scripts __init__.py cli.py
 uv run --frozen --extra dev python -m mypy
 uv run --frozen --extra dev python -m pytest -p no:cacheprovider
 rm -rf dist

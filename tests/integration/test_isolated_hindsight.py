@@ -508,13 +508,13 @@ def test_live_proof_is_explicitly_opt_in() -> None:
         _development_inputs({"BETTER_HINDSIGHT_ALLOW_DEV_WRITES": "1"})
 
 
-def test_live_proof_preserves_a_virtualenv_interpreter_symlink(tmp_path: Path) -> None:
+def test_live_proof_preserves_selected_interpreter_symlink(tmp_path: Path) -> None:
     base_python = tmp_path / "base-python"
     base_python.write_text("#!/bin/sh\n", encoding="utf-8")
     base_python.chmod(0o700)
-    venv_python = tmp_path / "venv" / "bin" / "python"
-    venv_python.parent.mkdir(parents=True)
-    venv_python.symlink_to(base_python)
+    selected_python = tmp_path / "current" / "bin" / "python"
+    selected_python.parent.mkdir(parents=True)
+    selected_python.symlink_to(base_python)
 
     inputs = _development_inputs(
         {
@@ -522,12 +522,12 @@ def test_live_proof_preserves_a_virtualenv_interpreter_symlink(tmp_path: Path) -
             "BETTER_HINDSIGHT_ALLOW_DEV_WRITES": "1",
             "BETTER_HINDSIGHT_DEV_API_URL": "http://127.0.0.1:8888",
             "BETTER_HINDSIGHT_DEV_API_KEY": "synthetic-live-key",
-            "BETTER_HINDSIGHT_DEV_HERMES_PYTHON": os.fspath(venv_python),
+            "BETTER_HINDSIGHT_DEV_HERMES_PYTHON": os.fspath(selected_python),
         }
     )
 
     assert inputs is not None
-    assert inputs.hermes_python == venv_python.absolute()
+    assert inputs.hermes_python == selected_python.absolute()
 
 
 def test_child_environment_does_not_forward_unrelated_credentials(

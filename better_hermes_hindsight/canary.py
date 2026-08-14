@@ -17,14 +17,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, cast
 
-from better_hermes_hindsight.client import (
+from .client import (
     HindsightClientError,
     RecallResult,
     RetainConfirmation,
     RetainSegment,
     create_hindsight_client,
 )
-from better_hermes_hindsight.config import BetterHindsightConfig, RecallConfig, RetainConfig
+from .config import BetterHindsightConfig, RecallConfig, RetainConfig
 
 _EXPECTED_VERSION: Final = "0.8.5"
 _MAX_BODY_BYTES: Final = 64 * 1024

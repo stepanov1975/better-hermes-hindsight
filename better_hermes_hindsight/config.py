@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Literal, TypeAlias, cast
 from urllib.parse import urlsplit, urlunsplit
 
-from better_hermes_hindsight.redaction import redact_sensitive_text
+from .redaction import redact_sensitive_text
 
 DEFAULT_API_URL = "http://localhost:8888"
 DEFAULT_BANK_ID = "hermes"

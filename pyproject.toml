@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "better-hermes-hindsight"
-version = "0.1.0a5"
-description = "Experimental external Hindsight memory provider project for Hermes Agent"
+version = "0.2.0"
+description = "External Hindsight memory provider plugin for Hermes Agent"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = "MIT"
@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [{ name = "Alex Stepanov" }]
 keywords = ["hermes-agent", "hindsight", "memory", "plugin"]
 classifiers = [
-  "Development Status :: 2 - Pre-Alpha",
+  "Development Status :: 3 - Alpha",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.11",
@@ -35,15 +35,9 @@ dev = [
 Repository = "https://github.com/stepanov1975/better-hermes-hindsight"
 Issues = "https://github.com/stepanov1975/better-hermes-hindsight/issues"
 
-[tool.setuptools]
-package-dir = {"" = "src"}
-
 [tool.setuptools.packages.find]
-where = ["src"]
+where = ["."]
 include = ["better_hermes_hindsight*"]
-
-[tool.setuptools.package-data]
-"better_hermes_hindsight.hermes_plugin" = ["plugin.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -56,8 +50,8 @@ markers = [
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["src", "tests"]
-mypy_path = "src"
+files = ["better_hermes_hindsight", "tests"]
+mypy_path = "."
 explicit_package_bases = true
 
 [[tool.mypy.overrides]]

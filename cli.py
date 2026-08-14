@@ -1,8 +1,8 @@
-"""Hermes root-plugin bridge for Better Hindsight operator commands."""
+"""Standard Hermes CLI entry point for Better Hindsight."""
 
-from better_hermes_hindsight.hermes_plugin.cli import (
-    better_hindsight_command,
-    register_cli,
-)
+if __package__:
+    from .better_hermes_hindsight.operator_cli import better_hindsight_command, register_cli
+else:  # Direct source import by test and inspection tools.
+    from better_hermes_hindsight.operator_cli import better_hindsight_command, register_cli
 
 __all__ = ["better_hindsight_command", "register_cli"]

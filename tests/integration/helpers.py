@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 
 _INHERITED_ENVIRONMENT = (
@@ -51,25 +51,22 @@ def clean_subprocess_env(
     return environment
 
 
-def materialize_packaged_shim(
-    *,
-    source: Path,
-    hermes_home: Path,
-    names: Sequence[str],
-) -> Path:
-    """Copy the requested packaged plugin bridge files into a Hermes profile."""
+def materialize_standard_plugin(*, source: Path, hermes_home: Path) -> Path:
+    """Copy the standard self-contained plugin payload into a Hermes home."""
 
     destination = hermes_home / "plugins" / "better_hindsight"
     destination.mkdir(parents=True, exist_ok=True)
-    for name in names:
-        candidate = source / name
-        if candidate.is_file():
-            shutil.copy2(candidate, destination / name)
+    for name in ("__init__.py", "after-install.md", "cli.py", "plugin.yaml"):
+        shutil.copy2(source / name, destination / name)
+    shutil.copytree(
+        source / "better_hermes_hindsight",
+        destination / "better_hermes_hindsight",
+    )
     return destination
 
 
 def write_host_selection(hermes_home: Path, provider: str = "better_hindsight") -> None:
-    """Select one memory provider in an isolated Hermes profile."""
+    """Select one memory provider in an isolated Hermes home."""
 
     hermes_home.mkdir(parents=True, exist_ok=True)
     (hermes_home / "config.yaml").write_text(

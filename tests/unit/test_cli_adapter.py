@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from better_hermes_hindsight.hermes_plugin.cli import better_hindsight_command, register_cli
+from better_hermes_hindsight.operator_cli import better_hindsight_command, register_cli
 
 
 def _parser() -> ArgumentParser:

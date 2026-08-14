@@ -8,8 +8,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import NoReturn
 
-from better_hermes_hindsight.config import PAYLOAD_SCHEMA_VERSION, canonicalize_retain_tags
-from better_hermes_hindsight.redaction import redact_sensitive_text
+from .config import PAYLOAD_SCHEMA_VERSION, canonicalize_retain_tags
+from .redaction import redact_sensitive_text
 
 DOCUMENT_ID_PREFIX = "better-hindsight-turn-v1:"
 RETENTION_REJECTED_MESSAGE = "Better Hindsight retention input was rejected."

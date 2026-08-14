@@ -1,102 +1,88 @@
 # Installation
 
-Install a tagged GitHub prerelease into the existing Hermes interpreter and a selected profile. The
-release wheel supplies the Python implementation; the exact tagged checkout supplies the
-thin Hermes plugin bridge. The installer verifies both identities and writes a launcher
-bound to that interpreter.
+Better Hermes Hindsight is a standard, self-contained Hermes memory plugin. It installs into the
+currently active Hermes configuration and uses Hermes's normal plugin lifecycle. It does not need a
+separate profile, Python environment, package installation, launcher, or gateway procedure.
 
 ## Prerequisites
 
-- Hermes installed with the official per-user installer;
-- an external Hindsight 0.8.5 service and isolated bank;
-- `git`, `curl`, and `uv` on `PATH`.
+- Hermes installed and working;
+- an external Hindsight 0.8.5 service;
+- `git` available for Hermes's Git-plugin installer.
 
-Better's internal HTTP adapter does not import the Hindsight Python SDK. The normal Hermes
-interpreter can therefore retain bundled `hindsight-client==0.6.1` while also running Better.
+The plugin declares `aiohttp>=3.14.1,<4` in `plugin.yaml`. Hermes checks and installs declared
+memory-plugin dependencies through its normal memory setup command. Better does not import or
+replace Hermes's bundled Hindsight client.
 
-The published `v0.1.0a3` release predates the internal adapter and still requires its original
-isolated-interpreter procedure. Use the shared-interpreter commands below with `v0.1.0a5` or
-newer. `v0.1.0a4` contains the internal client but its installer can reject an unrelated
-dependency mismatch already present in Hermes.
+## Install
 
-## Install a tagged release
-
-Replace `vX.Y.Z` below with `v0.1.0a5` or a newer published tag.
-Do not install from a moving branch.
+Run the standard Hermes plugin commands:
 
 ```bash
-set -eu
-RELEASE=vX.Y.Z
-VERSION="${RELEASE#v}"
-PROFILE=better-hindsight
-SOURCE_DIR="$HOME/src/better-hermes-hindsight-$RELEASE"
-ASSET_DIR="$HOME/.cache/better-hermes-hindsight/$RELEASE"
-HERMES_SOURCE="$HOME/.hermes/hermes-agent"
-ASSET_BASE="https://github.com/stepanov1975/better-hermes-hindsight/releases/download/$RELEASE"
-
-test -x "$HERMES_SOURCE/venv/bin/python"
-mkdir -p "$ASSET_DIR"
-git clone --depth 1 --branch "$RELEASE" \
-  https://github.com/stepanov1975/better-hermes-hindsight.git "$SOURCE_DIR"
-
-curl -fL "$ASSET_BASE/better_hermes_hindsight-$VERSION-py3-none-any.whl" \
-  -o "$ASSET_DIR/better_hermes_hindsight-$VERSION-py3-none-any.whl"
-curl -fL "$ASSET_BASE/better_hermes_hindsight-$VERSION.tar.gz" \
-  -o "$ASSET_DIR/better_hermes_hindsight-$VERSION.tar.gz"
-curl -fL "$ASSET_BASE/SHA256SUMS" -o "$ASSET_DIR/SHA256SUMS"
-(cd "$ASSET_DIR" && sha256sum --check SHA256SUMS)
-
-python3 "$SOURCE_DIR/scripts/install_release.py" \
-  --profile "$PROFILE" \
-  --hermes-python "$HERMES_SOURCE/venv/bin/python" \
-  --wheel "$ASSET_DIR/better_hermes_hindsight-$VERSION-py3-none-any.whl" \
-  --sha256sums "$ASSET_DIR/SHA256SUMS"
+hermes plugins install stepanov1975/better-hermes-hindsight
+hermes memory setup better_hindsight
 ```
 
-The installer rejects a dirty or untagged source checkout, a mismatched wheel name, or a
-bad checksum before changing the interpreter or profile. It then verifies package
-compatibility, installed package version, exact bridge-file identity, selected provider,
-and the interpreter-bound launcher at `~/.local/bin/$PROFILE`. It does not create a bank, write a
-credential, enable retention, start a gateway, or schedule operational checks.
+The first command clones the complete plugin into the current Hermes plugin directory. The second
+selects `better_hindsight` as the active memory provider and checks its declared dependency. No
+custom install script or additional runtime is involved.
 
-The compatibility check rejects dependency conflicts introduced by Better. If the selected
-Hermes interpreter already has unrelated `uv pip check` findings, installation may continue only
-when the exact bounded issue set does not grow; the installer reports the pre-existing count
-without printing those dependency details.
+The plugin does not create a Hindsight bank, store a credential, enable retention, start or restart
+a gateway, or schedule its optional canary and watchdog.
 
-The release checkout can be removed after installation. Hermes installs a private copy of
-the verified bridge into the profile, and the Python implementation is installed
-non-editably in the existing Hermes interpreter.
+## Configure
 
-Configure the endpoint, bank, API-key environment variable, principal, and policy under the selected profile. See [configuration](configuration.md). Keep `retain.enabled=false` initially.
+Create the Better Hindsight configuration under the same Hermes home used by the rest of the
+current installation. Configure the endpoint, bank, API-key environment variable, principal, and
+policy as described in [configuration](configuration.md). Keep `retain.enabled=false` initially.
 
 ## Verify before retention
 
 ```bash
-"$HOME/.local/bin/$PROFILE" plugins list
-"$HOME/.local/bin/$PROFILE" config get memory.provider
-"$HOME/.local/bin/$PROFILE" better_hindsight status
-"$HOME/.local/bin/$PROFILE" better_hindsight missions check
+hermes plugins list
+hermes config get memory.provider
+hermes better_hindsight status
+hermes better_hindsight missions check
 ```
 
-Start the selected profile and verify a synthetic recall against the isolated Hindsight bank. Then explicitly enable retention and verify one synthetic completed turn reaches that bank.
+The plugin should appear as installed at version `0.2.0`, and `memory.provider` should be
+`better_hindsight`. General-plugin enablement is not required for a selected memory provider. An
+absent outbox is reported as `uninitialized`; that is normal before the first admitted retained
+turn.
 
-An absent outbox is reported as `uninitialized`; that is normal before the first admitted retained turn. A non-zero status caused by destination-mismatched rows is degraded and must be inspected rather than ignored.
+Verify one synthetic recall against the configured Hindsight bank. Then explicitly enable
+retention and verify one synthetic completed turn reaches that bank. A non-zero status caused by
+destination-mismatched rows is degraded and must be inspected rather than ignored.
 
 ## Update
 
-Stop processes using the Hermes interpreter. Clone the new exact release tag into a
-fresh directory, download that release's wheel, sdist, and `SHA256SUMS`, and run its
-`scripts/install_release.py` with the same profile and interpreter arguments. The installer
-replaces the wheel and plugin bridge, then repeats all post-install checks.
+Use Hermes's standard plugin update command:
 
 ```bash
-"$HOME/.local/bin/$PROFILE" better_hindsight status
+hermes plugins update better_hindsight
+hermes memory setup better_hindsight
+hermes better_hindsight status
 ```
 
-Run status and a synthetic recall before restarting normal use. The status payload reports
-the installed release version and plugin commit without requiring an environment variable.
+If upgrading from a pre-0.2.0 installation that copied only bridge files, replace it once with the
+standard Git plugin:
 
-## Failure boundary
+```bash
+hermes plugins install stepanov1975/better-hermes-hindsight --force
+hermes memory setup better_hindsight
+```
 
-Installation and updates do not migrate or delete Hindsight banks and do not drain or delete Better's outbox. If package installation, discovery, status, or recall fails, keep the selected profile stopped and follow [rollback](rollback.md).
+Updating the plugin does not migrate or delete Hindsight banks, drain or delete the local outbox,
+or restart Hermes. Verify status and one synthetic recall before restarting normal use.
+
+## Remove
+
+Select another memory provider before removing Better:
+
+```bash
+hermes memory setup hindsight
+hermes plugins remove better_hindsight
+```
+
+Removing the plugin does not delete its configuration, outbox, or remote memories. See
+[rollback](rollback.md) before deleting any preserved state.

@@ -7,15 +7,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-import better_hermes_hindsight.hermes_plugin as packaged_plugin
 from tests.hermes_compat import EXPECTED_HERMES_COMMIT, EXPECTED_HERMES_VERSION
 from tests.integration.helpers import (
     clean_subprocess_env,
-    materialize_packaged_shim,
+    materialize_standard_plugin,
     write_host_selection,
 )
 
-SHIM_FILES = ("__init__.py", "cli.py", "plugin.yaml")
+ROOT = Path(__file__).resolve().parents[2]
 
 _ACTIVE_DISCOVERY_SCRIPT = r"""
 import argparse
@@ -87,19 +86,6 @@ def audit_plugin_config(event, args):
 
 sys.addaudithook(audit_plugin_config)
 
-import better_hermes_hindsight.client as client_module
-import better_hermes_hindsight.config as config_module
-import better_hermes_hindsight.outbox as outbox_module
-import better_hermes_hindsight.runtime as runtime_module
-
-config_module.load_config = forbidden("released discovery validated provider configuration")
-client_module.create_hindsight_client = forbidden("released discovery constructed a client")
-runtime_module.acquire_process_runtime = forbidden("released discovery acquired a runtime")
-runtime_module.OutboxSender.start = forbidden("released discovery started a sender")
-outbox_module.SQLiteOutbox.open = classmethod(
-    forbidden("released discovery opened the provider outbox")
-)
-
 import plugins.memory as memory_loader
 
 memory_source = inspect.getsourcefile(memory_loader)
@@ -145,12 +131,23 @@ assert command["setup_fn"].__name__ == "register_cli"
 assert command["handler_fn"].__name__ == "better_hindsight_command"
 assert inspect.iscoroutinefunction(command["setup_fn"]) is False
 assert inspect.iscoroutinefunction(command["handler_fn"]) is False
-assert command["setup_fn"].__module__ == "_hermes_user_memory.better_hindsight.cli"
-assert command["handler_fn"].__module__ == "_hermes_user_memory.better_hindsight.cli"
+expected_cli_module = (
+    "_hermes_user_memory.better_hindsight.better_hermes_hindsight.operator_cli"
+)
+assert command["setup_fn"].__module__ == expected_cli_module
+assert command["handler_fn"].__module__ == expected_cli_module
 
 parser = argparse.ArgumentParser(prog="hermes better_hindsight")
 command["setup_fn"](parser)
 assert parser.parse_args(["status"]) is not None
+assert parser.parse_args(["canary"]) is not None
+assert parser.parse_args([
+    "watchdog",
+    "--status-json", "/tmp/status.json",
+    "--canary-json", "/tmp/canary.json",
+    "--events-jsonl", "/tmp/events.jsonl",
+    "--state", "/tmp/state.json",
+]) is not None
 assert parser.parse_args(["missions", "check"]) is not None
 apply_args = parser.parse_args(["missions", "apply", "--confirm"])
 assert apply_args.confirm is True
@@ -215,15 +212,14 @@ print(json.dumps({
 """
 
 
-def test_current_loader_discovers_active_shim_cli_and_recall_tool(
+def test_current_loader_discovers_active_standard_plugin_cli_and_recall_tool(
     tmp_path: Path,
 ) -> None:
     hermes_home = tmp_path / "hermes-home"
     write_host_selection(hermes_home)
-    shim = materialize_packaged_shim(
-        source=Path(packaged_plugin.__file__).resolve().parent,
+    plugin = materialize_standard_plugin(
+        source=ROOT,
         hermes_home=hermes_home,
-        names=SHIM_FILES,
     )
     config_dir = hermes_home / "better_hindsight"
     config_dir.mkdir(parents=True)
@@ -255,7 +251,7 @@ def test_current_loader_discovers_active_shim_cli_and_recall_tool(
     payload = json.loads(completed.stdout.splitlines()[-1])
     assert payload == {
         "cli_commands": ["better_hindsight"],
-        "cli_module": "_hermes_user_memory.better_hindsight.cli",
+        "cli_module": ("_hermes_user_memory.better_hindsight.better_hermes_hindsight.operator_cli"),
         "commit": EXPECTED_HERMES_COMMIT,
         "discovered": 1,
         "loaded": "better_hindsight",
@@ -282,7 +278,13 @@ def test_current_loader_discovers_active_shim_cli_and_recall_tool(
         "registrations": ["better_hindsight"],
         "version": EXPECTED_HERMES_VERSION,
     }
-    assert sorted(path.name for path in shim.iterdir()) == list(SHIM_FILES)
+    assert {path.name for path in plugin.iterdir()} == {
+        "__init__.py",
+        "after-install.md",
+        "better_hermes_hindsight",
+        "cli.py",
+        "plugin.yaml",
+    }
     assert not (hermes_home / "plugins" / "memory").exists()
     assert not (config_dir / "outbox.sqlite3").exists()
     assert not (config_dir / "outbox.sqlite3.lock").exists()
@@ -293,10 +295,9 @@ def test_current_inactive_provider_discovery_returns_no_better_command_directly(
 ) -> None:
     hermes_home = tmp_path / "hermes-home"
     write_host_selection(hermes_home, "hindsight")
-    shim = materialize_packaged_shim(
-        source=Path(packaged_plugin.__file__).resolve().parent,
+    plugin = materialize_standard_plugin(
+        source=ROOT,
         hermes_home=hermes_home,
-        names=SHIM_FILES,
     )
 
     completed = subprocess.run(
@@ -326,4 +327,4 @@ def test_current_inactive_provider_discovery_returns_no_better_command_directly(
         "commit": EXPECTED_HERMES_COMMIT,
         "version": EXPECTED_HERMES_VERSION,
     }
-    assert {path.name for path in shim.iterdir()}.issubset(set(SHIM_FILES))
+    assert (plugin / "better_hermes_hindsight" / "provider.py").is_file()

@@ -17,7 +17,7 @@ The provider currently includes:
 - process-shared sender/runtime ownership for the current Linux deployment;
 - principal and destination policy;
 - passive status plus explicit mission check/apply commands;
-- thin Hermes plugin bridges at the repository root.
+- standard Hermes plugin entry points and a self-contained implementation package at the repository root.
 
 The existing runtime should not be rewritten merely to reduce line count. Simplify it only when real use exposes a bug or a clear maintenance burden.
 
@@ -27,10 +27,11 @@ The existing runtime should not be rewritten merely to reduce line count. Simpli
 - Record observed Hermes, Better, and Hindsight versions/commits in validation results.
 - Fail for missing or incompatible interfaces and broken behavior—not for an unknown but compatible Hermes commit.
 - Use the Git commit as the deployable identity. Version bumps and tags are optional snapshots.
-- Editable installs are development-only. Ordinary-user deployment uses a tagged release
-  wheel plus the exact tagged checkout through `scripts/install_release.py`.
+- Ordinary-user deployment uses `hermes plugins install`; no separate package installation is
+  required.
 - Keep the narrow internal HTTP contract aligned with Hindsight server 0.8.5.
-- Run Better in the existing Hermes interpreter alongside the untouched bundled Hindsight client; keep live-write validation on an isolated Hindsight service/bank.
+- Run Better through Hermes's normal memory-provider lifecycle alongside the untouched bundled
+  Hindsight client; keep live-write validation on an isolated Hindsight service/bank.
 
 ## Validation bar
 
@@ -38,7 +39,8 @@ A development commit is usable when:
 
 1. focused and full deterministic tests pass;
 2. Ruff and mypy pass;
-3. the root bridge imports through the intended Hermes checkout;
+3. the complete Git plugin installs and imports through the intended Hermes checkout without an
+   external Better package;
 4. the current Hermes checkout discovers and initializes the provider;
 5. the isolated Hindsight smoke test proves bounded recall, retained delivery, restart recovery, and cleanup or clear manual-cleanup reporting; and
 6. rollback to the untouched bundled-provider environment remains available.

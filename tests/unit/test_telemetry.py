@@ -20,44 +20,22 @@ from tests.unit.test_provider_recall import _base_config, _recall_response, _wri
 _PRIVATE = "private-query-sentinel"
 
 
-def test_deployed_identity_prefers_environment_then_install_metadata(
+def test_deployed_identity_uses_only_explicit_standard_plugin_commit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    profile_metadata = tmp_path / "better_hindsight/install.json"
-    profile_metadata.parent.mkdir(parents=True)
-    profile_metadata.write_text(
-        '{"commit":"1111111111111111111111111111111111111111"}\n',
-        encoding="utf-8",
-    )
-    plugin_metadata = tmp_path / "plugins/.install-metadata.json"
-    plugin_metadata.parent.mkdir(parents=True)
-    plugin_metadata.write_text(
-        '{"better_hindsight":{"revision":"2222222222222222222222222222222222222222"}}\n',
-        encoding="utf-8",
-    )
-
     monkeypatch.delenv("BETTER_HINDSIGHT_COMMIT", raising=False)
-    assert deployed_identity(tmp_path) == {
-        "commit": "1111111111111111111111111111111111111111",
-        "version": __version__,
-    }
-    profile_metadata.unlink()
-    assert deployed_identity(tmp_path)["commit"] == "2222222222222222222222222222222222222222"
+    assert deployed_identity(tmp_path) == {"commit": "unknown", "version": __version__}
 
     monkeypatch.setenv("BETTER_HINDSIGHT_COMMIT", "A" * 40)
     assert deployed_identity(tmp_path)["commit"] == "a" * 40
 
 
-def test_deployed_identity_rejects_malformed_or_unreadable_metadata(
+def test_deployed_identity_rejects_malformed_commit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("BETTER_HINDSIGHT_COMMIT", "not-a-commit")
-    metadata = tmp_path / "better_hindsight/install.json"
-    metadata.parent.mkdir(parents=True)
-    metadata.write_text("not json\n", encoding="utf-8")
-
     assert deployed_identity(tmp_path) == {"commit": "unknown", "version": __version__}
 
 

@@ -2,7 +2,22 @@
 
 Notable user-visible changes are recorded here. The project follows rolling `main`; versions and tags are optional snapshots rather than compatibility or deployment gates.
 
-## Unreleased
+## 0.2.0 - 2026-08-14
+
+### Changed
+
+- Converted Better Hermes Hindsight into a self-contained standard Hermes Git plugin.
+- Replaced the custom release installer with `hermes plugins install` and `hermes memory setup`.
+- Bundled the implementation with the plugin entry points so no second package installation is
+  required.
+- Removed the dedicated installation launcher and all deployment-isolation requirements.
+- Changed source layout from `src/better_hermes_hindsight` to the repository-root plugin package.
+
+### Fixed
+
+- Plugin loading no longer depends on an independently installed Better Python distribution.
+- Source identity now comes from the self-contained plugin version rather than unrelated installed
+  package metadata.
 
 ## 0.1.0a5 - 2026-08-14
 
@@ -17,7 +32,7 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 ### Changed
 
 - Replaced the `hindsight-client==0.8.5` runtime dependency with a narrow asynchronous HTTP adapter for the four Hindsight 0.8.5 operations Better uses.
-- Better can now share the normal Hermes interpreter with bundled `hindsight-client==0.6.1`; a separate profile remains optional for operational separation.
+- Better can share Hermes with bundled `hindsight-client==0.6.1` without importing that SDK.
 - Added privacy-safe per-operation adapter outcomes, lifecycle diagnostics, precise sender/recall
   reasons, broader low-noise watchdog coverage, and an adapter-backed E2E canary.
 
@@ -37,24 +52,20 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 - Bounded read-only `better_hindsight_recall` model tool that reuses the configured automatic-recall policy without exposing caller-selected banks or writes.
 - Degraded/non-zero operator status when destination-mismatched outbox rows cannot be delivered safely.
-- Checksum-verified tagged-release installer for a dedicated Hermes interpreter/profile.
 
 ### Changed
 
 - Replaced exact Hermes commit/release assertions with behavioral testing against the intended current checkout.
 - Reduced CI to the maintained Python runtime tested against current Hermes `main`.
-- Ordinary-user deployment now uses a non-editable wheel and exact tagged plugin checkout;
-  development continues to follow rolling Git commits.
+- Development continues to follow rolling Git commits.
 - Simplified development documentation, isolated live validation, and repository tests.
 - Removed canonical-plan hashes, release-gate prose contracts, historical compatibility blockers, and version bumps as a per-commit requirement.
 
 ### Fixed
 
-- Generated launcher now binds the selected profile to its dedicated Hermes interpreter.
 - Generic Hermes doctor registration no longer mistakes the exclusive memory-provider bridge
   for a general plugin failure.
-- Status derives package and release-commit provenance from the verified install receipt.
-- Public installation no longer requires an editable checkout or private repository access.
+- Public installation does not require private repository access.
 
 ## 0.1.0a1 - 2026-08-10
 

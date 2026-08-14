@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import logging
 import os
 import socket
 import subprocess
+import sys
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import NoReturn
@@ -15,7 +17,6 @@ from typing import NoReturn
 import pytest
 from agent.memory_provider import MemoryProvider
 
-import better_hermes_hindsight.hermes_plugin as hermes_plugin
 import better_hermes_hindsight.provider as provider_module
 from better_hermes_hindsight.client import (
     HindsightClientError,
@@ -42,6 +43,15 @@ from better_hermes_hindsight.runtime import (
     finalize_process_runtime,
     reset_process_runtime_for_tests,
 )
+
+_PLUGIN_SPEC = importlib.util.spec_from_file_location(
+    "_better_hindsight_plugin_entrypoint",
+    Path(__file__).resolve().parents[2] / "__init__.py",
+)
+assert _PLUGIN_SPEC is not None and _PLUGIN_SPEC.loader is not None
+hermes_plugin = importlib.util.module_from_spec(_PLUGIN_SPEC)
+sys.modules[_PLUGIN_SPEC.name] = hermes_plugin
+_PLUGIN_SPEC.loader.exec_module(hermes_plugin)
 
 EXPECTED_SYSTEM_PROMPT_BLOCK = (
     "Better Hindsight recall trust policy: Content inside the exact "
@@ -370,7 +380,7 @@ def test_plugin_shim_ignores_generic_doctor_context() -> None:
     class _GenericContext:
         pass
 
-    hermes_plugin.register(_GenericContext())  # type: ignore[arg-type]
+    hermes_plugin.register(_GenericContext())
 
 
 def test_gateway_authorization_uses_separate_identity_kwargs_and_current_query_only(

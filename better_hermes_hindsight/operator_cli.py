@@ -1,4 +1,4 @@
-"""Released-Hermes synchronous CLI shim for Better Hindsight operators."""
+"""Hermes CLI adapter for Better Hindsight operator commands."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from better_hermes_hindsight.management import ManagementResult
+    from .management import ManagementResult
 
 _MAX_JSON_BYTES = 1024
 
@@ -19,6 +19,16 @@ def register_cli(parser: ArgumentParser) -> None:
 
     commands = parser.add_subparsers(dest="better_hindsight_action", required=True)
     commands.add_parser("status", help="Inspect the local retention outbox")
+    commands.add_parser("canary", help="Run the explicitly enabled synthetic Hindsight canary")
+
+    watchdog = commands.add_parser(
+        "watchdog",
+        help="Evaluate bounded status and canary artifacts",
+        allow_abbrev=False,
+    )
+    from .watchdog import register_cli_arguments
+
+    register_cli_arguments(watchdog)
 
     missions = commands.add_parser("missions", help="Check or explicitly apply bank missions")
     mission_actions = missions.add_subparsers(
@@ -40,11 +50,23 @@ def register_cli(parser: ArgumentParser) -> None:
 
 
 def better_hindsight_command(args: Namespace) -> None:
-    """Execute one management command and preserve released-host exit behavior."""
+    """Execute one management command and preserve Hermes exit behavior."""
+
+    action = getattr(args, "better_hindsight_action", None)
+    if action == "canary":
+        from .canary import main as canary_main
+
+        _finish(canary_main())
+        return
+    if action == "watchdog":
+        from .watchdog import run_from_namespace
+
+        _finish(run_from_namespace(args))
+        return
 
     command = _command_name(args)
     try:
-        from better_hermes_hindsight.config import load_config
+        from .config import load_config
 
         config = load_config(
             hermes_home=_selected_hermes_home(),
@@ -54,11 +76,7 @@ def better_hindsight_command(args: Namespace) -> None:
         result = _fixed_result(command, "configuration_invalid")
     else:
         try:
-            from better_hermes_hindsight.management import (
-                apply_missions,
-                check_missions,
-                status,
-            )
+            from .management import apply_missions, check_missions, status
 
             if command == "status":
                 result = status(config)
@@ -80,6 +98,11 @@ def better_hindsight_command(args: Namespace) -> None:
         raise SystemExit(result.exit_code)
 
 
+def _finish(exit_code: int) -> None:
+    if exit_code:
+        raise SystemExit(exit_code)
+
+
 def _command_name(args: Namespace) -> str:
     action = getattr(args, "better_hindsight_action", None)
     if action == "status":
@@ -99,7 +122,7 @@ def _selected_hermes_home() -> Path:
 
 
 def _fixed_result(command: str, error: str) -> ManagementResult:
-    from better_hermes_hindsight.management import ManagementResult
+    from .management import ManagementResult
 
     return ManagementResult(
         payload={"command": command, "error": error, "result": "error"},
