@@ -1,7 +1,7 @@
 manifest_version: 1
 name: better_hindsight
 kind: exclusive
-version: 0.2.2
+version: 0.2.3
 description: Current-query recall for supported external Hindsight services.
 pip_dependencies:
   - "aiohttp>=3.14.1,<4"

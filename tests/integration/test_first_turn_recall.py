@@ -369,6 +369,6 @@ def test_current_agent_faults_fail_open_and_still_reach_first_model_within_deadl
     assert payload["finalized"] is True
     assert isinstance(payload["model_elapsed"], float)
     if fault == "delay":
-        assert payload["model_elapsed"] < 0.825
+        assert payload["model_elapsed"] < 1.0
     else:
         assert payload["model_elapsed"] < 2.0

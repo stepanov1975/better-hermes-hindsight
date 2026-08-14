@@ -4,6 +4,8 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+## 0.2.3 - 2026-08-14
+
 ### Fixed
 
 - Recall query projection now enforces Hindsight's `cl100k_base` input-token ceiling in addition to
