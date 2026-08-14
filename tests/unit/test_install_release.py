@@ -74,6 +74,7 @@ def test_source_identity_requires_exact_release_tag_and_clean_checkout(tmp_path:
 def test_installer_binds_profile_to_dedicated_interpreter(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     python, wheel, sums, source = _artifact_fixture(tmp_path)
     launcher = tmp_path / "bin/better-hindsight-test"
@@ -96,6 +97,14 @@ def test_installer_binds_profile_to_dedicated_interpreter(
     ) -> subprocess.CompletedProcess[str]:
         del check
         calls.append(command)
+        if command[1:3] == ["pip", "check"]:
+            issue = "The package `old-package` requires `dependency<2`, but `2.0` is installed"
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                "",
+                f"Found 1 incompatibility\n{issue}\n",
+            )
         if command[-2:] == ["--force", "--enable"]:
             plugin = home / ".hermes/profiles/better-hindsight-test/plugins/better_hindsight"
             plugin.mkdir(parents=True)
@@ -167,6 +176,8 @@ def test_installer_binds_profile_to_dedicated_interpreter(
     metadata_path = home / ".hermes/profiles/better-hindsight-test/better_hindsight/install.json"
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     assert metadata == {"commit": _COMMIT, "version": _VERSION}
+    warning = json.loads(capsys.readouterr().err)
+    assert warning == {"preexisting_dependency_incompatibilities": 1, "result": "warning"}
 
 
 def test_hermes_home_environment_controls_profile_receipt(
@@ -178,6 +189,38 @@ def test_hermes_home_environment_controls_profile_receipt(
     monkeypatch.setattr(install_release, "_user_home", lambda: tmp_path / "ignored-home")
 
     assert install_release._hermes_home() == configured
+
+
+def test_pip_check_issues_preserve_only_structured_incompatibilities() -> None:
+    issue = "The package `old-package` requires `dependency<2`, but `2.0` is installed"
+    completed = subprocess.CompletedProcess(
+        ["uv", "pip", "check"],
+        1,
+        "",
+        f"Checked 100 packages in 1ms\nFound 1 incompatibility\n{issue}\n",
+    )
+
+    assert install_release._pip_check_issues(completed) == frozenset({issue})
+
+
+def test_pip_check_issues_reject_unstructured_failures() -> None:
+    completed = subprocess.CompletedProcess(
+        ["uv", "pip", "check"],
+        2,
+        "",
+        "unexpected failure\n",
+    )
+
+    with pytest.raises(RuntimeError, match="without structured results"):
+        install_release._pip_check_issues(completed)
+
+
+def test_installer_rejects_new_dependency_incompatibilities() -> None:
+    baseline = frozenset({"The package `old` requires `dependency<2`"})
+    installed = baseline | {"The package `new` requires `dependency<3`"}
+
+    with pytest.raises(RuntimeError, match="introduced 1 dependency incompatibility"):
+        install_release._reject_new_pip_check_issues(baseline, installed)
 
 
 def test_installer_rejects_wheel_checksum_mismatch_before_mutation(
@@ -240,6 +283,8 @@ def test_failed_update_clears_previous_success_receipt(
         check: bool = True,
     ) -> subprocess.CompletedProcess[str]:
         del check
+        if command[1:3] == ["pip", "check"]:
+            return subprocess.CompletedProcess(command, 0, "", "")
         raise subprocess.CalledProcessError(1, command)
 
     monkeypatch.setattr(install_release, "_run", fail_first_mutation)

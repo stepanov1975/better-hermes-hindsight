@@ -15,13 +15,14 @@ Better's internal HTTP adapter does not import the Hindsight Python SDK. The nor
 interpreter can therefore retain bundled `hindsight-client==0.6.1` while also running Better.
 
 The published `v0.1.0a3` release predates the internal adapter and still requires its original
-isolated-interpreter procedure. Use the shared-interpreter commands below only with a newer
-published release that contains the internal client.
+isolated-interpreter procedure. Use the shared-interpreter commands below with `v0.1.0a5` or
+newer. `v0.1.0a4` contains the internal client but its installer can reject an unrelated
+dependency mismatch already present in Hermes.
 
 ## Install a tagged release
 
-Replace `vX.Y.Z` below with a published tag newer than `v0.1.0a3` that includes the
-internal HTTP client. Do not install from a moving branch.
+Replace `vX.Y.Z` below with `v0.1.0a5` or a newer published tag.
+Do not install from a moving branch.
 
 ```bash
 set -eu
@@ -57,6 +58,11 @@ bad checksum before changing the interpreter or profile. It then verifies packag
 compatibility, installed package version, exact bridge-file identity, selected provider,
 and the interpreter-bound launcher at `~/.local/bin/$PROFILE`. It does not create a bank, write a
 credential, enable retention, start a gateway, or schedule operational checks.
+
+The compatibility check rejects dependency conflicts introduced by Better. If the selected
+Hermes interpreter already has unrelated `uv pip check` findings, installation may continue only
+when the exact bounded issue set does not grow; the installer reports the pre-existing count
+without printing those dependency details.
 
 The release checkout can be removed after installation. Hermes installs a private copy of
 the verified bridge into the profile, and the Python implementation is installed

@@ -52,7 +52,8 @@ canary/watchdog.
 Better's internal HTTP adapter does not import the Hindsight Python SDK, so Hermes's bundled
 `hindsight-client==0.6.1` can remain installed for the bundled provider. The published
 `v0.1.0a3` release predates this change and still requires its documented isolated interpreter;
-use the shared-interpreter procedure only with a newer release containing the internal client.
+use the shared-interpreter procedure with `v0.1.0a5` or newer. `v0.1.0a4` contains the internal
+client but its installer can reject an unrelated dependency mismatch already present in Hermes.
 
 See the exact commands in [installation](docs/installation.md), then configure the endpoint,
 bank, principal, and credential for that profile. Leave retention disabled until recall and

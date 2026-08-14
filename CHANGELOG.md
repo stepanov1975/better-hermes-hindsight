@@ -4,6 +4,14 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+## 0.1.0a5 - 2026-08-14
+
+### Fixed
+
+- Release installation now tolerates an unchanged set of unrelated, pre-existing Hermes
+  environment dependency incompatibilities while still rejecting any conflict introduced by
+  Better.
+
 ## 0.1.0a4 - 2026-08-14
 
 ### Changed

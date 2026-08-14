@@ -25,6 +25,31 @@ def _run(command: list[str], *, check: bool = True) -> subprocess.CompletedProce
     return subprocess.run(command, check=check, text=True, capture_output=True)
 
 
+def _pip_check_issues(completed: subprocess.CompletedProcess[str]) -> frozenset[str]:
+    """Return uv's structured incompatibility lines without volatile progress output."""
+    if completed.returncode == 0:
+        return frozenset()
+    issues = frozenset(
+        line.strip()
+        for line in f"{completed.stdout}\n{completed.stderr}".splitlines()
+        if line.strip().startswith("The package `")
+    )
+    if completed.returncode != 1 or not issues:
+        raise RuntimeError("dependency compatibility check failed without structured results")
+    return issues
+
+
+def _reject_new_pip_check_issues(
+    baseline: frozenset[str],
+    installed: frozenset[str],
+) -> None:
+    new_issues = installed - baseline
+    if new_issues:
+        raise RuntimeError(
+            f"installation introduced {len(new_issues)} dependency incompatibility issue(s)"
+        )
+
+
 def _find_uv() -> str | None:
     return shutil.which("uv")
 
@@ -180,13 +205,28 @@ def main(argv: list[str] | None = None) -> int:
     if _sha256(wheel) != _expected_digest(sums, wheel.name):
         parser.error("wheel checksum mismatch")
 
+    pip_check = [uv, "pip", "check", "--python", str(python)]
+    baseline_issues = _pip_check_issues(_run(pip_check, check=False))
+
     profile_home = _hermes_home() / "profiles" / args.profile
     receipt = profile_home / "better_hindsight/install.json"
     with suppress(FileNotFoundError):
         receipt.unlink()
 
     _run([uv, "pip", "install", "--python", str(python), str(wheel)])
-    _run([uv, "pip", "check", "--python", str(python)])
+    installed_issues = _pip_check_issues(_run(pip_check, check=False))
+    _reject_new_pip_check_issues(baseline_issues, installed_issues)
+    if baseline_issues:
+        print(
+            json.dumps(
+                {
+                    "preexisting_dependency_incompatibilities": len(baseline_issues),
+                    "result": "warning",
+                },
+                sort_keys=True,
+            ),
+            file=sys.stderr,
+        )
 
     profile = _run([str(hermes), "profile", "show", args.profile], check=False)
     if profile.returncode != 0:
