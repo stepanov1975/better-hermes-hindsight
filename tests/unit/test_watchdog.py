@@ -143,6 +143,83 @@ def test_watchdog_counts_empty_recall_as_successful_sample(tmp_path: Path) -> No
     assert result["reasons"] == ["recall_timeout_rate_elevated"]
 
 
+def test_watchdog_alerts_on_rolling_recall_error_rate(tmp_path: Path) -> None:
+    state = tmp_path / "watchdog.json"
+    events = tuple(_recall("client_error" if index < 2 else "success") for index in range(10))
+
+    result = evaluate_watchdog(
+        status=_status(),
+        canary=_canary(),
+        events=events,
+        state_path=state,
+        minimum_recall_samples=10,
+        recall_error_rate=0.2,
+    )
+
+    assert result is not None
+    assert result["reasons"] == ["recall_error_rate_elevated"]
+
+
+def test_watchdog_alerts_on_each_new_adapter_sender_and_lifecycle_failure(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "watchdog.json"
+    failures = (
+        {"event": "better_hindsight.http_request", "outcome": "schema_invalid"},
+        {"event": "better_hindsight.sender_loop", "outcome": "claim_failed"},
+        {"event": "better_hindsight.client_lifecycle", "outcome": "initialization_failed"},
+    )
+
+    first = evaluate_watchdog(status=_status(), canary=_canary(), events=failures, state_path=state)
+    quiet = evaluate_watchdog(status=_status(), canary=_canary(), events=(), state_path=state)
+    second = evaluate_watchdog(
+        status=_status(), canary=_canary(), events=failures, state_path=state
+    )
+
+    expected = {
+        "event": "better_hindsight.watchdog",
+        "reasons": [
+            "new_adapter_contract_failure",
+            "new_sender_loop_failure",
+            "new_client_lifecycle_failure",
+        ],
+        "result": "alert",
+    }
+    assert first == expected
+    assert quiet is None
+    assert second == expected
+
+
+def test_watchdog_reports_persistent_recovery_that_coincides_with_edge_alert(
+    tmp_path: Path,
+) -> None:
+    state = tmp_path / "watchdog.json"
+    initial = evaluate_watchdog(
+        status=_status(result="degraded"),
+        canary=_canary(),
+        events=(),
+        state_path=state,
+    )
+    collision = evaluate_watchdog(
+        status=_status(),
+        canary=_canary(),
+        events=(
+            {"event": "better_hindsight.client_lifecycle", "outcome": "initialization_failed"},
+        ),
+        state_path=state,
+    )
+    quiet = evaluate_watchdog(status=_status(), canary=_canary(), events=(), state_path=state)
+
+    assert initial is not None
+    assert collision == {
+        "event": "better_hindsight.watchdog",
+        "reasons": ["new_client_lifecycle_failure"],
+        "resolved_reasons": ["local_status_degraded"],
+        "result": "alert",
+    }
+    assert quiet is None
+
+
 def test_watchdog_ignores_private_or_unknown_event_fields(tmp_path: Path) -> None:
     state = tmp_path / "watchdog.json"
     private = "private-memory-sentinel"

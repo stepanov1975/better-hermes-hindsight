@@ -38,21 +38,29 @@ A timeout may mean the server committed after the caller deadline. Stable replac
 
 ## Structured diagnostics
 
-Recall, local retention admission, remote sender attempts, and sender-loop failures emit compact JSON
-through normal Python logging. Events contain only fixed categories and bounded numeric metadata:
-elapsed milliseconds, result/segment counts, byte counts, attempt count, and retry delay. They never
-include queries, recalled text, turn content, document IDs, tags, bank names, endpoints, principal
-identifiers, or credentials. The principal event names are `better_hindsight.recall`,
-`better_hindsight.admission`, `better_hindsight.sender_attempt`, and
+Recall, local retention admission, each internal HTTP operation, client lifecycle, remote sender
+attempts, and sender-loop failures emit compact JSON through normal Python logging. HTTP events record
+only a fixed operation/outcome, elapsed milliseconds, response byte count, and numeric status when a
+response existed. Fixed outcomes distinguish connection, TLS, DNS, timeout, redirect, authentication,
+rate-limit, server-status, content-type, malformed-JSON, size-limit, schema, cancellation, and
+closed-session failures. Sender and recall events preserve the same fixed reason when available.
+
+Events never include queries, recalled text, turn content, document IDs, tags, bank names, endpoints,
+principal identifiers, exception text, response bodies, headers, or credentials. The principal event
+names are `better_hindsight.http_request`, `better_hindsight.client_lifecycle`,
+`better_hindsight.recall`, `better_hindsight.admission`, `better_hindsight.sender_attempt`, and
 `better_hindsight.sender_loop`.
 
 ## External end-to-end canary
 
-`python -m better_hermes_hindsight.canary` is an explicit synthetic write/read/delete check for a fixed canary bank.
-It verifies Hindsight 0.8.5 health and version, synchronously retains one random synthetic document,
-polls recall by the random marker until the exact document ID and unique tag are visible, then validates exact-document
-cleanup. Cleanup is attempted after every retain dispatch and has reserved time within one overall
-deadline. Output is one bounded JSON object containing fixed error categories and numeric timing only.
+`python -m better_hermes_hindsight.canary` is an explicit synthetic write/read/delete check for a
+fixed canary bank. It verifies exact Hindsight API version `0.8.5`, then uses the installed
+`HindsightClientAdapter` for synchronous retention and recall. That exercises the production
+`aiohttp` transport, wire defaults, strict response decoding, and client lifecycle rather than a
+parallel canary implementation. Raw bounded HTTP remains only for health/version preflight and exact
+document cleanup, which are outside Better's narrow adapter surface. Cleanup is attempted after every
+retain dispatch and has reserved time within one overall deadline. Output is one bounded JSON object
+containing fixed error categories, fixed adapter reasons, and numeric timing only.
 
 The command is inert unless `BETTER_HINDSIGHT_CANARY_ENABLED=1`. Configure only a reviewed
 canary/dedicated bank; do not point it at an ordinary memory bank. Supported environment variables:
@@ -73,13 +81,16 @@ remain separate operational changes requiring authorization.
 ## Low-noise alert evaluator
 
 `python -m better_hermes_hindsight.watchdog` accepts three bounded files: the latest status and
-canary JSON objects plus JSONL containing only newly collected structured events. It alerts on degraded local
-status, each new sender retention failure, a configurable rolling recall-timeout rate, or failed E2E
-canary. State contains only fixed aggregate recall outcomes and the last active persistent reason set, is written mode
-0600, and is bounded. Healthy unchanged state produces no output; each newly supplied retention failure
-emits one alert even when the same edge occurred previously. Persistent status/canary/timeout-rate alert
-transitions produce one JSON line and exit 1; unchanged persistent alert state is silent; recovery produces one JSON line and exit 0.
-Malformed evaluator input emits fixed `evaluation_failed` JSON and exits 2.
+canary JSON objects plus JSONL containing only newly collected structured events. It alerts on degraded
+local status, each new sender retention failure, adapter contract failure, sender-loop failure, or
+client lifecycle failure; configurable rolling recall timeout and non-timeout error rates; or failed
+E2E canary. Ordinary transient HTTP outcomes remain discoverable in structured logs and become alerts
+through recall, retention, or canary failure instead of paging independently on every request. State
+contains only fixed aggregate recall outcomes and the last active persistent reason set, is written
+mode 0600, and is bounded. Healthy unchanged state produces no output. Persistent alert transitions
+produce one JSON line and exit 1; unchanged state is silent; recovery produces one JSON line and exits
+0. If a persistent condition recovers during a new edge alert, the same line includes fixed
+`resolved_reasons`. Malformed evaluator input emits fixed `evaluation_failed` JSON and exits 2.
 
 Example evaluator invocation after a caller has atomically produced bounded artifacts:
 
@@ -88,11 +99,19 @@ python -m better_hermes_hindsight.watchdog \
   --status-json /run/better-hindsight/status.json \
   --canary-json /run/better-hindsight/canary.json \
   --events-jsonl /run/better-hindsight/new-events.jsonl \
-  --state /var/lib/better-hindsight/watchdog.json
+  --state /var/lib/better-hindsight/watchdog.json \
+  --recall-error-rate 0.2 \
+  --recall-timeout-rate 0.2
 ```
 
 The caller owns event collection/cursoring and must pass each event at most once. The evaluator is not
 a log scraper and this repository does not install a timer or notification transport.
+
+For production, collect new JSON events by a persistent journal cursor and evaluate them with status
+at least every five minutes. Run the adapter-backed full canary daily in a dedicated bank. Treat any
+reported Hindsight version change as a compatibility review trigger: compare the four used OpenAPI
+operations, rerun fake-service contracts, then run the isolated live proof before accepting the new
+wire contract. Recording every fixed failure does not imply paging on every transient timeout.
 
 ## Restart and shutdown
 

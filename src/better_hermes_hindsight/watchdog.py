@@ -30,10 +30,39 @@ _RECALL_OUTCOMES = frozenset(
     }
 )
 _RETENTION_FAILURES = frozenset({"retain_failed", "retain_timeout", "retain_unconfirmed"})
+_RECALL_ERROR_OUTCOMES = frozenset({"client_error", "format_error", "response_invalid"})
+_ADAPTER_CONTRACT_FAILURES = frozenset(
+    {
+        "authentication_failed",
+        "client_status",
+        "endpoint_not_found",
+        "malformed_json",
+        "non_json",
+        "redirect",
+        "response_oversized",
+        "schema_invalid",
+        "session_closed",
+        "unexpected_status",
+    }
+)
+_LIFECYCLE_FAILURES = frozenset({"close_failed", "initialization_failed"})
+_SENDER_LOOP_FAILURES = frozenset(
+    {
+        "claim_failed",
+        "ownership_unavailable",
+        "recovery_failed",
+        "retry_deadline_failed",
+        "transition_failed",
+    }
+)
 _REASON_ORDER = (
     "local_status_degraded",
     "new_retention_failure",
+    "new_adapter_contract_failure",
+    "new_sender_loop_failure",
+    "new_client_lifecycle_failure",
     "recall_timeout_rate_elevated",
+    "recall_error_rate_elevated",
     "e2e_failed",
 )
 _MAX_STATE_BYTES = 8_192
@@ -48,6 +77,7 @@ def evaluate_watchdog(
     events: Iterable[Mapping[str, object]],
     state_path: Path,
     minimum_recall_samples: int = 10,
+    recall_error_rate: float = 0.2,
     recall_timeout_rate: float = 0.2,
     recall_window: int = 100,
 ) -> dict[str, object] | None:
@@ -59,12 +89,16 @@ def evaluate_watchdog(
 
     _validate_thresholds(
         minimum_recall_samples=minimum_recall_samples,
+        recall_error_rate=recall_error_rate,
         recall_timeout_rate=recall_timeout_rate,
         recall_window=recall_window,
     )
     previous = _read_state(state_path)
     recall_outcomes = list(previous["recall_outcomes"])
     new_retention_failure = False
+    new_adapter_contract_failure = False
+    new_sender_loop_failure = False
+    new_client_lifecycle_failure = False
     for event in events:
         event_name = event.get("event")
         outcome = event.get("outcome")
@@ -74,6 +108,14 @@ def evaluate_watchdog(
             outcome in _RETENTION_FAILURES or event.get("category") in _RETENTION_FAILURES
         ):
             new_retention_failure = True
+        elif (
+            event_name == "better_hindsight.http_request" and outcome in _ADAPTER_CONTRACT_FAILURES
+        ):
+            new_adapter_contract_failure = True
+        elif event_name == "better_hindsight.sender_loop" and outcome in _SENDER_LOOP_FAILURES:
+            new_sender_loop_failure = True
+        elif event_name == "better_hindsight.client_lifecycle" and outcome in _LIFECYCLE_FAILURES:
+            new_client_lifecycle_failure = True
     recall_outcomes = recall_outcomes[-recall_window:]
 
     reasons: set[str] = set()
@@ -85,6 +127,9 @@ def evaluate_watchdog(
         timeout_count = sum(outcome == "timeout" for outcome in recall_outcomes)
         if timeout_count / sample_count >= recall_timeout_rate:
             reasons.add("recall_timeout_rate_elevated")
+        error_count = sum(outcome in _RECALL_ERROR_OUTCOMES for outcome in recall_outcomes)
+        if error_count / sample_count >= recall_error_rate:
+            reasons.add("recall_error_rate_elevated")
     if canary.get("result") != "ok":
         reasons.add("e2e_failed")
 
@@ -92,6 +137,12 @@ def evaluate_watchdog(
     alert_reasons = set(reasons)
     if new_retention_failure:
         alert_reasons.add("new_retention_failure")
+    if new_adapter_contract_failure:
+        alert_reasons.add("new_adapter_contract_failure")
+    if new_sender_loop_failure:
+        alert_reasons.add("new_sender_loop_failure")
+    if new_client_lifecycle_failure:
+        alert_reasons.add("new_client_lifecycle_failure")
     ordered_reasons = [reason for reason in _REASON_ORDER if reason in alert_reasons]
     previous_reasons = previous["active_reasons"]
     _write_state(
@@ -103,13 +154,29 @@ def evaluate_watchdog(
         },
     )
     if ordered_reasons:
-        if not new_retention_failure and persistent_reasons == previous_reasons:
+        if (
+            not any(
+                (
+                    new_retention_failure,
+                    new_adapter_contract_failure,
+                    new_sender_loop_failure,
+                    new_client_lifecycle_failure,
+                )
+            )
+            and persistent_reasons == previous_reasons
+        ):
             return None
-        return {
+        result: dict[str, object] = {
             "event": "better_hindsight.watchdog",
             "reasons": ordered_reasons,
             "result": "alert",
         }
+        resolved_reasons = [
+            reason for reason in previous_reasons if reason not in persistent_reasons
+        ]
+        if resolved_reasons:
+            result["resolved_reasons"] = resolved_reasons
+        return result
     if previous_reasons:
         return {"event": "better_hindsight.watchdog", "result": "recovered"}
     return None
@@ -118,6 +185,7 @@ def evaluate_watchdog(
 def _validate_thresholds(
     *,
     minimum_recall_samples: int,
+    recall_error_rate: float,
     recall_timeout_rate: float,
     recall_window: int,
 ) -> None:
@@ -127,6 +195,13 @@ def _validate_thresholds(
         raise ValueError("recall_window must be a positive integer")
     if minimum_recall_samples > recall_window:
         raise ValueError("minimum_recall_samples must not exceed recall_window")
+    if (
+        isinstance(recall_error_rate, bool)
+        or not isinstance(recall_error_rate, (int, float))
+        or not math.isfinite(float(recall_error_rate))
+        or not 0.0 < float(recall_error_rate) <= 1.0
+    ):
+        raise ValueError("recall_error_rate must be in (0, 1]")
     if (
         isinstance(recall_timeout_rate, bool)
         or not isinstance(recall_timeout_rate, (int, float))
@@ -220,6 +295,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--events-jsonl", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--minimum-recall-samples", type=int, default=10)
+    parser.add_argument("--recall-error-rate", type=float, default=0.2)
     parser.add_argument("--recall-timeout-rate", type=float, default=0.2)
     parser.add_argument("--recall-window", type=int, default=100)
     args = parser.parse_args(argv)
@@ -230,6 +306,7 @@ def main(argv: list[str] | None = None) -> int:
             events=_read_events(args.events_jsonl),
             state_path=args.state,
             minimum_recall_samples=args.minimum_recall_samples,
+            recall_error_rate=args.recall_error_rate,
             recall_timeout_rate=args.recall_timeout_rate,
             recall_window=args.recall_window,
         )

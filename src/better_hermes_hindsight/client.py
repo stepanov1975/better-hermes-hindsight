@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Protocol, TypeVar, cast
@@ -13,10 +15,43 @@ import aiohttp
 
 from better_hermes_hindsight import __version__
 from better_hermes_hindsight.config import BetterHindsightConfig, ObservationScopes, RecallConfig
+from better_hermes_hindsight.telemetry import elapsed_milliseconds, emit_event
 
 HINDSIGHT_REQUEST_TIMEOUT_SECONDS = 300.0
 HINDSIGHT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 MISSION_UPDATE_FIELDS = frozenset({"retain_mission", "observations_mission"})
+HINDSIGHT_ERROR_REASONS = frozenset(
+    {
+        "authentication_failed",
+        "bank_config_failed",
+        "cancelled",
+        "client_close_failed",
+        "client_initialization_failed",
+        "client_status",
+        "connection_error",
+        "dns_error",
+        "endpoint_not_found",
+        "malformed_json",
+        "mission_update_failed",
+        "non_json",
+        "rate_limited",
+        "recall_failed",
+        "redirect",
+        "response_oversized",
+        "retain_failed",
+        "schema_invalid",
+        "server_status",
+        "session_closed",
+        "timeout",
+        "tls_error",
+        "transport_error",
+        "unexpected_error",
+        "unexpected_status",
+    }
+)
+
+logger = logging.getLogger(__name__)
+T = TypeVar("T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +112,15 @@ class RetainConfirmation:
 
 
 @dataclass(frozen=True, slots=True)
+class JsonResponse:
+    """Bounded JSON response metadata passed across the internal transport seam."""
+
+    payload: object = field(repr=False)
+    response_bytes: int
+    status: int
+
+
+@dataclass(frozen=True, slots=True)
 class MissionValue:
     """Presence-preserving mission value from the bank config."""
 
@@ -95,11 +139,31 @@ class MissionSnapshot:
 class HindsightClientError(RuntimeError):
     """Sanitized fixed-category client failure safe for logs and operator output."""
 
-    __slots__ = ("category",)
+    __slots__ = ("category", "reason")
 
-    def __init__(self, category: str, message: str) -> None:
+    def __init__(self, category: str, message: str, *, reason: str | None = None) -> None:
         super().__init__(message)
         self.category = category
+        candidate = category if reason is None else reason
+        self.reason = candidate if candidate in HINDSIGHT_ERROR_REASONS else "unexpected_error"
+
+
+class _JsonTransportError(RuntimeError):
+    """Fixed transport outcome with no raw response or exception detail."""
+
+    __slots__ = ("reason", "response_bytes", "status")
+
+    def __init__(
+        self,
+        reason: str,
+        *,
+        response_bytes: int = 0,
+        status: int | None = None,
+    ) -> None:
+        super().__init__("Hindsight transport failed.")
+        self.reason = reason
+        self.response_bytes = response_bytes
+        self.status = status
 
 
 class MissionUpdateError(ValueError):
@@ -137,7 +201,7 @@ class JsonTransportProtocol(Protocol):
         path: str,
         *,
         json_body: Mapping[str, object] | None = None,
-    ) -> object: ...
+    ) -> JsonResponse: ...
 
     async def close(self) -> None: ...
 
@@ -191,30 +255,84 @@ class _AiohttpJsonTransport:
         path: str,
         *,
         json_body: Mapping[str, object] | None = None,
-    ) -> object:
-        async with self._session.request(
-            method,
-            f"{self._base_url}{path}",
-            json=json_body,
-            allow_redirects=False,
-        ) as response:
-            if response.status != 200:
-                response.close()
-                raise RuntimeError("Hindsight returned an unexpected status.")
-            media_type = response.headers.get("Content-Type", "").partition(";")[0].strip().lower()
-            if media_type != "application/json" and not media_type.endswith("+json"):
-                response.close()
-                raise RuntimeError("Hindsight returned a non-JSON response.")
-            body = bytearray()
-            async for chunk in response.content.iter_chunked(64 * 1024):
-                body.extend(chunk)
-                if len(body) > HINDSIGHT_MAX_RESPONSE_BYTES:
+    ) -> JsonResponse:
+        if self._session.closed:
+            raise _JsonTransportError("session_closed")
+        try:
+            async with self._session.request(
+                method,
+                f"{self._base_url}{path}",
+                json=json_body,
+                allow_redirects=False,
+            ) as response:
+                status = response.status
+                if status != 200:
                     response.close()
-                    raise RuntimeError("Hindsight response exceeded the size limit.")
-            return cast(object, json.loads(body))
+                    raise _JsonTransportError(_status_outcome(status), status=status)
+                media_type = (
+                    response.headers.get("Content-Type", "").partition(";")[0].strip().lower()
+                )
+                if media_type != "application/json" and not media_type.endswith("+json"):
+                    response.close()
+                    raise _JsonTransportError("non_json", status=status)
+                body = bytearray()
+                async for chunk in response.content.iter_chunked(64 * 1024):
+                    body.extend(chunk)
+                    if len(body) > HINDSIGHT_MAX_RESPONSE_BYTES:
+                        response.close()
+                        raise _JsonTransportError(
+                            "response_oversized",
+                            response_bytes=len(body),
+                            status=status,
+                        )
+                try:
+                    payload = cast(object, json.loads(body))
+                except json.JSONDecodeError:
+                    raise _JsonTransportError(
+                        "malformed_json",
+                        response_bytes=len(body),
+                        status=status,
+                    ) from None
+                return JsonResponse(
+                    payload=payload,
+                    response_bytes=len(body),
+                    status=status,
+                )
+        except asyncio.CancelledError:
+            raise
+        except _JsonTransportError:
+            raise
+        except TimeoutError:
+            raise _JsonTransportError("timeout") from None
+        except (aiohttp.ClientConnectorCertificateError, aiohttp.ClientSSLError):
+            raise _JsonTransportError("tls_error") from None
+        except aiohttp.ClientConnectorDNSError:
+            raise _JsonTransportError("dns_error") from None
+        except aiohttp.ClientConnectionError:
+            raise _JsonTransportError("connection_error") from None
+        except aiohttp.ClientError:
+            raise _JsonTransportError("transport_error") from None
+        except Exception:
+            raise _JsonTransportError("transport_error") from None
 
     async def close(self) -> None:
         await self._session.close()
+
+
+def _status_outcome(status: int) -> str:
+    if 300 <= status < 400:
+        return "redirect"
+    if status in (401, 403):
+        return "authentication_failed"
+    if status == 404:
+        return "endpoint_not_found"
+    if status == 429:
+        return "rate_limited"
+    if 400 <= status < 500:
+        return "client_status"
+    if 500 <= status < 600:
+        return "server_status"
+    return "unexpected_status"
 
 
 def is_available() -> bool:
@@ -241,10 +359,16 @@ def create_hindsight_client(
     except asyncio.CancelledError:
         raise
     except Exception:
+        emit_event(
+            logger,
+            "better_hindsight.client_lifecycle",
+            outcome="initialization_failed",
+        )
         raise HindsightClientError(
             "client_initialization_failed",
             "Better Hindsight client initialization failed.",
         ) from None
+    emit_event(logger, "better_hindsight.client_lifecycle", outcome="initialized")
     return HindsightClientAdapter(config=config, transport=transport)
 
 
@@ -275,23 +399,17 @@ class HindsightClientAdapter:
         """Recall current-query memories with the exact established 0.8.5 request defaults."""
 
         payload = _recall_body(query, self._recall_config)
-        response = await _mapped_call(
-            "recall",
-            lambda: self._transport.request(
+        return await _observed_http_call(
+            operation="recall",
+            category="recall_failed",
+            message="Better Hindsight recall failed.",
+            call=lambda: self._transport.request(
                 "POST",
                 f"{self._bank_path}/memories/recall",
                 json_body=payload,
             ),
+            decoder=_decode_recall_response,
         )
-        try:
-            return _decode_recall_response(response)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            raise HindsightClientError(
-                "recall_failed",
-                "Better Hindsight recall failed.",
-            ) from None
 
     async def retain_segment(self, segment: RetainSegment) -> RetainConfirmation:
         """Synchronously retain one stable replace-mode segment and validate confirmation."""
@@ -313,85 +431,76 @@ class HindsightClientAdapter:
             "strategy": None,
             "update_mode": "replace",
         }
-        response = await _mapped_call(
-            "retain",
-            lambda: self._transport.request(
+        return await _observed_http_call(
+            operation="retain",
+            category="retain_failed",
+            message="Better Hindsight retain failed.",
+            call=lambda: self._transport.request(
                 "POST",
                 f"{self._bank_path}/memories",
                 json_body={"items": [item], "async": False, "document_tags": None},
             ),
-        )
-        try:
-            payload = _exact_dict(response)
-            success = _required_exact(payload, "success", bool)
-            bank_id = _required_exact(payload, "bank_id", str)
-            items_count = _required_exact(payload, "items_count", int)
-            asynchronous = _required_exact(payload, "async", bool)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            raise HindsightClientError(
-                "retain_failed",
-                "Better Hindsight retain failed.",
-            ) from None
-        return RetainConfirmation(
-            confirmed=(
-                success is True
-                and bank_id == self._bank_id
-                and items_count == 1
-                and asynchronous is False
-            )
+            decoder=lambda response: _decode_retain_confirmation(
+                response,
+                bank_id=self._bank_id,
+            ),
         )
 
     async def get_bank_config(self) -> MissionSnapshot:
         """Read and exactly validate allowlisted mission values."""
 
-        response = await _mapped_call(
-            "mission_read",
-            lambda: self._transport.request("GET", f"{self._bank_path}/config"),
+        return await _observed_http_call(
+            operation="bank_config_get",
+            category="bank_config_failed",
+            message="Better Hindsight bank configuration read failed.",
+            call=lambda: self._transport.request("GET", f"{self._bank_path}/config"),
+            decoder=lambda response: _decode_bank_config(response, bank_id=self._bank_id),
         )
-        try:
-            _, bank_id, config = _validate_bank_config_response_shape(response)
-            if bank_id != self._bank_id:
-                raise TypeError
-            return MissionSnapshot(
-                retain_mission=_mission_value(config, "retain_mission"),
-                observations_mission=_mission_value(config, "observations_mission"),
-            )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            raise HindsightClientError(
-                "bank_config_failed",
-                "Better Hindsight bank configuration read failed.",
-            ) from None
 
     async def update_bank_missions(self, updates: Mapping[str, str]) -> None:
         """Patch only non-empty allowlisted mission fields; exact readback remains caller-owned."""
 
         copied = _validate_mission_updates(updates)
-        response = await _mapped_call(
-            "mission_update",
-            lambda: self._transport.request(
+        await _observed_http_call(
+            operation="bank_config_patch",
+            category="mission_update_failed",
+            message="Better Hindsight mission update failed.",
+            call=lambda: self._transport.request(
                 "PATCH",
                 f"{self._bank_path}/config",
                 json_body={"updates": copied},
             ),
+            decoder=_decode_mission_update,
         )
-        try:
-            _validate_bank_config_response_shape(response)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            raise HindsightClientError(
-                "mission_update_failed",
-                "Better Hindsight mission update failed.",
-            ) from None
 
     async def close(self) -> None:
         """Close the owned transport on the caller's event loop."""
 
-        await _mapped_call("client_close", self._transport.close)
+        started_at = time.monotonic()
+        try:
+            await _mapped_call("client_close", self._transport.close)
+        except asyncio.CancelledError:
+            emit_event(
+                logger,
+                "better_hindsight.client_lifecycle",
+                elapsed_ms=elapsed_milliseconds(started_at, time.monotonic()),
+                outcome="close_cancelled",
+            )
+            raise
+        except HindsightClientError:
+            emit_event(
+                logger,
+                "better_hindsight.client_lifecycle",
+                elapsed_ms=elapsed_milliseconds(started_at, time.monotonic()),
+                outcome="close_failed",
+            )
+            raise
+        emit_event(
+            logger,
+            "better_hindsight.client_lifecycle",
+            elapsed_ms=elapsed_milliseconds(started_at, time.monotonic()),
+            outcome="closed",
+        )
 
 
 def _recall_body(query: str, config: RecallConfig) -> dict[str, object]:
@@ -424,6 +533,36 @@ def _recall_body(query: str, config: RecallConfig) -> dict[str, object]:
         "tag_groups": None,
         "min_scores": min_scores,
     }
+
+
+def _decode_retain_confirmation(value: object, *, bank_id: str) -> RetainConfirmation:
+    payload = _exact_dict(value)
+    success = _required_exact(payload, "success", bool)
+    response_bank_id = _required_exact(payload, "bank_id", str)
+    items_count = _required_exact(payload, "items_count", int)
+    asynchronous = _required_exact(payload, "async", bool)
+    return RetainConfirmation(
+        confirmed=(
+            success is True
+            and response_bank_id == bank_id
+            and items_count == 1
+            and asynchronous is False
+        )
+    )
+
+
+def _decode_bank_config(value: object, *, bank_id: str) -> MissionSnapshot:
+    _, response_bank_id, config = _validate_bank_config_response_shape(value)
+    if response_bank_id != bank_id:
+        raise TypeError
+    return MissionSnapshot(
+        retain_mission=_mission_value(config, "retain_mission"),
+        observations_mission=_mission_value(config, "observations_mission"),
+    )
+
+
+def _decode_mission_update(value: object) -> None:
+    _validate_bank_config_response_shape(value)
 
 
 def _decode_recall_response(value: object) -> RecallResponse:
@@ -480,9 +619,6 @@ def _exact_dict(value: object) -> dict[object, object]:
     if type(value) is not dict:
         raise TypeError
     return cast(dict[object, object], value)
-
-
-T = TypeVar("T")
 
 
 def _required_exact(payload: Mapping[object, object], key: str, kind: type[T]) -> T:
@@ -595,11 +731,87 @@ async def _mapped_call(operation: str, call: Callable[[], Awaitable[T]]) -> T:
         raise HindsightClientError(category, message) from None
 
 
+async def _observed_http_call(
+    *,
+    operation: str,
+    category: str,
+    message: str,
+    call: Callable[[], Awaitable[JsonResponse]],
+    decoder: Callable[[object], T],
+) -> T:
+    started_at = time.monotonic()
+    try:
+        response = await call()
+    except asyncio.CancelledError:
+        _emit_http_event(started_at=started_at, operation=operation, outcome="cancelled")
+        raise
+    except _JsonTransportError as error:
+        _emit_http_event(
+            started_at=started_at,
+            operation=operation,
+            outcome=error.reason,
+            response_bytes=error.response_bytes,
+            status=error.status,
+        )
+        raise HindsightClientError(category, message, reason=error.reason) from None
+    except Exception:
+        _emit_http_event(started_at=started_at, operation=operation, outcome="transport_error")
+        raise HindsightClientError(category, message, reason="transport_error") from None
+    try:
+        result = decoder(response.payload)
+    except asyncio.CancelledError:
+        _emit_http_event(
+            started_at=started_at,
+            operation=operation,
+            outcome="cancelled",
+            response_bytes=response.response_bytes,
+            status=response.status,
+        )
+        raise
+    except Exception:
+        _emit_http_event(
+            started_at=started_at,
+            operation=operation,
+            outcome="schema_invalid",
+            response_bytes=response.response_bytes,
+            status=response.status,
+        )
+        raise HindsightClientError(category, message, reason="schema_invalid") from None
+    _emit_http_event(
+        started_at=started_at,
+        operation=operation,
+        outcome="success",
+        response_bytes=response.response_bytes,
+        status=response.status,
+    )
+    return result
+
+
+def _emit_http_event(
+    *,
+    started_at: float,
+    operation: str,
+    outcome: str,
+    response_bytes: int = 0,
+    status: int | None = None,
+) -> None:
+    fields: dict[str, object] = {
+        "elapsed_ms": elapsed_milliseconds(started_at, time.monotonic()),
+        "operation": operation,
+        "outcome": outcome,
+        "response_bytes": max(0, response_bytes),
+    }
+    if status is not None:
+        fields["status"] = status
+    emit_event(logger, "better_hindsight.http_request", **fields)
+
+
 __all__ = [
     "HINDSIGHT_REQUEST_TIMEOUT_SECONDS",
     "HindsightClientAdapter",
     "HindsightClientError",
     "HindsightClientProtocol",
+    "JsonResponse",
     "JsonTransportFactory",
     "JsonTransportProtocol",
     "MissionClientProtocol",

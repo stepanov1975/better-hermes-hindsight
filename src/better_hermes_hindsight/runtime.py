@@ -530,6 +530,7 @@ class OutboxSender:
         )
         started = time.monotonic()
         category: OutboxFailureCategory | None = None
+        failure_reason = "none"
         try:
             confirmation = self._runner.run(
                 lambda: self._client.retain_segment(segment),
@@ -538,15 +539,20 @@ class OutboxSender:
         except AsyncRunnerUnsettledError:
             self._wait_for_runner_settlement(stop_sensitive=False)
             category = OutboxFailureCategory.RETAIN_FAILED
+            failure_reason = "runner_unsettled"
         except AsyncCallTimeoutError:
             self._wait_for_runner_settlement(stop_sensitive=False)
             category = OutboxFailureCategory.RETAIN_TIMEOUT
-        except HindsightClientError:
+            failure_reason = "timeout"
+        except HindsightClientError as error:
             category = OutboxFailureCategory.RETAIN_FAILED
+            failure_reason = error.reason
         except asyncio.CancelledError:
             category = OutboxFailureCategory.RETAIN_FAILED
+            failure_reason = "cancelled"
         except Exception:
             category = OutboxFailureCategory.RETAIN_FAILED
+            failure_reason = "unexpected_error"
         else:
             if type(confirmation) is RetainConfirmation and confirmation.confirmed is True:
                 transition = self._outbox.complete_claim(
@@ -564,6 +570,7 @@ class OutboxSender:
                 )
                 return transition
             category = OutboxFailureCategory.RETAIN_UNCONFIRMED
+            failure_reason = "unconfirmed"
 
         completed_at = self._wall_time()
         transition = self._outbox.reschedule_claim(
@@ -584,6 +591,7 @@ class OutboxSender:
             attempt_count=row.attempt_count,
             elapsed_ms=elapsed_milliseconds(started, time.monotonic()),
             outcome=(category.value if transition.applied else "transition_failed"),
+            reason=failure_reason,
             retry_delay_ms=max(0, round(retry_delay * 1_000)),
         )
         return transition

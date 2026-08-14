@@ -17,6 +17,7 @@ from better_hermes_hindsight.client import (
     HINDSIGHT_REQUEST_TIMEOUT_SECONDS,
     HindsightClientAdapter,
     HindsightClientError,
+    JsonResponse,
     JsonTransportProtocol,
     MissionSnapshot,
     MissionUpdateError,
@@ -59,13 +60,17 @@ class _RecordingTransport:
         path: str,
         *,
         json_body: Mapping[str, object] | None = None,
-    ) -> object:
+    ) -> JsonResponse:
         self.calls.append((method, path, json_body))
         key = (method, path)
         failure = self.failures.get(key)
         if failure is not None:
             raise failure
-        return self.responses.get(key, {})
+        return JsonResponse(
+            payload=self.responses.get(key, {}),
+            response_bytes=128,
+            status=200,
+        )
 
     async def close(self) -> None:
         if self.close_failure is not None:
@@ -632,6 +637,15 @@ def test_internal_project_models_are_exact_frozen_slotted_and_secret_safe() -> N
         segment.__setattr__("content", "replacement")
     with pytest.raises(FrozenInstanceError):
         response.__setattr__("results", [])
+
+
+def test_client_error_rejects_unbounded_reason_text() -> None:
+    private = "private-reason-sentinel"
+    error = HindsightClientError("recall_failed", "fixed message", reason=private)
+
+    assert error.category == "recall_failed"
+    assert error.reason == "unexpected_error"
+    assert private not in repr(error)
 
 
 def test_close_is_idempotent_with_the_real_aiohttp_transport(tmp_path: Path) -> None:

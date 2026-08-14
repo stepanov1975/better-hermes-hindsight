@@ -36,6 +36,7 @@ from tests.fakes.hindsight_server import (
     MissionPatchFault,
     MissionReadbackFault,
     MissionReadFault,
+    RecallFault,
     RequestRecord,
     RetainFault,
 )
@@ -120,6 +121,17 @@ async def _capture_failure(operation: Callable[[], Awaitable[object]]) -> BaseEx
     except BaseException as error:
         return error
     raise AssertionError("operation unexpectedly succeeded")
+
+
+def _event_payloads(caplog: pytest.LogCaptureFixture) -> list[dict[str, object]]:
+    payloads: list[dict[str, object]] = []
+    for record in caplog.records:
+        if not record.getMessage().startswith("{"):
+            continue
+        value = json.loads(record.getMessage())
+        if type(value) is dict:
+            payloads.append(cast(dict[str, object], value))
+    return payloads
 
 
 @contextlib.contextmanager
@@ -313,6 +325,27 @@ def test_real_adapter_serializes_and_decodes_complete_public_contract(
     assert FIXTURE_API_KEY not in caplog.text
     assert FIXTURE_API_KEY not in captured.out
     assert FIXTURE_API_KEY not in captured.err
+    http_events = [
+        event
+        for event in _event_payloads(caplog)
+        if event.get("event") == "better_hindsight.http_request"
+    ]
+    assert [(event["operation"], event["outcome"]) for event in http_events] == [
+        ("recall", "success"),
+        ("retain", "success"),
+        ("retain", "success"),
+        ("bank_config_get", "success"),
+        ("bank_config_patch", "success"),
+    ]
+    assert all(type(event["elapsed_ms"]) is int for event in http_events)
+    assert all(type(event["response_bytes"]) is int for event in http_events)
+    assert all(event["status"] == 200 for event in http_events)
+    lifecycle = [
+        event["outcome"]
+        for event in _event_payloads(caplog)
+        if event.get("event") == "better_hindsight.client_lifecycle"
+    ]
+    assert lifecycle == ["initialized", "closed"]
 
 
 def test_real_adapter_mission_wire_is_stateful_typed_and_changed_field_only(
@@ -413,6 +446,13 @@ def test_real_adapter_mission_get_validates_wire_and_preserves_missing_null_blan
                 assert type(failure) is HindsightClientError
                 assert isinstance(failure, HindsightClientError)
                 assert failure.category == "bank_config_failed"
+                expected_reason = {
+                    "wrong_bank": "schema_invalid",
+                    "wrong_type": "schema_invalid",
+                    "malformed_json": "malformed_json",
+                    "http_503": "server_status",
+                }[fault]
+                assert failure.reason == expected_reason
                 assert str(failure) == "Better Hindsight bank configuration read failed."
                 assert failure.__cause__ is None
                 assert failure.__suppress_context__ is True
@@ -1429,12 +1469,18 @@ def test_adapter_maps_raw_failures_to_fixed_nonleaking_errors_and_reports(
             adapter = create_hindsight_client(
                 _config(tmp_path, base_url=server.base_url, api_key=None)
             )
-            for fault in ("malformed_json", "malformed_schema", "http_503"):
+            expected_reasons: dict[RecallFault, str] = {
+                "malformed_json": "malformed_json",
+                "malformed_schema": "schema_invalid",
+                "http_503": "server_status",
+            }
+            for fault, expected_reason in expected_reasons.items():
                 server.arm_recall_fault(fault)
                 failure = await _capture_failure(lambda: adapter.recall("sanitized query"))
                 assert type(failure) is HindsightClientError
                 assert isinstance(failure, HindsightClientError)
                 assert failure.category == "recall_failed"
+                assert failure.reason == expected_reason
                 assert str(failure) == "Better Hindsight recall failed."
                 assert failure.__cause__ is None
                 assert failure.__suppress_context__ is True
@@ -1452,6 +1498,7 @@ def test_adapter_maps_raw_failures_to_fixed_nonleaking_errors_and_reports(
                 assert type(refused) is HindsightClientError
                 assert isinstance(refused, HindsightClientError)
                 assert refused.category == "recall_failed"
+                assert refused.reason == "connection_error"
                 assert str(refused) == "Better Hindsight recall failed."
                 assert refused.__cause__ is None
                 assert refused.__suppress_context__ is True

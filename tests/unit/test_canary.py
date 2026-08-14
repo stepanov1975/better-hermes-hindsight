@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+import gc
+import hashlib
 import json
 import math
 import threading
+import time
+import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,6 +19,14 @@ import pytest
 
 from better_hermes_hindsight import canary as canary_module
 from better_hermes_hindsight.canary import CanaryConfig, run_canary
+from better_hermes_hindsight.client import (
+    HindsightClientError,
+    RecallResponse,
+    RecallResult,
+    RetainConfirmation,
+    RetainSegment,
+)
+from better_hermes_hindsight.config import BetterHindsightConfig
 
 _PRIVATE = "private-api-key-sentinel"
 
@@ -66,6 +79,7 @@ class _Handler(BaseHTTPRequestHandler):
             if visible:
                 results = [
                     {
+                        "id": "canary-result",
                         "text": "Hindsight synthesized memory unit",
                         "document_id": type(self).document_id,
                         "tags": type(self).tags,
@@ -230,14 +244,41 @@ def test_canary_uses_exact_protocol_proves_owned_recall_and_validates_cleanup() 
         "items": [
             {
                 "content": _Handler.marker,
+                "timestamp": None,
+                "context": None,
                 "document_id": _Handler.document_id,
+                "entities": None,
                 "tags": _Handler.tags,
+                "metadata": {
+                    "better_hindsight_payload_schema": "better-hindsight-canary-v1",
+                    "better_hindsight_segment_count": "1",
+                    "better_hindsight_segment_index": "0",
+                    "better_hindsight_source_sha256": hashlib.sha256(
+                        _Handler.marker.encode("utf-8")
+                    ).hexdigest(),
+                },
+                "observation_scopes": None,
+                "strategy": None,
                 "update_mode": "replace",
             }
         ],
         "async": False,
+        "document_tags": None,
     }
-    assert recall == {"query": _Handler.marker, "tags": _Handler.tags, "tags_match": "exact"}
+    assert recall == {
+        "query": _Handler.marker,
+        "types": None,
+        "prefer_observations": False,
+        "budget": "mid",
+        "max_tokens": 4096,
+        "trace": False,
+        "query_timestamp": None,
+        "include": {"entities": None, "chunks": None, "source_facts": None},
+        "tags": _Handler.tags,
+        "tags_match": "exact",
+        "tag_groups": None,
+        "min_scores": None,
+    }
     assert _Handler.paths[-1] == (
         "DELETE",
         "/v1/default/banks/isolated-canary-bank/documents/" + _Handler.document_id,
@@ -249,33 +290,40 @@ def test_canary_uses_exact_protocol_proves_owned_recall_and_validates_cleanup() 
     ("value", "expected"),
     [
         (
-            {
-                "text": "Hindsight synthesized memory unit",
-                "document_id": "owned-document",
-                "tags": ["owned-tag"],
-            },
+            RecallResult(
+                id="result",
+                text="Hindsight synthesized memory unit",
+                document_id="owned-document",
+                tags=["owned-tag"],
+            ),
             True,
         ),
         (
-            {"text": "marker", "document_id": "wrong", "tags": ["owned-tag"]},
+            RecallResult(id="result", text="marker", document_id="wrong", tags=["owned-tag"]),
             False,
         ),
         (
-            {"text": "marker", "document_id": "owned-document", "tags": ["wrong"]},
+            RecallResult(
+                id="result",
+                text="marker",
+                document_id="owned-document",
+                tags=["wrong"],
+            ),
             False,
         ),
         (
-            {
-                "text": "marker",
-                "document_id": "owned-document",
-                "tags": ["owned-tag", "extra"],
-            },
+            RecallResult(
+                id="result",
+                text="marker",
+                document_id="owned-document",
+                tags=["owned-tag", "extra"],
+            ),
             False,
         ),
     ],
 )
 def test_recall_ownership_requires_exact_document_and_singleton_tag(
-    value: object,
+    value: RecallResult,
     expected: bool,
 ) -> None:
     assert (
@@ -291,7 +339,7 @@ def test_recall_ownership_requires_exact_document_and_singleton_tag(
 @pytest.mark.parametrize(
     ("override", "expected"),
     [
-        ({"success": True}, "retain_unconfirmed"),
+        ({"success": True}, "retain_failed"),
         (
             {
                 "success": True,
@@ -309,15 +357,227 @@ def test_unconfirmed_retain_is_error_and_always_attempts_exact_cleanup(
     with _server(retain_override=override) as api_url:
         result = run_canary(_config(api_url))
     assert result["error"] == expected
+    if expected == "retain_failed":
+        assert result["adapter_error"] == "schema_invalid"
     assert _Handler.paths[-1][0] == "DELETE"
     _assert_private_absent(result)
+
+
+def test_canary_preserves_adapter_initialization_failure_without_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_initialization(_config: BetterHindsightConfig) -> None:
+        raise HindsightClientError(
+            "client_initialization_failed",
+            "Better Hindsight client initialization failed.",
+        )
+
+    monkeypatch.setattr(canary_module, "create_hindsight_client", fail_initialization)
+    with _server() as url:
+        result = run_canary(_config(url))
+        paths = list(_Handler.paths)
+
+    assert result == {
+        "adapter_error": "client_initialization_failed",
+        "error": "adapter_initialization_failed",
+        "health_ms": result["health_ms"],
+        "result": "error",
+    }
+    assert paths == [("GET", "/health"), ("GET", "/version")]
+
+
+def test_canary_preserves_cleanup_reserve_when_adapter_close_stalls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    remaining_cleanup: list[float] = []
+
+    class SlowCloseClient:
+        def __init__(self, config: BetterHindsightConfig) -> None:
+            self.config = config
+            self.segment: RetainSegment | None = None
+
+        async def retain_segment(self, segment: RetainSegment) -> RetainConfirmation:
+            self.segment = segment
+            return RetainConfirmation(confirmed=True)
+
+        async def recall(self, _query: str) -> RecallResponse:
+            assert self.segment is not None
+            return RecallResponse(
+                results=[
+                    RecallResult(
+                        id="result",
+                        text="marker",
+                        document_id=self.segment.document_id,
+                        tags=list(self.config.recall.tags or ()),
+                    )
+                ]
+            )
+
+        async def close(self) -> None:
+            await asyncio.sleep(1.0)
+
+    def cleanup(
+        _config: CanaryConfig,
+        *,
+        document_id: str,
+        deadline: float,
+    ) -> tuple[bool, int]:
+        assert document_id.startswith("better-hindsight-canary-")
+        remaining_cleanup.append(deadline - time.monotonic())
+        return True, 0
+
+    monkeypatch.setattr(canary_module, "create_hindsight_client", SlowCloseClient)
+    monkeypatch.setattr(canary_module, "_cleanup", cleanup)
+    with _server() as url:
+        result = run_canary(
+            CanaryConfig(
+                api_url=url,
+                bank_id="dedicated-canary",
+                timeout_seconds=0.3,
+                cleanup_timeout_seconds=0.1,
+                poll_interval_seconds=0.0,
+            )
+        )
+
+    assert result["error"] == "adapter_close_failed"
+    assert len(remaining_cleanup) == 1
+    assert 0.05 <= remaining_cleanup[0] <= 0.1
+
+
+def test_canary_does_not_mark_retain_dispatched_before_deadline_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup_calls: list[str] = []
+    remaining_calls = 0
+
+    class PreDispatchClient:
+        retain_called = False
+        close_called = False
+
+        async def retain_segment(self, _segment: RetainSegment) -> RetainConfirmation:
+            self.retain_called = True
+            return RetainConfirmation(confirmed=True)
+
+        async def recall(self, _query: str) -> RecallResponse:
+            raise AssertionError("recall must not run")
+
+        async def close(self) -> None:
+            self.close_called = True
+
+    client = PreDispatchClient()
+
+    def remaining(_deadline: float) -> float:
+        nonlocal remaining_calls
+        remaining_calls += 1
+        if remaining_calls == 3:
+            raise TimeoutError
+        return 1.0
+
+    def cleanup(
+        _config: CanaryConfig,
+        *,
+        document_id: str,
+        deadline: float,
+    ) -> tuple[bool, int]:
+        del deadline
+        cleanup_calls.append(document_id)
+        return False, 0
+
+    monkeypatch.setattr(canary_module, "create_hindsight_client", lambda _config: client)
+    monkeypatch.setattr(canary_module, "_remaining", remaining)
+    monkeypatch.setattr(canary_module, "_cleanup", cleanup)
+    with warnings.catch_warnings(record=True) as caught, _server() as url:
+        warnings.simplefilter("always")
+        result = run_canary(_config(url))
+        gc.collect()
+
+    assert result["error"] == "retain_timeout"
+    assert client.retain_called is False
+    assert client.close_called is True
+    assert cleanup_calls == []
+    assert not [warning for warning in caught if "was never awaited" in str(warning.message)]
+
+
+def test_canary_checks_deadline_before_creating_recall_coroutine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup_calls: list[str] = []
+    remaining_calls = 0
+
+    class PreRecallClient:
+        retain_called = False
+        recall_called = False
+        close_called = False
+
+        async def retain_segment(self, _segment: RetainSegment) -> RetainConfirmation:
+            self.retain_called = True
+            return RetainConfirmation(confirmed=True)
+
+        async def recall(self, _query: str) -> RecallResponse:
+            self.recall_called = True
+            return RecallResponse(results=[])
+
+        async def close(self) -> None:
+            self.close_called = True
+
+    client = PreRecallClient()
+
+    def remaining(_deadline: float) -> float:
+        nonlocal remaining_calls
+        remaining_calls += 1
+        if remaining_calls == 4:
+            raise TimeoutError
+        return 1.0
+
+    def cleanup(
+        _config: CanaryConfig,
+        *,
+        document_id: str,
+        deadline: float,
+    ) -> tuple[bool, int]:
+        del deadline
+        cleanup_calls.append(document_id)
+        return True, 0
+
+    monkeypatch.setattr(canary_module, "create_hindsight_client", lambda _config: client)
+    monkeypatch.setattr(canary_module, "_remaining", remaining)
+    monkeypatch.setattr(canary_module, "_cleanup", cleanup)
+    with warnings.catch_warnings(record=True) as caught, _server() as url:
+        warnings.simplefilter("always")
+        result = run_canary(_config(url))
+        gc.collect()
+
+    assert result["error"] == "recall_timeout"
+    assert client.retain_called is True
+    assert client.recall_called is False
+    assert client.close_called is True
+    assert len(cleanup_calls) == 1
+    assert not [warning for warning in caught if "was never awaited" in str(warning.message)]
 
 
 @pytest.mark.parametrize(
     "recall_override",
     [
-        {"results": [{"text": "marker", "document_id": "wrong", "tags": ["wrong-owner-tag"]}]},
-        {"results": [{"text": "wrong", "document_id": "wrong", "tags": ["wrong"]}]},
+        {
+            "results": [
+                {
+                    "id": "result",
+                    "text": "marker",
+                    "document_id": "wrong",
+                    "tags": ["wrong-owner-tag"],
+                }
+            ]
+        },
+        {
+            "results": [
+                {
+                    "id": "result",
+                    "text": "wrong",
+                    "document_id": "wrong",
+                    "tags": ["wrong"],
+                }
+            ]
+        },
     ],
 )
 def test_mismatched_recall_ownership_never_passes(recall_override: object) -> None:
@@ -331,44 +591,79 @@ def test_mismatched_recall_ownership_never_passes(recall_override: object) -> No
 def test_malformed_recall_is_distinct_and_cleanup_still_runs() -> None:
     with _server(recall_override={"not_results": []}) as api_url:
         result = run_canary(_config(api_url))
-    assert result["error"] == "recall_invalid"
+    assert result["error"] == "recall_failed"
+    assert result["adapter_error"] == "schema_invalid"
     assert _Handler.paths[-1][0] == "DELETE"
 
 
 @pytest.mark.parametrize(
-    ("failure", "expected"),
+    ("failure", "expected", "adapter_error"),
     [
-        (TimeoutError(), "recall_timeout"),
-        (ValueError("private malformed-response sentinel"), "recall_invalid"),
-        (OSError("private transport sentinel"), "recall_failed"),
+        (TimeoutError(), "recall_timeout", None),
+        (
+            HindsightClientError(
+                "recall_failed",
+                "fixed error",
+                reason="schema_invalid",
+            ),
+            "recall_failed",
+            "schema_invalid",
+        ),
+        (
+            HindsightClientError(
+                "recall_failed",
+                "fixed error",
+                reason="transport_error",
+            ),
+            "recall_failed",
+            "transport_error",
+        ),
     ],
 )
 def test_post_retain_recall_exceptions_use_recall_phase_and_cleanup(
-    monkeypatch: pytest.MonkeyPatch, failure: Exception, expected: str
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+    expected: str,
+    adapter_error: str | None,
 ) -> None:
-    original_request = canary_module._request_json
+    cleanup_calls: list[str] = []
 
-    def fail_recall(
-        config: CanaryConfig,
-        method: str,
-        path: str,
-        *,
-        timeout: float,
-        payload: object | None = None,
-    ) -> tuple[int, object]:
-        if path.endswith("/memories/recall"):
+    class FailingRecallClient:
+        async def retain_segment(self, segment: RetainSegment) -> RetainConfirmation:
+            del segment
+            return RetainConfirmation(confirmed=True)
+
+        async def recall(self, query: str) -> RecallResponse:
+            del query
             raise failure
-        return original_request(config, method, path, timeout=timeout, payload=payload)
 
-    monkeypatch.setattr(canary_module, "_request_json", fail_recall)
+        async def close(self) -> None:
+            return None
+
+    def create_client(config: BetterHindsightConfig) -> FailingRecallClient:
+        del config
+        return FailingRecallClient()
+
+    def cleanup(
+        config: CanaryConfig,
+        document_id: str,
+        *,
+        deadline: float,
+    ) -> tuple[bool, int]:
+        del config, deadline
+        cleanup_calls.append(document_id)
+        return True, 0
+
+    monkeypatch.setattr(canary_module, "create_hindsight_client", create_client)
+    monkeypatch.setattr(canary_module, "_cleanup", cleanup)
     with _server() as api_url:
         result = run_canary(_config(api_url))
 
     assert result["error"] == expected
-    assert _Handler.paths[-1][0] == "DELETE"
-    rendered = json.dumps(result)
-    assert "private malformed-response sentinel" not in rendered
-    assert "private transport sentinel" not in rendered
+    if adapter_error is not None:
+        assert result["adapter_error"] == adapter_error
+    assert len(cleanup_calls) == 1
+    assert cleanup_calls[0].startswith("better-hindsight-canary-")
 
 
 @pytest.mark.parametrize(

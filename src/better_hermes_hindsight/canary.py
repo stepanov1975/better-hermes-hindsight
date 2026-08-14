@@ -1,7 +1,9 @@
-"""Strict standard-library E2E canary for an isolated Hindsight 0.8.5 bank."""
+"""Strict adapter-backed E2E canary for an isolated Hindsight 0.8.5 bank."""
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
 import math
 import os
@@ -12,7 +14,17 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Final, cast
+
+from better_hermes_hindsight.client import (
+    HindsightClientError,
+    RecallResult,
+    RetainConfirmation,
+    RetainSegment,
+    create_hindsight_client,
+)
+from better_hermes_hindsight.config import BetterHindsightConfig, RecallConfig, RetainConfig
 
 _EXPECTED_VERSION: Final = "0.8.5"
 _MAX_BODY_BYTES: Final = 64 * 1024
@@ -68,6 +80,11 @@ class CanaryConfig:
             raise ValueError("invalid canary timing")
 
 
+@dataclass(slots=True)
+class _CanaryAttemptState:
+    retain_dispatched: bool = False
+
+
 def _milliseconds(start: float, end: float) -> int:
     return max(0, min(_MAX_OUTPUT_VALUE, round((end - start) * 1_000)))
 
@@ -120,18 +137,128 @@ def _bank_path(config: CanaryConfig) -> str:
     return f"/v1/default/banks/{bank}"
 
 
-def _owned_recall_result(value: object, *, document_id: str, tag: str) -> bool:
-    if not isinstance(value, dict):
-        return False
-    result_document = value.get("document_id")
-    tags = value.get("tags")
+def _owned_recall_result(value: RecallResult, *, document_id: str, tag: str) -> bool:
+    tags = value.tags
     return (
-        result_document == document_id
-        and isinstance(tags, list)
-        and all(type(item) is str for item in tags)
-        and set(cast(list[str], tags)) == {tag}
+        value.document_id == document_id
+        and tags is not None
+        and set(tags) == {tag}
         and len(tags) == 1
     )
+
+
+async def _run_adapter_cycle(
+    config: CanaryConfig,
+    *,
+    attempt: _CanaryAttemptState,
+    document_id: str,
+    marker: str,
+    tag: str,
+    operation_deadline: float,
+) -> dict[str, object]:
+    adapter_config = BetterHindsightConfig(
+        hermes_home=Path("."),
+        api_url=config.api_url,
+        api_key=config.api_key,
+        bank_id=config.bank_id,
+        recall=RecallConfig(tags=(tag,), tag_mode="exact"),
+        retain=RetainConfig(enabled=True, tags=(tag,)),
+    )
+    try:
+        adapter = create_hindsight_client(adapter_config)
+    except HindsightClientError as error:
+        return {
+            "result": "error",
+            "error": "adapter_initialization_failed",
+            "adapter_error": error.reason,
+        }
+    result: dict[str, object] = {"result": "error", "error": "unexpected_failure"}
+    try:
+        retain_started = time.monotonic()
+        try:
+            segment = RetainSegment(
+                content=marker,
+                document_id=document_id,
+                payload_schema="better-hindsight-canary-v1",
+                source_sha256=hashlib.sha256(marker.encode("utf-8")).hexdigest(),
+                segment_index=0,
+                segment_count=1,
+            )
+            retain_timeout = _remaining(operation_deadline)
+
+            async def dispatch_retain() -> RetainConfirmation:
+                attempt.retain_dispatched = True
+                return await adapter.retain_segment(segment)
+
+            confirmation = await asyncio.wait_for(
+                dispatch_retain(),
+                timeout=retain_timeout,
+            )
+        except TimeoutError:
+            result = {"result": "error", "error": "retain_timeout"}
+            return result
+        except HindsightClientError as error:
+            result = {
+                "result": "error",
+                "error": "retain_failed",
+                "adapter_error": error.reason,
+            }
+            return result
+        retain_ms = _milliseconds(retain_started, time.monotonic())
+        if confirmation.confirmed is not True:
+            result = {"result": "error", "error": "retain_unconfirmed"}
+            return result
+
+        recall_started = time.monotonic()
+        poll_count = 0
+        while poll_count < config.max_polls:
+            poll_count += 1
+            try:
+                recall_timeout = _remaining(operation_deadline)
+                recalled = await asyncio.wait_for(
+                    adapter.recall(marker),
+                    timeout=recall_timeout,
+                )
+            except TimeoutError:
+                result = {
+                    "result": "error",
+                    "error": "recall_timeout",
+                    "poll_count": poll_count,
+                }
+                return result
+            except HindsightClientError as error:
+                result = {
+                    "result": "error",
+                    "error": "recall_failed",
+                    "adapter_error": error.reason,
+                    "poll_count": poll_count,
+                }
+                return result
+            if any(
+                _owned_recall_result(item, document_id=document_id, tag=tag)
+                for item in recalled.results
+            ):
+                result = {
+                    "result": "ok",
+                    "version": config.expected_version,
+                    "retain_ms": retain_ms,
+                    "recall_visible_ms": _milliseconds(recall_started, time.monotonic()),
+                    "poll_count": poll_count,
+                }
+                return result
+            if poll_count < config.max_polls:
+                sleep_seconds = min(config.poll_interval_seconds, _remaining(operation_deadline))
+                if sleep_seconds > 0:
+                    await asyncio.sleep(sleep_seconds)
+        result = {"result": "error", "error": "recall_timeout", "poll_count": poll_count}
+        return result
+    finally:
+        close_timeout = max(0.001, min(1.0, operation_deadline - time.monotonic()))
+        try:
+            await asyncio.wait_for(adapter.close(), timeout=close_timeout)
+        except Exception:
+            result.clear()
+            result.update({"result": "error", "error": "adapter_close_failed"})
 
 
 def _cleanup(config: CanaryConfig, *, document_id: str, deadline: float) -> tuple[bool, int]:
@@ -170,8 +297,7 @@ def run_canary(config: CanaryConfig) -> dict[str, object]:
     marker = f"synthetic canary marker {secrets.token_hex(16)}"
     tag = f"better-hindsight-canary:{secrets.token_hex(16)}"
     result: dict[str, object] = {"result": "error", "error": "unexpected_failure"}
-    retain_dispatched = False
-    phase = "preflight"
+    attempt = _CanaryAttemptState()
     cleanup_ms = 0
     health_started = time.monotonic()
     try:
@@ -195,99 +321,29 @@ def run_canary(config: CanaryConfig) -> dict[str, object]:
             result = {"result": "error", "error": "version_invalid", "health_ms": health_ms}
             return result
 
-        retain_started = time.monotonic()
-        phase = "retain"
-        retain_dispatched = True
-        status, retained = _request_json(
-            config,
-            "POST",
-            f"{_bank_path(config)}/memories",
-            timeout=_remaining(operation_deadline),
-            payload={
-                "items": [
-                    {
-                        "content": marker,
-                        "document_id": document_id,
-                        "tags": [tag],
-                        "update_mode": "replace",
-                    }
-                ],
-                "async": False,
-            },
-        )
-        retain_ms = _milliseconds(retain_started, time.monotonic())
-        if (
-            status != 200
-            or not isinstance(retained, dict)
-            or retained.get("success") is not True
-            or retained.get("bank_id") != config.bank_id
-            or retained.get("items_count") != 1
-            or retained.get("async") is not False
-        ):
-            result = {"result": "error", "error": "retain_unconfirmed", "health_ms": health_ms}
-            return result
-
-        phase = "recall"
-        recall_started = time.monotonic()
-        poll_count = 0
-        while poll_count < config.max_polls:
-            poll_count += 1
-            status, recalled = _request_json(
+        result = asyncio.run(
+            _run_adapter_cycle(
                 config,
-                "POST",
-                f"{_bank_path(config)}/memories/recall",
-                timeout=_remaining(operation_deadline),
-                payload={"query": marker, "tags": [tag], "tags_match": "exact"},
+                attempt=attempt,
+                document_id=document_id,
+                marker=marker,
+                tag=tag,
+                operation_deadline=operation_deadline,
             )
-            if status != 200 or not isinstance(recalled, dict):
-                result = {"result": "error", "error": "recall_failed", "poll_count": poll_count}
-                return result
-            values = recalled.get("results")
-            if not isinstance(values, list):
-                result = {"result": "error", "error": "recall_invalid", "poll_count": poll_count}
-                return result
-            if any(_owned_recall_result(item, document_id=document_id, tag=tag) for item in values):
-                result = {
-                    "result": "ok",
-                    "version": config.expected_version,
-                    "health_ms": health_ms,
-                    "retain_ms": retain_ms,
-                    "recall_visible_ms": _milliseconds(recall_started, time.monotonic()),
-                    "poll_count": poll_count,
-                }
-                return result
-            if poll_count < config.max_polls:
-                sleep_seconds = min(config.poll_interval_seconds, _remaining(operation_deadline))
-                if sleep_seconds > 0:
-                    time.sleep(sleep_seconds)
-        result = {"result": "error", "error": "recall_timeout", "poll_count": poll_count}
+        )
+        result["health_ms"] = health_ms
         return result
     except TimeoutError:
-        error = {
-            "preflight": "deadline_exceeded",
-            "retain": "retain_unconfirmed",
-            "recall": "recall_timeout",
-        }[phase]
-        result = {"result": "error", "error": error}
+        result = {"result": "error", "error": "deadline_exceeded"}
         return result
     except ValueError:
-        error = (
-            "recall_invalid"
-            if phase == "recall"
-            else ("retain_unconfirmed" if phase == "retain" else "request_failed")
-        )
-        result = {"result": "error", "error": error}
+        result = {"result": "error", "error": "request_failed"}
         return result
     except Exception:
-        error = (
-            "recall_failed"
-            if phase == "recall"
-            else ("retain_unconfirmed" if phase == "retain" else "request_failed")
-        )
-        result = {"result": "error", "error": error}
+        result = {"result": "error", "error": "request_failed"}
         return result
     finally:
-        if retain_dispatched:
+        if attempt.retain_dispatched:
             cleanup_ok, cleanup_ms = _cleanup(config, document_id=document_id, deadline=deadline)
             result["cleanup_ms"] = cleanup_ms
             if not cleanup_ok:

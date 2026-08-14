@@ -1106,11 +1106,17 @@ def test_sender_maps_remote_failures_to_fixed_retry_categories(
     events = [
         json.loads(record.message) for record in caplog.records if record.message.startswith("{")
     ]
+    expected_reason = {
+        "timeout": "timeout",
+        "client-error": "retain_failed",
+        "unconfirmed": "unconfirmed",
+    }[failure_kind]
     assert events[-1] == {
         "attempt_count": 1,
         "elapsed_ms": events[-1]["elapsed_ms"],
         "event": "better_hindsight.sender_attempt",
         "outcome": expected_category.value,
+        "reason": expected_reason,
         "retry_delay_ms": 2_000,
     }
     assert segment.content not in caplog.text

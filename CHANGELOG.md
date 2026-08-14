@@ -8,6 +8,8 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 - Replaced the `hindsight-client==0.8.5` runtime dependency with a narrow asynchronous HTTP adapter for the four Hindsight 0.8.5 operations Better uses.
 - Better can now share the normal Hermes interpreter with bundled `hindsight-client==0.6.1`; a separate profile remains optional for operational separation.
+- Added privacy-safe per-operation adapter outcomes, lifecycle diagnostics, precise sender/recall
+  reasons, broader low-noise watchdog coverage, and an adapter-backed E2E canary.
 
 ### Fixed
 

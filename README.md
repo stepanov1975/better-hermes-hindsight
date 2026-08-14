@@ -68,7 +68,10 @@ hermes --profile <profile> better_hindsight missions apply --confirm
 
 `status` reads the existing outbox without initializing or draining it. Mission changes are never automatic and require explicit confirmation. There is no retry-now, row-deletion, arbitrary-bank, or model-facing write command.
 
-The included `python -m better_hermes_hindsight.canary` and `python -m better_hermes_hindsight.watchdog` modules provide an explicit synthetic E2E check and transition-only alert evaluation. Neither is scheduled or activated by installation.
+The included `python -m better_hermes_hindsight.canary` and
+`python -m better_hermes_hindsight.watchdog` modules provide an adapter-backed synthetic E2E check
+and transition-only alert evaluation over privacy-safe per-operation HTTP, lifecycle, recall, and
+retention events. Neither is scheduled or activated by installation.
 
 See [operations](docs/operations.md) and [rollback](docs/rollback.md).
 

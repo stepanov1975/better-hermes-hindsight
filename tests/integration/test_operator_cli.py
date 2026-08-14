@@ -218,7 +218,15 @@ if mode in client_modes:
             client_instances.append(self)
 
         def response(self):
-            return {"bank_id": fixture_bank_id, "config": dict(self.state), "overrides": {}}
+            return client_module.JsonResponse(
+                payload={
+                    "bank_id": fixture_bank_id,
+                    "config": dict(self.state),
+                    "overrides": {},
+                },
+                response_bytes=128,
+                status=200,
+            )
 
         async def request(self, method, path, *, json_body=None):
             assert path == f"/v1/default/banks/{fixture_bank_id}/config"

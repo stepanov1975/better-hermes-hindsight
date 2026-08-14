@@ -265,8 +265,8 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             record("timeout")
             logger.warning(RECALL_FAILED_DIAGNOSTIC)
             return None
-        except HindsightClientError:
-            record("client_error")
+        except HindsightClientError as error:
+            record("client_error", reason=error.reason)
             logger.warning(RECALL_FAILED_DIAGNOSTIC)
             return None
         except Exception:
