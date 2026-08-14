@@ -4,6 +4,8 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+## 0.1.0a4 - 2026-08-14
+
 ### Changed
 
 - Replaced the `hindsight-client==0.8.5` runtime dependency with a narrow asynchronous HTTP adapter for the four Hindsight 0.8.5 operations Better uses.
