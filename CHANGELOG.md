@@ -4,6 +4,8 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+## 0.3.0 - 2026-08-16
+
 ### Added
 
 - Added opt-in bounded local capture of exact projected queries and credential-free request parameters
