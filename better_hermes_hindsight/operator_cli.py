@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from .management import ManagementResult
 
 _MAX_JSON_BYTES = 1024
+_MAX_DIAGNOSTIC_JSON_BYTES = 64 * 1024
 
 
 def register_cli(parser: ArgumentParser) -> None:
@@ -29,6 +30,19 @@ def register_cli(parser: ArgumentParser) -> None:
     from .watchdog import register_cli_arguments
 
     register_cli_arguments(watchdog)
+
+    diagnostics = commands.add_parser(
+        "diagnostics", help="List or replay locally captured slow recalls"
+    )
+    diagnostic_actions = diagnostics.add_subparsers(
+        dest="better_hindsight_diagnostic_action",
+        required=True,
+    )
+    diagnostic_actions.add_parser("list", help="List query-free captured recall metadata")
+    replay_parser = diagnostic_actions.add_parser(
+        "replay", help="Replay one captured recall with Hindsight trace collection"
+    )
+    replay_parser.add_argument("record_id", help="Captured diagnostic record ID")
 
     missions = commands.add_parser("missions", help="Check or explicitly apply bank missions")
     mission_actions = missions.add_subparsers(
@@ -76,10 +90,20 @@ def better_hindsight_command(args: Namespace) -> None:
         result = _fixed_result(command, "configuration_invalid")
     else:
         try:
-            from .management import apply_missions, check_missions, status
+            from .management import (
+                apply_missions,
+                check_missions,
+                list_diagnostics,
+                replay_diagnostic,
+                status,
+            )
 
             if command == "status":
                 result = status(config)
+            elif command == "diagnostics_list":
+                result = list_diagnostics(config)
+            elif command == "diagnostics_replay":
+                result = replay_diagnostic(config, args.record_id)
             elif command == "missions_check":
                 result = check_missions(config)
             else:
@@ -87,12 +111,21 @@ def better_hindsight_command(args: Namespace) -> None:
         except Exception:
             error = {
                 "status": "status_unavailable",
+                "diagnostics_list": "diagnostics_unavailable",
+                "diagnostics_replay": "diagnostic_replay_unavailable",
                 "missions_check": "mission_check_unavailable",
                 "missions_apply": "mission_prewrite_unavailable",
             }[command]
             result = _fixed_result(command, error)
 
-    encoded = _canonical_json(result.payload)
+    output_limit = (
+        _MAX_DIAGNOSTIC_JSON_BYTES if command.startswith("diagnostics_") else _MAX_JSON_BYTES
+    )
+    try:
+        encoded = _canonical_json(result.payload, max_bytes=output_limit)
+    except (OverflowError, RuntimeError, TypeError, ValueError):
+        result = _fixed_result(command, "output_invalid")
+        encoded = _canonical_json(result.payload)
     print(encoded)
     if result.exit_code:
         raise SystemExit(result.exit_code)
@@ -107,6 +140,12 @@ def _command_name(args: Namespace) -> str:
     action = getattr(args, "better_hindsight_action", None)
     if action == "status":
         return "status"
+    if action == "diagnostics":
+        diagnostic_action = getattr(args, "better_hindsight_diagnostic_action", None)
+        if diagnostic_action == "list":
+            return "diagnostics_list"
+        if diagnostic_action == "replay":
+            return "diagnostics_replay"
     if action == "missions":
         mission_action = getattr(args, "better_hindsight_mission_action", None)
         if mission_action == "check":
@@ -130,14 +169,14 @@ def _fixed_result(command: str, error: str) -> ManagementResult:
     )
 
 
-def _canonical_json(payload: dict[str, object]) -> str:
+def _canonical_json(payload: dict[str, object], *, max_bytes: int = _MAX_JSON_BYTES) -> str:
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
     )
-    if len(encoded.encode("utf-8")) > _MAX_JSON_BYTES:
+    if len(encoded.encode("utf-8")) > max_bytes:
         raise RuntimeError("Better Hindsight management output exceeded its fixed bound.")
     return encoded
 

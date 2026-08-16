@@ -12,7 +12,7 @@ import subprocess
 import sys
 from collections.abc import Iterator, Mapping
 from pathlib import Path
-from typing import NoReturn
+from typing import NoReturn, cast
 
 import pytest
 from agent.memory_provider import MemoryProvider
@@ -205,6 +205,31 @@ def _base_config(*, single_principal: bool = True) -> dict[str, object]:
 
 def _forbidden(*_args: object, **_kwargs: object) -> NoReturn:
     raise AssertionError("local provider construction/availability crossed a forbidden boundary")
+
+
+def test_provider_passes_projected_query_and_request_to_diagnostic_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_config(tmp_path, _base_config())
+    handle = _RecordingHandle()
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+
+    def capture(_config: object, **fields: object) -> str:
+        captured.append(fields)
+        return "1234567890123456-deadbeefcafe"
+
+    monkeypatch.setattr(provider_module, "enqueue_recall_capture", capture)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session", hermes_home=str(tmp_path), platform="cli")
+
+    assert provider.prefetch("current private query")
+    assert len(captured) == 1
+    assert captured[0]["query"] == "current private query"
+    assert cast(dict[str, object], captured[0]["request"])["trace"] is False
+    assert captured[0]["outcome"] == "success"
+    assert captured[0]["result_count"] == 1
 
 
 def test_constructor_availability_and_tool_schema_are_local_repeatable_and_uninitialized(

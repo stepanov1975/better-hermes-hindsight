@@ -12,9 +12,10 @@ from typing import Any, cast
 from agent.memory_provider import MemoryProvider
 
 from . import PROVIDER_ID
-from .client import HindsightClientError
+from .client import HindsightClientError, recall_request_parameters
 from .client import is_available as is_hindsight_available
 from .config import BetterHindsightConfig, load_config
+from .diagnostics import enqueue_recall_capture, initialize_recall_capture
 from .formatting import (
     SYSTEM_PROMPT_BLOCK,
     format_recall_context,
@@ -115,6 +116,15 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         except Exception:
             logger.warning(RUNTIME_INACTIVE_DIAGNOSTIC)
             return
+
+        try:
+            initialize_recall_capture(config)
+        except Exception:
+            emit_event(
+                logger,
+                "better_hindsight.recall_diagnostic",
+                outcome="write_failed",
+            )
 
         self._config = config
         self._recall_enabled = authorization.recall_enabled
@@ -254,14 +264,37 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         if not self._recall_enabled or config is None or runtime is None:
             return None
         started_at = time.monotonic()
+        request = recall_request_parameters(config.recall)
 
         def record(outcome: str, **fields: object) -> None:
+            elapsed_ms = elapsed_milliseconds(started_at, time.monotonic())
+            event_fields = dict(fields)
+            try:
+                diagnostic_id = enqueue_recall_capture(
+                    config,
+                    query=projected,
+                    request=request,
+                    elapsed_ms=elapsed_ms,
+                    outcome=outcome,
+                    result_count=cast(int | None, fields.get("result_count")),
+                    formatted_bytes=cast(int | None, fields.get("formatted_bytes")),
+                    reason=cast(str | None, fields.get("reason")),
+                )
+            except Exception:
+                emit_event(
+                    logger,
+                    "better_hindsight.recall_diagnostic",
+                    outcome="write_failed",
+                )
+            else:
+                if diagnostic_id is not None:
+                    event_fields["diagnostic_id"] = diagnostic_id
             emit_event(
                 logger,
                 "better_hindsight.recall",
-                elapsed_ms=elapsed_milliseconds(started_at, time.monotonic()),
+                elapsed_ms=elapsed_ms,
                 outcome=outcome,
-                **fields,
+                **event_fields,
             )
 
         try:

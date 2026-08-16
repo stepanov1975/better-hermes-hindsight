@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+import better_hermes_hindsight.management as management_module
+from better_hermes_hindsight.management import ManagementResult
 from better_hermes_hindsight.operator_cli import better_hindsight_command, register_cli
 
 
@@ -24,6 +26,8 @@ def _parser() -> ArgumentParser:
         ["missions", "apply"],
         ["missions", "apply", "--con"],
         ["missions", "--confirm", "apply"],
+        ["diagnostics"],
+        ["diagnostics", "replay"],
         ["retry"],
         ["drain"],
         ["status", "--confirm"],
@@ -54,6 +58,21 @@ def test_nested_apply_help_is_local_and_documents_confirmation(
     ("args", "command"),
     [
         (Namespace(better_hindsight_action="status"), "status"),
+        (
+            Namespace(
+                better_hindsight_action="diagnostics",
+                better_hindsight_diagnostic_action="list",
+            ),
+            "diagnostics_list",
+        ),
+        (
+            Namespace(
+                better_hindsight_action="diagnostics",
+                better_hindsight_diagnostic_action="replay",
+                record_id="1234567890123456-deadbeefcafe",
+            ),
+            "diagnostics_replay",
+        ),
         (
             Namespace(
                 better_hindsight_action="missions",
@@ -90,5 +109,36 @@ def test_malformed_configuration_maps_to_fixed_cli_error(
     captured = capsys.readouterr()
     assert captured.out == (
         f'{{"command":"{command}","error":"configuration_invalid","result":"error"}}\n'
+    )
+    assert captured.err == ""
+
+
+def test_oversized_diagnostic_output_maps_to_fixed_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        management_module,
+        "list_diagnostics",
+        lambda config: ManagementResult(
+            payload={"command": "diagnostics_list", "records": ["x" * 70_000]},
+            exit_code=0,
+        ),
+    )
+
+    with pytest.raises(SystemExit) as caught:
+        better_hindsight_command(
+            Namespace(
+                better_hindsight_action="diagnostics",
+                better_hindsight_diagnostic_action="list",
+            )
+        )
+
+    assert caught.value.code == 3
+    captured = capsys.readouterr()
+    assert captured.out == (
+        '{"command":"diagnostics_list","error":"output_invalid","result":"error"}\n'
     )
     assert captured.err == ""

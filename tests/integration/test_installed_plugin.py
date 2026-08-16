@@ -209,7 +209,7 @@ def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
         cwd=tmp_path,
         environ=environ,
     )
-    assert "{status,canary,watchdog,missions}" in help_result.stdout
+    assert "{status,canary,watchdog,diagnostics,missions}" in help_result.stdout
     assert "status" in help_result.stdout
     assert "missions" in help_result.stdout
 

@@ -19,16 +19,21 @@ from better_hermes_hindsight.client import (
     HindsightClientError,
     MissionSnapshot,
     MissionValue,
+    RecallPhaseMetric,
+    RecallResponse,
+    RecallTrace,
 )
 from better_hermes_hindsight.config import (
     OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES,
     BetterHindsightConfig,
     load_config,
 )
+from better_hermes_hindsight.diagnostics import capture_recall, load_recall_record
 from better_hermes_hindsight.management import (
     ManagementResult,
     apply_missions,
     check_missions,
+    replay_diagnostic,
     status,
 )
 from better_hermes_hindsight.outbox import SQLiteOutbox
@@ -1682,3 +1687,53 @@ def test_mission_apply_postwrite_cleanup_failure_is_ambiguous_exit_four(
         "get",
         "runtime_finalize",
     ]
+
+
+def test_diagnostic_replay_is_query_private_and_persists_safe_trace(tmp_path: Path) -> None:
+    config = load_config(
+        tmp_path,
+        environ={},
+        injected={
+            "api_url": "https://service.example.test",
+            "bank_id": "synthetic-bank",
+            "single_principal": True,
+            "diagnostics": {"enabled": True, "replay_timeout_seconds": 30},
+        },
+    )
+    request = {"trace": False}
+    record_id = capture_recall(
+        config,
+        query="private exact replay query",
+        request=request,
+        elapsed_ms=10_000,
+        outcome="timeout",
+    )
+    assert record_id is not None
+    trace = RecallTrace(
+        total_duration_seconds=3.0,
+        phase_metrics=(RecallPhaseMetric("reranking", 2.0, {"candidate_count": 100}),),
+        collection_counts={"reranked": 100},
+    )
+
+    class ReplayClient:
+        async def replay_recall(
+            self, query: str, recorded_request: Mapping[str, object]
+        ) -> RecallResponse:
+            assert query == "private exact replay query"
+            assert recorded_request == request
+            return RecallResponse(results=[], trace=trace)
+
+    events: list[object] = []
+    runtime = _FakeRuntime(client=cast(Any, ReplayClient()), events=events)
+    factory = _RuntimeFactory(runtime=runtime, events=events)
+
+    result = replay_diagnostic(config, record_id, runtime_factory=factory)
+
+    assert result.exit_code == 0
+    assert result.payload["result"] == "ok"
+    assert result.payload["record_id"] == record_id
+    assert "private exact replay query" not in str(result.payload)
+    assert result.payload["trace"] == trace.as_dict()
+    assert runtime.timeouts == [30.0]
+    saved = load_recall_record(config, record_id)
+    assert cast(dict[str, object], saved["last_replay"])["trace"] == trace.as_dict()

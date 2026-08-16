@@ -10,12 +10,21 @@ from pathlib import Path
 from typing import Literal, Protocol, TypeVar, cast
 
 from .client import (
+    DiagnosticRecallClientProtocol,
     HindsightClientProtocol,
     MissionClientProtocol,
     MissionSnapshot,
     MissionValue,
+    RecallResponse,
 )
 from .config import BetterHindsightConfig
+from .diagnostics import (
+    DiagnosticRecordError,
+    list_recall_records,
+    load_recall_record,
+    safe_trace_payload,
+    save_replay_result,
+)
 from .outbox import OutboxInspection, inspect_outbox
 from .runtime import create_operator_runtime
 from .telemetry import deployed_identity, error_counts
@@ -85,6 +94,96 @@ def status(
     except Exception:
         return _fixed_error("status", "status_unavailable")
     return ManagementResult(payload=payload, exit_code=1 if payload["result"] == "degraded" else 0)
+
+
+def list_diagnostics(config: BetterHindsightConfig) -> ManagementResult:
+    """List bounded, query-free metadata for captured slow recalls."""
+
+    if not _authorized(config):
+        return _fixed_error("diagnostics_list", "authorization_required")
+    try:
+        records = list_recall_records(config)
+    except Exception:
+        return _fixed_error("diagnostics_list", "diagnostics_unavailable")
+    return ManagementResult(
+        payload={
+            "command": "diagnostics_list",
+            "records": records,
+            "result": "ok",
+        },
+        exit_code=0,
+    )
+
+
+def replay_diagnostic(
+    config: BetterHindsightConfig,
+    record_id: str,
+    *,
+    runtime_factory: _RuntimeFactory = create_operator_runtime,
+) -> ManagementResult:
+    """Replay one exact captured query and request with trace collection enabled."""
+
+    command = "diagnostics_replay"
+    if not _authorized(config):
+        return _fixed_error(command, "authorization_required")
+    try:
+        record = load_recall_record(config, record_id)
+        query = cast(str, record["query"])
+        request = cast(dict[str, object], record["request"])
+    except DiagnosticRecordError as error:
+        return _fixed_error(command, str(error))
+    try:
+        runtime = runtime_factory(config)
+    except Exception:
+        return _fixed_error(command, "diagnostic_replay_unavailable")
+
+    started_at = time.monotonic()
+    response: RecallResponse | None = None
+    outcome = "replay_failed"
+    try:
+        try:
+            response = runtime.call(
+                lambda client: cast(DiagnosticRecallClientProtocol, client).replay_recall(
+                    query, request
+                ),
+                timeout=config.diagnostics.replay_timeout_seconds,
+            )
+            outcome = "success"
+        except Exception:
+            response = None
+    finally:
+        try:
+            finalized = runtime.finalize()
+        except Exception:
+            finalized = False
+    elapsed_ms = max(0, round((time.monotonic() - started_at) * 1000))
+    trace = safe_trace_payload(response.trace if response is not None else None)
+    try:
+        save_replay_result(
+            config,
+            record_id,
+            elapsed_ms=elapsed_ms,
+            outcome=outcome,
+            result_count=len(response.results) if response is not None else None,
+            trace=trace,
+        )
+    except Exception:
+        return _fixed_error(command, "diagnostic_record_write_failed")
+    if not finalized:
+        return _fixed_error(command, "runtime_cleanup_failed")
+    if response is None:
+        return _fixed_error(command, "diagnostic_replay_failed")
+
+    payload: dict[str, object] = {
+        "command": command,
+        "elapsed_ms": elapsed_ms,
+        "record_id": record_id,
+        "result": "ok",
+        "result_count": len(response.results),
+    }
+    if trace is not None:
+        payload["trace"] = trace
+    return ManagementResult(payload=payload, exit_code=0)
 
 
 def _status_payload(
@@ -400,5 +499,7 @@ __all__ = [
     "apply_missions",
     "check_missions",
     "deployed_identity",
+    "list_diagnostics",
+    "replay_diagnostic",
     "status",
 ]

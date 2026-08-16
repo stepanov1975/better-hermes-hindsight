@@ -17,6 +17,7 @@ The provider currently includes:
 - process-shared sender/runtime ownership for the current Linux deployment;
 - principal and destination policy;
 - passive status plus explicit mission check/apply commands;
+- opt-in bounded private slow-recall capture with query-free listing and trace-enabled operator replay;
 - standard Hermes plugin entry points and a self-contained implementation package at the repository root.
 
 The existing runtime should not be rewritten merely to reduce line count. Simplify it only when real use exposes a bug or a clear maintenance burden.

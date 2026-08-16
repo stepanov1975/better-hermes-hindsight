@@ -71,6 +71,13 @@ This example uses only synthetic/local values and contains no API key. Retention
     "poll_interval_seconds": 2.0,
     "retry_initial_seconds": 2.0,
     "retry_max_seconds": 300.0
+  },
+  "diagnostics": {
+    "enabled": false,
+    "path": "better_hindsight/recall_diagnostics",
+    "slow_threshold_seconds": 5.0,
+    "max_records": 50,
+    "replay_timeout_seconds": 30.0
   }
 }
 ```
@@ -111,6 +118,16 @@ response budget; it does not limit query input.
 | `outbox.poll_interval_seconds` | `2.0` | Inclusive 0.1 through 60.0 seconds |
 | `outbox.retry_initial_seconds` | `2.0` | Greater than zero, at most 3,600 seconds; must not exceed `outbox.retry_max_seconds` |
 | `outbox.retry_max_seconds` | `300.0` | Greater than zero, at most 3,600 seconds |
+| `diagnostics.enabled` | `false` | Explicit opt-in; captured files contain the exact projected query |
+| `diagnostics.path` | `better_hindsight/recall_diagnostics` | Directory must resolve inside `hermes_home` |
+| `diagnostics.slow_threshold_seconds` | `5.0` | Inclusive 0.1 through 30 seconds |
+| `diagnostics.max_records` | `50` | Integer from 1 through 500; oldest records are removed after capture |
+| `diagnostics.replay_timeout_seconds` | `30.0` | Inclusive 0.1 through 300 seconds |
+
+`diagnostics.enabled` is intentionally off by default because exact replay requires storing the full
+projected query and credential-free request parameters. Files are mode 0600 in a mode-0700 profile-local
+directory; ordinary logs and list output remain query-free. Capture keeps only slow successful recalls
+and failed recalls, and prunes the oldest files to `diagnostics.max_records`.
 
 `max_pending_rows` and `max_pending_bytes` are logical admission limits, not an exact cap on the
 SQLite database, indexes, or WAL file. Every unconfirmed `pending` or `sending` row consumes its exact

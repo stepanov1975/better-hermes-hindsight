@@ -48,8 +48,33 @@ closed-session failures. Sender and recall events preserve the same fixed reason
 Events never include queries, recalled text, turn content, document IDs, tags, bank names, endpoints,
 principal identifiers, exception text, response bodies, headers, or credentials. The principal event
 names are `better_hindsight.http_request`, `better_hindsight.client_lifecycle`,
-`better_hindsight.recall`, `better_hindsight.admission`, `better_hindsight.sender_attempt`, and
+`better_hindsight.recall`, `better_hindsight.recall_diagnostic`,
+`better_hindsight.admission`, `better_hindsight.sender_attempt`, and
 `better_hindsight.sender_loop`.
+
+### Replayable slow-recall capture
+
+When `diagnostics.enabled=true`, Better additionally stores the exact bounded projected query and
+credential-free recall request for successful recalls at or above the configured slow threshold and
+for failed recalls. This private store is intentionally separate from structured logs: the directory
+is mode 0700, records are mode 0600, ordinary list output contains only a query hash and timings, and
+the oldest records are removed when the fixed record count is exceeded. Capture uses a bounded,
+single-writer daemon queue so slow filesystem I/O cannot extend the recall deadline. If that queue is
+full, the process exits before it drains, or a private record write fails, the diagnostic is
+best-effort and may be lost; `better_hindsight.recall_diagnostic` reports only the fixed
+`write_failed` outcome.
+
+```bash
+hermes better_hindsight diagnostics list
+hermes better_hindsight diagnostics replay <record-id>
+```
+
+Replay sends the captured query and request to the currently configured endpoint and bank, forces
+Hindsight's existing `trace=true` response, and saves/prints only numeric phase durations, numeric or
+boolean phase details, collection counts, total duration, and result count. Candidate IDs, candidate
+content, recalled text, and the query are excluded from command output. Replay is read-only but creates
+normal recall load. A timeout can be captured exactly but cannot expose server phases until a later
+trace-enabled replay completes; this is the unavoidable plugin-only limit.
 
 ## External end-to-end canary
 

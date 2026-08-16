@@ -5,8 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from importlib.util import find_spec
 from typing import Protocol, TypeVar, cast
@@ -52,6 +53,57 @@ HINDSIGHT_ERROR_REASONS = frozenset(
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
+_SAFE_TRACE_PHASE_NAMES = frozenset(
+    {
+        "backend_acquisition",
+        "chunk_fetch",
+        "combined_scoring",
+        "connection_wait",
+        "entity_build",
+        "generate_query_embedding",
+        "parallel_retrieval",
+        "prefer_observations_dedup",
+        "reranking",
+        "result_serialization",
+        "retrieval_bm25",
+        "retrieval_graph",
+        "retrieval_semantic",
+        "retrieval_temporal",
+        "rrf_merge",
+        "semaphore_wait",
+        "source_fact_fetch",
+        "token_filtering",
+        "trace_finalize",
+    }
+)
+_SAFE_TRACE_DETAIL_NAMES = frozenset(
+    {
+        "bm25_count",
+        "candidate_count",
+        "candidates_merged",
+        "candidates_reranked",
+        "candidates_scored",
+        "chunk_tokens",
+        "chunks_returned",
+        "diagnostic",
+        "entities_returned",
+        "graph_count",
+        "max_tokens",
+        "observations_considered",
+        "result_count",
+        "results_selected",
+        "results_serialized",
+        "semantic_count",
+        "source_facts_returned",
+        "temporal_count",
+        "tokens_used",
+    }
+)
+_MAX_TRACE_PHASES = 24
+_MAX_TRACE_DETAILS = 8
+_MAX_TRACE_DURATION_SECONDS = 86_400.0
+_MAX_TRACE_DETAIL_NUMBER = 1_000_000_000
+
 
 @dataclass(frozen=True, slots=True)
 class RecallScores:
@@ -84,11 +136,46 @@ class RecallResult:
 
 
 @dataclass(frozen=True, slots=True)
+class RecallPhaseMetric:
+    """One privacy-safe Hindsight trace phase."""
+
+    phase_name: str
+    duration_seconds: float
+    details: dict[str, float | int | bool]
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "details": dict(self.details),
+            "duration_seconds": self.duration_seconds,
+            "phase_name": self.phase_name,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RecallTrace:
+    """Bounded trace summary with no query, IDs, candidates, or recalled text."""
+
+    total_duration_seconds: float | None
+    phase_metrics: tuple[RecallPhaseMetric, ...]
+    collection_counts: dict[str, int]
+
+    def as_dict(self) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "collection_counts": dict(self.collection_counts),
+            "phase_metrics": [phase.as_dict() for phase in self.phase_metrics],
+        }
+        if self.total_duration_seconds is not None:
+            payload["total_duration_seconds"] = self.total_duration_seconds
+        return payload
+
+
+@dataclass(frozen=True, slots=True)
 class RecallResponse:
     """Narrow decoded recall response consumed by provider and formatter code."""
 
     results: list[RecallResult]
     source_facts: dict[str, RecallResult] | None = None
+    trace: RecallTrace | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +268,12 @@ class HindsightClientProtocol(Protocol):
     async def update_bank_missions(self, updates: Mapping[str, str]) -> None: ...
 
     async def close(self) -> None: ...
+
+
+class DiagnosticRecallClientProtocol(Protocol):
+    """Operator-only trace replay surface."""
+
+    async def replay_recall(self, query: str, request: Mapping[str, object]) -> RecallResponse: ...
 
 
 class MissionClientProtocol(Protocol):
@@ -405,6 +498,15 @@ class HindsightClientAdapter:
         """Recall current-query memories with the exact supported request defaults."""
 
         payload = _recall_body(query, self._recall_config)
+        return await self._perform_recall(payload)
+
+    async def replay_recall(self, query: str, request: Mapping[str, object]) -> RecallResponse:
+        """Replay one plugin-recorded request with Hindsight trace collection enabled."""
+
+        payload = _diagnostic_recall_body(query, request)
+        return await self._perform_recall(payload)
+
+    async def _perform_recall(self, payload: Mapping[str, object]) -> RecallResponse:
         return await _observed_http_call(
             operation="recall",
             category="recall_failed",
@@ -541,6 +643,26 @@ def _recall_body(query: str, config: RecallConfig) -> dict[str, object]:
     }
 
 
+def recall_request_parameters(config: RecallConfig) -> dict[str, object]:
+    """Return the exact credential-free request parameters used for replay capture."""
+
+    payload = _recall_body("", config)
+    del payload["query"]
+    return payload
+
+
+def _diagnostic_recall_body(query: str, request: Mapping[str, object]) -> dict[str, object]:
+    expected = set(recall_request_parameters(RecallConfig()))
+    if set(request) != expected or "query" in request:
+        raise HindsightClientError(
+            "recall_failed", "Better Hindsight recall failed.", reason="schema_invalid"
+        )
+    payload = dict(request)
+    payload["query"] = query
+    payload["trace"] = True
+    return payload
+
+
 def _decode_retain_confirmation(value: object, *, bank_id: str) -> RetainConfirmation:
     payload = _exact_dict(value)
     success = _required_exact(payload, "success", bool)
@@ -586,7 +708,136 @@ def _decode_recall_response(value: object) -> RecallResponse:
             if type(key) is not str:
                 raise TypeError
             source_facts[key] = _decode_recall_result(item)
-    return RecallResponse(results=results, source_facts=source_facts)
+    return RecallResponse(
+        results=results,
+        source_facts=source_facts,
+        trace=_decode_recall_trace(payload.get("trace")),
+    )
+
+
+def _decode_recall_trace(value: object) -> RecallTrace | None:
+    """Best-effort safe projection; trace drift must never invalidate recall results."""
+
+    if type(value) is not dict:
+        return None
+    trace = value
+    total: float | None = None
+    phases: list[RecallPhaseMetric] = []
+    summary = trace.get("summary")
+    if type(summary) is dict:
+        candidate_total = _optional_finite_number(summary.get("total_duration_seconds"))
+        if candidate_total is not None and 0 <= candidate_total <= _MAX_TRACE_DURATION_SECONDS:
+            total = candidate_total
+        phases = _decode_phase_metrics(summary.get("phase_metrics"))
+
+    collections: dict[str, int] = {}
+    for name in (
+        "entry_points",
+        "rrf_merged",
+        "reranked",
+        "pruned",
+        "final_results",
+        "visits",
+    ):
+        collection = trace.get(name)
+        if isinstance(collection, (list, dict)):
+            collections[name] = min(len(collection), 1_000_000)
+    retrieval = trace.get("retrieval_results")
+    if isinstance(retrieval, (list, dict)):
+        collections["retrieval_methods"] = min(len(retrieval), 1_000_000)
+        collections["retrieval_candidates"] = _retrieval_candidate_count(retrieval)
+    if total is None and not phases and not collections:
+        return None
+    return RecallTrace(
+        total_duration_seconds=total,
+        phase_metrics=tuple(phases),
+        collection_counts=collections,
+    )
+
+
+def _retrieval_candidate_count(value: list[object] | dict[object, object]) -> int:
+    collections: Iterable[object] = value.values() if isinstance(value, dict) else value
+    total = 0
+    for item in collections:
+        if not isinstance(item, dict):
+            continue
+        results = item.get("results")
+        if isinstance(results, (list, dict)):
+            total = min(1_000_000, total + len(results))
+    return total
+
+
+def _decode_phase_metrics(value: object) -> list[RecallPhaseMetric]:
+    raw_items: list[object]
+    if type(value) is list:
+        raw_items = list(value[:_MAX_TRACE_PHASES])
+    elif type(value) is dict:
+        raw_items = []
+        for phase_name in _SAFE_TRACE_PHASE_NAMES:
+            phase_value = value.get(phase_name)
+            if type(phase_value) is dict:
+                item = dict(phase_value)
+                item["phase_name"] = phase_name
+                raw_items.append(item)
+            elif type(phase_value) in (int, float):
+                raw_items.append(
+                    {"phase_name": phase_name, "duration_seconds": phase_value, "details": {}}
+                )
+            if len(raw_items) >= _MAX_TRACE_PHASES:
+                break
+    else:
+        return []
+
+    phases: list[RecallPhaseMetric] = []
+    for raw_item in raw_items:
+        if type(raw_item) is not dict:
+            continue
+        name = raw_item.get("phase_name")
+        duration = _optional_finite_number(raw_item.get("duration_seconds"))
+        if (
+            type(name) is not str
+            or name not in _SAFE_TRACE_PHASE_NAMES
+            or duration is None
+            or not 0 <= duration <= _MAX_TRACE_DURATION_SECONDS
+        ):
+            continue
+        details: dict[str, float | int | bool] = {}
+        raw_details = raw_item.get("details")
+        if type(raw_details) is dict:
+            for detail_name in sorted(_SAFE_TRACE_DETAIL_NAMES):
+                detail_value = _safe_trace_detail(raw_details.get(detail_name))
+                if detail_value is not None:
+                    details[detail_name] = detail_value
+                if len(details) >= _MAX_TRACE_DETAILS:
+                    break
+        phases.append(
+            RecallPhaseMetric(
+                phase_name=name,
+                duration_seconds=duration,
+                details=details,
+            )
+        )
+    return phases
+
+
+def _safe_trace_detail(value: object) -> float | int | bool | None:
+    if type(value) is bool:
+        return value
+    if type(value) is int:
+        return value if abs(value) <= _MAX_TRACE_DETAIL_NUMBER else None
+    if type(value) is float:
+        return value if math.isfinite(value) and abs(value) <= _MAX_TRACE_DETAIL_NUMBER else None
+    return None
+
+
+def _optional_finite_number(value: object) -> float | None:
+    if type(value) not in (int, float):
+        return None
+    try:
+        number = float(cast(float | int, value))
+    except (OverflowError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _decode_recall_result(value: object) -> RecallResult:
@@ -813,6 +1064,7 @@ def _emit_http_event(
 
 
 __all__ = [
+    "DiagnosticRecallClientProtocol",
     "HINDSIGHT_REQUEST_TIMEOUT_SECONDS",
     "HindsightClientAdapter",
     "HindsightClientError",
@@ -824,11 +1076,14 @@ __all__ = [
     "MissionSnapshot",
     "MissionUpdateError",
     "MissionValue",
+    "RecallPhaseMetric",
     "RecallResponse",
     "RecallResult",
     "RecallScores",
+    "RecallTrace",
     "RetainConfirmation",
     "RetainSegment",
     "create_hindsight_client",
     "is_available",
+    "recall_request_parameters",
 ]

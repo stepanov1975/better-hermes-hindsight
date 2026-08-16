@@ -35,6 +35,9 @@ DEFAULT_OUTBOX_BUSY_TIMEOUT_SECONDS = 1.0
 DEFAULT_OUTBOX_POLL_INTERVAL_SECONDS = 2.0
 DEFAULT_OUTBOX_RETRY_INITIAL_SECONDS = 2.0
 DEFAULT_OUTBOX_RETRY_MAX_SECONDS = 300.0
+DEFAULT_DIAGNOSTIC_SLOW_THRESHOLD_SECONDS = 5.0
+DEFAULT_DIAGNOSTIC_MAX_RECORDS = 50
+DEFAULT_DIAGNOSTIC_REPLAY_TIMEOUT_SECONDS = 30.0
 OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES = 1024
 
 MAX_RECALL_TIMEOUT_SECONDS = 30.0
@@ -50,6 +53,8 @@ MAX_OUTBOX_BUSY_TIMEOUT_SECONDS = 5.0
 MIN_OUTBOX_POLL_INTERVAL_SECONDS = 0.1
 MAX_OUTBOX_POLL_INTERVAL_SECONDS = 60.0
 MAX_OUTBOX_RETRY_SECONDS = 3_600.0
+MAX_DIAGNOSTIC_RECORDS = 500
+MAX_DIAGNOSTIC_REPLAY_TIMEOUT_SECONDS = 300.0
 MAX_TAG_COUNT = 64
 MAX_TAG_CHARS = 256
 
@@ -74,6 +79,7 @@ _ROOT_KEYS = {
     "retain",
     "missions",
     "outbox",
+    "diagnostics",
 }
 _RECALL_KEYS = {
     "enabled",
@@ -107,6 +113,13 @@ _OUTBOX_KEYS = {
     "poll_interval_seconds",
     "retry_initial_seconds",
     "retry_max_seconds",
+}
+_DIAGNOSTIC_KEYS = {
+    "enabled",
+    "path",
+    "slow_threshold_seconds",
+    "max_records",
+    "replay_timeout_seconds",
 }
 _PRINCIPAL_KEYS = {"platform", "identifier_kind", "identifier"}
 _SCORE_KEYS = {"semantic", "keyword", "reranker", "final"}
@@ -227,6 +240,22 @@ class OutboxConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class DiagnosticConfig:
+    """Opt-in profile-local capture policy for replayable slow recalls."""
+
+    enabled: bool = False
+    path: Path = field(repr=False, default=Path("better_hindsight/recall_diagnostics"))
+    slow_threshold_seconds: float = DEFAULT_DIAGNOSTIC_SLOW_THRESHOLD_SECONDS
+    max_records: int = DEFAULT_DIAGNOSTIC_MAX_RECORDS
+    replay_timeout_seconds: float = DEFAULT_DIAGNOSTIC_REPLAY_TIMEOUT_SECONDS
+
+    @property
+    def slow_threshold_ms(self) -> int:
+        """Return the configured slow threshold in whole milliseconds."""
+        return math.ceil(self.slow_threshold_seconds * 1000)
+
+
+@dataclass(frozen=True, slots=True)
 class MemoryAuthorization:
     """A pre-client authorization result for one Hermes provider handle."""
 
@@ -256,6 +285,7 @@ class BetterHindsightConfig:
     outbox: OutboxConfig = field(
         default_factory=lambda: OutboxConfig(Path("better_hindsight/outbox.sqlite3"))
     )
+    diagnostics: DiagnosticConfig = field(default_factory=DiagnosticConfig)
 
     @property
     def destination_fingerprint(self) -> str:
@@ -338,6 +368,7 @@ def load_config(
     retain = _parse_retain(merged.get("retain", {}))
     missions = _parse_missions(merged.get("missions", {}))
     outbox = _parse_outbox(home, merged.get("outbox", {}))
+    diagnostics = _parse_diagnostics(home, merged.get("diagnostics", {}))
 
     if retain.observation_scopes == ((),) and not single_principal:
         raise _error("retain.observation_scopes='shared' requires explicit single_principal=true")
@@ -360,6 +391,7 @@ def load_config(
         retain=retain,
         missions=missions,
         outbox=outbox,
+        diagnostics=diagnostics,
     )
 
 
@@ -945,6 +977,50 @@ def _parse_outbox_path(home: Path, value: object) -> Path:
     return normalized
 
 
+def _parse_diagnostics(home: Path, value: object) -> DiagnosticConfig:
+    values = _expect_mapping(value, "diagnostics")
+    _check_unknown_keys(values, _DIAGNOSTIC_KEYS, "diagnostics")
+    return DiagnosticConfig(
+        enabled=_parse_bool(values.get("enabled", False), "diagnostics.enabled"),
+        path=_parse_diagnostic_path(
+            home, values.get("path", "better_hindsight/recall_diagnostics")
+        ),
+        slow_threshold_seconds=_parse_closed_bounded_float(
+            values.get("slow_threshold_seconds", DEFAULT_DIAGNOSTIC_SLOW_THRESHOLD_SECONDS),
+            "diagnostics.slow_threshold_seconds",
+            minimum=0.1,
+            maximum=MAX_RECALL_TIMEOUT_SECONDS,
+        ),
+        max_records=_parse_positive_int(
+            values.get("max_records", DEFAULT_DIAGNOSTIC_MAX_RECORDS),
+            "diagnostics.max_records",
+            maximum=MAX_DIAGNOSTIC_RECORDS,
+        ),
+        replay_timeout_seconds=_parse_closed_bounded_float(
+            values.get("replay_timeout_seconds", DEFAULT_DIAGNOSTIC_REPLAY_TIMEOUT_SECONDS),
+            "diagnostics.replay_timeout_seconds",
+            minimum=0.1,
+            maximum=MAX_DIAGNOSTIC_REPLAY_TIMEOUT_SECONDS,
+        ),
+    )
+
+
+def _parse_diagnostic_path(home: Path, value: object) -> Path:
+    if not isinstance(value, (str, Path)) or not str(value):
+        raise _error("diagnostics.path must be a non-empty profile-local path")
+    configured = Path(value)
+    candidate = configured if configured.is_absolute() else home / configured
+    try:
+        normalized = candidate.resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        raise _error("diagnostics.path must resolve inside hermes_home") from None
+    try:
+        normalized.relative_to(home)
+    except ValueError:
+        raise _error("diagnostics.path must remain inside hermes_home") from None
+    return normalized
+
+
 def _parse_principals(value: object) -> tuple[AllowedPrincipal, ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
         raise _error("allowed_principals must be a list")
@@ -983,9 +1059,13 @@ __all__ = [
     "AllowedPrincipal",
     "BetterHindsightConfig",
     "ConfigError",
+    "DiagnosticConfig",
     "IdentifierKind",
     "DEFAULT_API_URL",
     "DEFAULT_BANK_ID",
+    "DEFAULT_DIAGNOSTIC_MAX_RECORDS",
+    "DEFAULT_DIAGNOSTIC_REPLAY_TIMEOUT_SECONDS",
+    "DEFAULT_DIAGNOSTIC_SLOW_THRESHOLD_SECONDS",
     "DEFAULT_OUTBOX_BUSY_TIMEOUT_SECONDS",
     "DEFAULT_OUTBOX_MAX_PENDING_BYTES",
     "DEFAULT_OUTBOX_MAX_PENDING_ROWS",

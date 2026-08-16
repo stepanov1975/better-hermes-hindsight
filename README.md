@@ -66,13 +66,19 @@ credential. Leave retention disabled until recall and status work. See
 
 ```text
 hermes better_hindsight status
+hermes better_hindsight diagnostics list
+hermes better_hindsight diagnostics replay <record-id>
 hermes better_hindsight missions check
 hermes better_hindsight missions apply --confirm
 hermes better_hindsight canary
 hermes better_hindsight watchdog --help
 ```
 
-`status` reads the existing outbox without initializing or draining it. Mission changes are never automatic and require explicit confirmation. There is no retry-now, row-deletion, arbitrary-bank, or model-facing write command.
+`status` reads the existing outbox without initializing or draining it. Opt-in slow-recall
+diagnostics keep exact projected queries only in bounded private local files; list output is query-free,
+and replay is an operator-only read against the configured bank. Mission changes are never automatic
+and require explicit confirmation. There is no retry-now, row-deletion, arbitrary-bank, or model-facing
+write command.
 
 The included `hermes better_hindsight canary` and `hermes better_hindsight watchdog` commands
 provide an adapter-backed synthetic E2E check and transition-only alert evaluation over

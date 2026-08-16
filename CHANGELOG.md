@@ -4,6 +4,15 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+### Added
+
+- Added opt-in bounded local capture of exact projected queries and credential-free request parameters
+  for slow or failed recalls, plus operator list/replay commands that use Hindsight's existing trace
+  response to report privacy-safe phase timings and candidate-collection counts.
+- Diagnostic replay results are saved back to the private record while ordinary logs and command output
+  remain query-free. This is a plugin-only best-effort mechanism; timed-out server phases are available
+  only when a later trace-enabled replay completes.
+
 ## 0.2.3 - 2026-08-14
 
 ### Fixed

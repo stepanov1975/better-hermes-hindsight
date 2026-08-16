@@ -30,6 +30,7 @@ from better_hermes_hindsight.client import (
     RetainSegment,
     create_hindsight_client,
     is_available,
+    recall_request_parameters,
 )
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 
@@ -625,6 +626,88 @@ def test_constructor_failure_is_sanitized_without_exception_text(tmp_path: Path)
         create_hindsight_client(config, transport_factory=failing_factory)
     assert caught.value.category == "client_initialization_failed"
     assert str(caught.value) == "Better Hindsight client initialization failed."
+
+
+def test_diagnostic_replay_forces_trace_and_projects_only_safe_phase_data(tmp_path: Path) -> None:
+    config = _config(tmp_path, injected={"bank_id": "sample-bank"})
+    transport = _RecordingTransport()
+    path = "/v1/default/banks/sample-bank/memories/recall"
+    transport.responses[("POST", path)] = {
+        "results": [_recall_result_payload()],
+        "source_facts": None,
+        "trace": {
+            "summary": {
+                "total_duration_seconds": 3.5,
+                "phase_metrics": [
+                    {
+                        "phase_name": "reranking",
+                        "duration_seconds": 2.25,
+                        "details": {
+                            "candidate_count": 100,
+                            "private_query_looks_safe": 7,
+                            "private_text": "must-not-survive",
+                            "tokens_used": 10**100,
+                        },
+                    },
+                    {
+                        "phase_name": "private_query_looks_safe",
+                        "duration_seconds": 0.4,
+                        "details": {"candidate_count": 99},
+                    },
+                ],
+            },
+            "retrieval_results": [
+                {"method": "semantic", "results": [{"text": "private"}] * 3},
+                {"method": "bm25", "results": [{"text": "private"}] * 2},
+            ],
+            "rrf_merged": [{"text": "private candidate"}, {"text": "private candidate"}],
+            "final_results": [{"text": "private result"}],
+        },
+    }
+    adapter = HindsightClientAdapter(config=config, transport=transport)
+
+    response = asyncio.run(
+        adapter.replay_recall("exact replay query", recall_request_parameters(config.recall))
+    )
+
+    request = transport.calls[0][2]
+    assert request is not None
+    assert request["query"] == "exact replay query"
+    assert request["trace"] is True
+    assert response.trace is not None
+    assert response.trace.collection_counts == {
+        "retrieval_methods": 2,
+        "retrieval_candidates": 5,
+        "rrf_merged": 2,
+        "final_results": 1,
+    }
+    assert response.trace.phase_metrics[0].as_dict() == {
+        "details": {"candidate_count": 100},
+        "duration_seconds": 2.25,
+        "phase_name": "reranking",
+    }
+    assert "private" not in str(response.trace.as_dict())
+
+
+def test_trace_collection_counts_survive_missing_summary(tmp_path: Path) -> None:
+    config = _config(tmp_path, injected={"bank_id": "sample-bank"})
+    transport = _RecordingTransport()
+    path = "/v1/default/banks/sample-bank/memories/recall"
+    transport.responses[("POST", path)] = {
+        "results": [_recall_result_payload()],
+        "source_facts": None,
+        "trace": {"summary": None, "final_results": [{"text": "private"}]},
+    }
+    adapter = HindsightClientAdapter(config=config, transport=transport)
+
+    response = asyncio.run(
+        adapter.replay_recall("exact replay query", recall_request_parameters(config.recall))
+    )
+
+    assert response.trace is not None
+    assert response.trace.total_duration_seconds is None
+    assert response.trace.phase_metrics == ()
+    assert response.trace.collection_counts == {"final_results": 1}
 
 
 def test_asyncio_cancellation_propagates_unchanged(tmp_path: Path) -> None:

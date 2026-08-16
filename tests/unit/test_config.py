@@ -105,6 +105,10 @@ def test_defaults_follow_the_best_effort_product_contract(tmp_path: Path) -> Non
     assert config.outbox.poll_interval_seconds == 2.0
     assert config.outbox.retry_initial_seconds == 2.0
     assert config.outbox.retry_max_seconds == 300.0
+    assert config.diagnostics.enabled is False
+    assert config.diagnostics.slow_threshold_seconds == 5.0
+    assert config.diagnostics.max_records == 50
+    assert config.diagnostics.replay_timeout_seconds == 30.0
     assert not hasattr(config.missions, "policy")
 
 
