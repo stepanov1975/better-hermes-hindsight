@@ -10,6 +10,7 @@ import logging
 import os
 import queue
 import re
+import stat
 import threading
 import time
 import uuid
@@ -206,33 +207,30 @@ def list_recall_records(config: BetterHindsightConfig) -> list[dict[str, object]
 
     records: list[dict[str, object]] = []
     for path in _record_paths(config.diagnostics.path)[:_MAX_LIST_RECORDS]:
-        try:
-            payload = _read_record(path)
-            summary: dict[str, object] = {
-                "elapsed_ms": _required_nonnegative_int(payload, "elapsed_ms"),
-                "outcome": _required_string(payload, "outcome", 64),
-                "query_sha256": _required_sha256(payload, "query_sha256"),
-                "record_id": _required_record_id(payload, path.stem),
-                "recorded_at": _required_string(payload, "recorded_at", 64),
-            }
-            reason = payload.get("reason")
-            if type(reason) is str and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", reason):
-                summary["reason"] = reason
-            replay = payload.get("last_replay")
-            if type(replay) is dict:
-                replay_mapping = replay
-                replay_outcome = replay_mapping.get("outcome")
-                replay_elapsed = replay_mapping.get("elapsed_ms")
-                replayed_at = replay_mapping.get("replayed_at")
-                if type(replay_outcome) is str:
-                    summary["replay_outcome"] = replay_outcome[:64]
-                if type(replay_elapsed) is int and replay_elapsed >= 0:
-                    summary["replay_elapsed_ms"] = replay_elapsed
-                if type(replayed_at) is str:
-                    summary["replayed_at"] = replayed_at[:64]
-            records.append(summary)
-        except Exception:
-            continue
+        payload = _read_record(path)
+        summary: dict[str, object] = {
+            "elapsed_ms": _required_nonnegative_int(payload, "elapsed_ms"),
+            "outcome": _required_string(payload, "outcome", 64),
+            "query_sha256": _required_sha256(payload, "query_sha256"),
+            "record_id": _required_record_id(payload, path.stem),
+            "recorded_at": _required_string(payload, "recorded_at", 64),
+        }
+        reason = payload.get("reason")
+        if type(reason) is str and re.fullmatch(r"[a-z][a-z0-9_]{0,63}", reason):
+            summary["reason"] = reason
+        replay = payload.get("last_replay")
+        if type(replay) is dict:
+            replay_mapping = replay
+            replay_outcome = replay_mapping.get("outcome")
+            replay_elapsed = replay_mapping.get("elapsed_ms")
+            replayed_at = replay_mapping.get("replayed_at")
+            if type(replay_outcome) is str:
+                summary["replay_outcome"] = replay_outcome[:64]
+            if type(replay_elapsed) is int and replay_elapsed >= 0:
+                summary["replay_elapsed_ms"] = replay_elapsed
+            if type(replayed_at) is str:
+                summary["replayed_at"] = replayed_at[:64]
+        records.append(summary)
     return records
 
 
@@ -368,20 +366,34 @@ def _read_record(path: Path) -> dict[str, Any]:
     return value
 
 
-def _record_paths(directory: Path) -> list[Path]:
+def _record_paths(
+    directory: Path, *, unavailable_ok: bool = False, regular_only: bool = False
+) -> list[Path]:
     try:
+        mode = os.lstat(directory).st_mode
+        if not stat.S_ISDIR(mode):
+            raise DiagnosticRecordError("diagnostic_store_unavailable")
         paths = [
             path
             for path in directory.glob("*.json")
-            if path.is_file() and not path.is_symlink() and _RECORD_ID.fullmatch(path.stem)
+            if _RECORD_ID.fullmatch(path.stem)
+            and (not regular_only or (not path.is_symlink() and path.is_file()))
         ]
-    except OSError:
+    except FileNotFoundError:
         return []
+    except DiagnosticRecordError:
+        if unavailable_ok:
+            return []
+        raise
+    except OSError:
+        if unavailable_ok:
+            return []
+        raise DiagnosticRecordError("diagnostic_store_unavailable") from None
     return sorted(paths, key=lambda item: item.name, reverse=True)
 
 
 def _prune_records(directory: Path, max_records: int) -> None:
-    for path in _record_paths(directory)[max_records:]:
+    for path in _record_paths(directory, unavailable_ok=True, regular_only=True)[max_records:]:
         try:
             path.unlink()
         except OSError:

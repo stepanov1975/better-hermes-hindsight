@@ -13,6 +13,12 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
   remain query-free. This is a plugin-only best-effort mechanism; timed-out server phases are available
   only when a later trace-enabled replay completes.
 
+### Fixed
+
+- Diagnostic listing now reports unreadable or corrupt stores as unavailable instead of empty, and
+  replay rejects captured request data that no longer exactly matches the current typed recall policy
+  before making a network request.
+
 ## 0.2.3 - 2026-08-14
 
 ### Fixed

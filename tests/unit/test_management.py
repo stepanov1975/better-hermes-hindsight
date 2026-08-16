@@ -33,6 +33,7 @@ from better_hermes_hindsight.management import (
     ManagementResult,
     apply_missions,
     check_missions,
+    list_diagnostics,
     replay_diagnostic,
     status,
 )
@@ -1687,6 +1688,32 @@ def test_mission_apply_postwrite_cleanup_failure_is_ambiguous_exit_four(
         "get",
         "runtime_finalize",
     ]
+
+
+def test_diagnostics_list_reports_corrupt_store_as_unavailable(tmp_path: Path) -> None:
+    config = load_config(
+        tmp_path,
+        environ={},
+        injected={
+            "api_url": "https://service.example.test",
+            "bank_id": "synthetic-bank",
+            "single_principal": True,
+            "diagnostics": {"enabled": True},
+        },
+    )
+    config.diagnostics.path.mkdir(mode=0o700, parents=True)
+    corrupt = config.diagnostics.path / "0000000000000000001-deadbeefcafe.json"
+    corrupt.write_text("not-json", encoding="utf-8")
+    corrupt.chmod(0o600)
+
+    result = list_diagnostics(config)
+
+    assert result.exit_code == 3
+    assert result.payload == {
+        "command": "diagnostics_list",
+        "error": "diagnostics_unavailable",
+        "result": "error",
+    }
 
 
 def test_diagnostic_replay_is_query_private_and_persists_safe_trace(tmp_path: Path) -> None:

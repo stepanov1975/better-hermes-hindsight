@@ -689,6 +689,20 @@ def test_diagnostic_replay_forces_trace_and_projects_only_safe_phase_data(tmp_pa
     assert "private" not in str(response.trace.as_dict())
 
 
+def test_diagnostic_replay_rejects_request_drift_before_transport(tmp_path: Path) -> None:
+    config = _config(tmp_path, injected={"bank_id": "sample-bank"})
+    transport = _RecordingTransport()
+    adapter = HindsightClientAdapter(config=config, transport=transport)
+    request = recall_request_parameters(config.recall)
+    request["max_tokens"] = float(cast(int, request["max_tokens"]))
+
+    with pytest.raises(HindsightClientError) as caught:
+        asyncio.run(adapter.replay_recall("exact replay query", request))
+
+    assert caught.value.reason == "schema_invalid"
+    assert transport.calls == []
+
+
 def test_trace_collection_counts_survive_missing_summary(tmp_path: Path) -> None:
     config = _config(tmp_path, injected={"bank_id": "sample-bank"})
     transport = _RecordingTransport()

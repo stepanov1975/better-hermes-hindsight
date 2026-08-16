@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import stat
 import threading
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 import pytest
@@ -14,6 +14,7 @@ import better_hermes_hindsight.diagnostics as diagnostics_module
 from better_hermes_hindsight.client import RecallPhaseMetric, RecallTrace
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.diagnostics import (
+    DiagnosticRecordError,
     capture_recall,
     enqueue_recall_capture,
     initialize_recall_capture,
@@ -53,6 +54,63 @@ def _request() -> dict[str, object]:
         "trace": False,
         "types": None,
     }
+
+
+def test_unreadable_diagnostic_store_is_not_reported_as_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    config.diagnostics.path.mkdir(mode=0o700, parents=True)
+
+    def denied_glob(path: Path, pattern: str) -> Iterator[Path]:
+        assert path == config.diagnostics.path
+        assert pattern == "*.json"
+        raise PermissionError("synthetic denied")
+
+    monkeypatch.setattr(Path, "glob", denied_glob)
+
+    with pytest.raises(DiagnosticRecordError, match="diagnostic_store_unavailable"):
+        list_recall_records(config)
+
+
+def test_non_directory_diagnostic_store_is_not_reported_as_empty(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.diagnostics.path.parent.mkdir(mode=0o700, parents=True)
+    config.diagnostics.path.write_text("corrupt store", encoding="utf-8")
+
+    with pytest.raises(DiagnosticRecordError, match="diagnostic_store_unavailable"):
+        list_recall_records(config)
+
+
+def test_invalid_newer_entry_does_not_consume_prune_allowance(tmp_path: Path) -> None:
+    config = _config(tmp_path, max_records=1)
+    original_record = capture_recall(
+        config,
+        query="original slow query",
+        request=_request(),
+        elapsed_ms=6_000,
+        outcome="success",
+    )
+    assert original_record is not None
+    invalid = config.diagnostics.path / "9999999999999999999-deadbeefcafe.json"
+    invalid.symlink_to(f"{original_record}.json")
+
+    replacement_record = capture_recall(
+        config,
+        query="replacement slow query",
+        request=_request(),
+        elapsed_ms=7_000,
+        outcome="success",
+    )
+
+    assert replacement_record is not None
+    regular_records = [
+        path
+        for path in config.diagnostics.path.glob("*.json")
+        if not path.is_symlink() and path.is_file()
+    ]
+    assert [path.stem for path in regular_records] == [replacement_record]
+    assert invalid.is_symlink()
 
 
 def test_enqueue_does_not_wait_for_diagnostic_filesystem_work(

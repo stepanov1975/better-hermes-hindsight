@@ -69,12 +69,15 @@ hermes better_hindsight diagnostics list
 hermes better_hindsight diagnostics replay <record-id>
 ```
 
-Replay sends the captured query and request to the currently configured endpoint and bank, forces
-Hindsight's existing `trace=true` response, and saves/prints only numeric phase durations, numeric or
-boolean phase details, collection counts, total duration, and result count. Candidate IDs, candidate
-content, recalled text, and the query are excluded from command output. Replay is read-only but creates
-normal recall load. A timeout can be captured exactly but cannot expose server phases until a later
-trace-enabled replay completes; this is the unavoidable plugin-only limit.
+Replay sends the captured query and request to the currently configured endpoint and bank, but only
+when the captured credential-free request still exactly matches the current typed recall policy; a
+policy change rejects the replay before transport rather than broadening an old request. It forces
+Hindsight's existing `trace=true` response and saves/prints only allowlisted numeric phase durations,
+numeric or boolean phase details, collection counts, total duration, and result count. Candidate IDs,
+candidate content, recalled text, and the query are excluded from command output. An unreadable or
+corrupt diagnostic store is reported as unavailable rather than as an empty successful list. Replay is
+read-only but creates normal recall load. A timeout can be captured exactly but cannot expose server
+phases until a later trace-enabled replay completes; this is the unavoidable plugin-only limit.
 
 ## External end-to-end canary
 

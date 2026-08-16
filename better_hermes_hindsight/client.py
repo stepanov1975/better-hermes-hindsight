@@ -503,6 +503,12 @@ class HindsightClientAdapter:
     async def replay_recall(self, query: str, request: Mapping[str, object]) -> RecallResponse:
         """Replay one plugin-recorded request with Hindsight trace collection enabled."""
 
+        if not _diagnostic_request_matches_current(request, self._recall_config):
+            raise HindsightClientError(
+                "recall_failed",
+                "Better Hindsight recall failed.",
+                reason="schema_invalid",
+            )
         payload = _diagnostic_recall_body(query, request)
         return await self._perform_recall(payload)
 
@@ -649,6 +655,31 @@ def recall_request_parameters(config: RecallConfig) -> dict[str, object]:
     payload = _recall_body("", config)
     del payload["query"]
     return payload
+
+
+def _diagnostic_request_matches_current(
+    request: Mapping[str, object], config: RecallConfig
+) -> bool:
+    if type(request) is not dict:
+        return False
+    try:
+        captured = json.dumps(
+            request,
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        current = json.dumps(
+            recall_request_parameters(config),
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (TypeError, ValueError):
+        return False
+    return captured == current
 
 
 def _diagnostic_recall_body(query: str, request: Mapping[str, object]) -> dict[str, object]:
