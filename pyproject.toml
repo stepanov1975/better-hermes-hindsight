@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77,<84"]
+requires = ["setuptools>=77,<85"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -20,7 +20,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
 ]
-dependencies = ["aiohttp>=3.14.1,<4", "tiktoken>=0.12,<0.13"]
+dependencies = ["aiohttp>=3.14.1,<4", "tiktoken>=0.12,<0.14"]
 
 [project.optional-dependencies]
 dev = [
