@@ -68,6 +68,36 @@ Compared with bundled Hindsight, this plugin deliberately focuses on:
 
 It is narrower than bundled Hindsight. It does not provide embedded/cloud service management, model-facing retain or reflect tools, multi-user bank routing, previous-query background recall, migrations, or automatic deletion.
 
+## Comparison with Hermes's bundled Hindsight provider
+
+Hermes also ships a memory provider named `hindsight`. That provider is separate from Hermes's
+built-in `MEMORY.md` / `USER.md` memory. Both providers use Hindsight for storage and retrieval; the
+table compares their Hermes integration behavior rather than Hindsight's underlying knowledge graph
+or retrieval quality.
+
+| Area | Better Hindsight | Bundled Hermes Hindsight |
+| --- | --- | --- |
+| Installation target | Standard Git plugin for a supported external Hindsight 0.8.5 or 0.9.1 service | Included with Hermes; interactive setup supports Hindsight Cloud, a local embedded service, or an external service |
+| Automatic recall | When enabled, recalls against the current user query, synchronously under character, token, response-size, and total-time bounds | Background previous-query recall by default; optional synchronous current-query recall |
+| Recalled context | Complete byte-bounded JSONL records with available type, score, time, and evidence metadata; redacted and explicitly framed as stale, untrusted evidence | Formatted memory text or a reflect synthesis with configurable preamble, token budget, types, and tags |
+| Automatic retention | Opt-in; each completed turn is atomically admitted to a SQLite WAL outbox before asynchronous delivery | Enabled by default; completed turns enter a process-local FIFO writer and then optional server-side async processing |
+| Crash behavior before remote delivery | Committed outbox rows survive process restart and are retried | Locally queued writer jobs are not persistent; shutdown drains them only within a bounded wait |
+| Retry/document strategy | Stable per-segment document IDs, `update_mode="replace"`, destination binding, and bounded retry backoff | Session-scoped `update_mode="append"` where supported, with a process-unique document fallback for older APIs |
+| Read-after-write freshness | Eventual: an immediately following recall can race the outbox sender | Background prefetch can wait for the local writer and server-side async retain operations before recalling |
+| Model-facing tools | One bounded read-only recall tool; no model-directed writes or reflection | Recall, retain, and reflect tools in tools or hybrid mode |
+| Routing and authorization | One static bank with an exact single-principal allowlist | Static or templated banks across profile, workspace, platform, user, or session contexts |
+| Bank policy operations | Explicit operator check/apply for retain and observations missions | No equivalent mission drift check/apply/readback operator command |
+| Operations | Passive outbox status, structured diagnostics, replay, synthetic canary, watchdog evaluator, and mission drift checks | Interactive setup, recall/retain status indicators, embedded-service lifecycle, and normal provider logs |
+
+Choose Better Hindsight when a narrow self-hosted deployment prioritizes current-query alignment,
+crash-durable delivery, explicit trust framing, and operator diagnostics. Choose the bundled provider
+when setup breadth, cloud or embedded operation, dynamic bank routing, reflect/write tools, or lower
+independent maintenance matters more. Better Hindsight is deliberately not a drop-in superset.
+
+This comparison follows the current intended rolling Hermes checkout. Review the
+[bundled provider source](https://github.com/NousResearch/hermes-agent/tree/main/plugins/memory/hindsight)
+when upgrading either project because its behavior continues to evolve.
+
 ## Reliability boundary
 
 Recall fails open: timeout, service failure, invalid data, or unavailable runtime yields no external context rather than stopping Hermes. Queries are bounded by both characters and the exact `cl100k_base` token rule used by supported Hindsight servers. Recalled records are bounded, redacted, and framed as potentially stale historical evidence.
