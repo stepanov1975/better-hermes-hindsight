@@ -68,7 +68,7 @@ hermes better_hindsight status
 hermes better_hindsight missions check
 ```
 
-The plugin should appear as installed at version `0.3.1`, and `memory.provider` should be
+The plugin should appear as installed at version `0.3.2`, and `memory.provider` should be
 `better_hindsight`. General-plugin enablement is not required for a selected memory provider. An
 absent outbox is reported as `uninitialized`; that is normal before the first admitted retained
 turn.

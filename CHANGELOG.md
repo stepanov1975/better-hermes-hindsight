@@ -4,6 +4,8 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+## 0.3.2 - 2026-08-21
+
 ### Added
 
 - Automatic recall now uses Hermes's deterministic memory indicator to report the number of
