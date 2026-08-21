@@ -190,12 +190,19 @@ def format_recall_context(response: object, *, max_bytes: int) -> str:
     numbers, or a budget too small for one complete record fail open without emitting partial JSON.
     """
 
+    context, _count = format_recall_context_with_count(response, max_bytes=max_bytes)
+    return context
+
+
+def format_recall_context_with_count(response: object, *, max_bytes: int) -> tuple[str, int]:
+    """Return bounded context and the number of complete records it contains."""
+
     if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
-        return ""
+        return "", 0
     try:
         results = cast(_RecallResponseLike, response).results
         if not isinstance(results, Sequence) or isinstance(results, (str, bytes, bytearray)):
-            return ""
+            return "", 0
 
         lines: list[str] = []
         for result in results:
@@ -210,9 +217,9 @@ def format_recall_context(response: object, *, max_bytes: int) -> str:
                 lines.append(truncated)
             break
 
-        return "" if not lines else _render(lines)
+        return ("", 0) if not lines else (_render(lines), len(lines))
     except Exception:
-        return ""
+        return "", 0
 
 
 def _project_record(result: object) -> dict[str, object]:
@@ -332,5 +339,6 @@ __all__ = [
     "TEXT_TRUNCATION_MARKER",
     "count_query_tokens",
     "format_recall_context",
+    "format_recall_context_with_count",
     "project_query",
 ]

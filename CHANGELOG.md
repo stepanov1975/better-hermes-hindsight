@@ -4,6 +4,11 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+### Added
+
+- Automatic recall now uses Hermes's deterministic memory indicator to report the number of
+  memories actually injected after Better Hindsight's output-byte bound is applied.
+
 ## 0.3.1 - 2026-08-21
 
 ### Added

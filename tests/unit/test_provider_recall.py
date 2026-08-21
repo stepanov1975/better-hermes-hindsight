@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import NoReturn, cast
 
 import pytest
-from agent.memory_provider import MemoryProvider
+from agent.memory_provider import MemoryProvider, RecallStatus
 
 import better_hermes_hindsight.provider as provider_module
 from better_hermes_hindsight.client import (
@@ -31,6 +31,7 @@ from better_hermes_hindsight.formatting import (
     CONTEXT_PREAMBLE,
     QUERY_OMISSION_MARKER,
     count_query_tokens,
+    format_recall_context,
 )
 from better_hermes_hindsight.provider import (
     AUTHORIZATION_INACTIVE_DIAGNOSTIC,
@@ -230,6 +231,57 @@ def test_provider_passes_projected_query_and_request_to_diagnostic_capture(
     assert cast(dict[str, object], captured[0]["request"])["trace"] is False
     assert captured[0]["outcome"] == "success"
     assert captured[0]["result_count"] == 1
+
+
+def test_recall_status_counts_only_memories_injected_by_the_latest_prefetch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = _recall_response("first memory").results[0]
+    second = _recall_response("second memory").results[0]
+    first_only = format_recall_context(RecallResponse(results=[first]), max_bytes=100_000)
+    document = _base_config()
+    recall_config = cast(dict[str, object], document["recall"])
+    recall_config["context_max_bytes"] = len(first_only.encode("utf-8"))
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle(response=RecallResponse(results=[first, second]))
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session", hermes_home=str(tmp_path), platform="cli")
+
+    assert provider.recall_status() is None
+    assert provider.prefetch("current query") == first_only
+    assert provider.recall_status() == RecallStatus(
+        provider_label="Better Hindsight",
+        count=1,
+        glyph="👁️",
+    )
+
+    handle.response = RecallResponse(results=[])
+    assert provider.prefetch("next query") == ""
+    assert provider.recall_status() is None
+
+
+def test_recall_status_clears_stale_success_before_early_return_or_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_config(tmp_path, _base_config())
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session", hermes_home=str(tmp_path), platform="cli")
+
+    assert provider.prefetch("successful query")
+    assert provider.recall_status() is not None
+
+    assert provider.prefetch("") == ""
+    assert provider.recall_status() is None
+
+    assert provider.prefetch("successful again")
+    handle.failure = AsyncCallTimeoutError("safe timeout")
+    assert provider.prefetch("timed out query") == ""
+    assert provider.recall_status() is None
 
 
 def test_constructor_availability_and_tool_schema_are_local_repeatable_and_uninitialized(
