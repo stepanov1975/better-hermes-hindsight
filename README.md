@@ -107,7 +107,7 @@ or retrieval quality.
 | Model-facing tools | One bounded read-only recall tool; no model-directed writes or reflection | Recall, retain, and reflect tools in tools or hybrid mode |
 | Routing and authorization | One static bank with an exact single-principal allowlist | Static or templated banks across profile, workspace, platform, user, or session contexts |
 | Bank policy operations | Explicit operator check/apply for retain and observations missions | No equivalent mission drift check/apply/readback operator command |
-| Operations | Passive outbox status, structured diagnostics, replay, synthetic canary, watchdog evaluator, and mission drift checks | Interactive setup, recall/retain status indicators, embedded-service lifecycle, and normal provider logs |
+| Operations | Automatic recall status indicator, passive outbox status, structured diagnostics, replay, synthetic canary, watchdog evaluator, and mission drift checks | Interactive setup, recall/retain status indicators, embedded-service lifecycle, and normal provider logs |
 
 Choose Better Hindsight when a narrow self-hosted deployment prioritizes current-query alignment,
 crash-durable delivery, explicit trust framing, and operator diagnostics. Choose the bundled provider

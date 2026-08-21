@@ -11,7 +11,7 @@ Better Hermes Hindsight follows the Hermes checkout used by its maintainer rathe
 - Compatibility fails only when required provider/CLI interfaces are missing or behavior tests fail.
 - Historical Hermes versions are not blocking CI lanes.
 
-The relevant public host contract is Hermes's `MemoryProvider`/`MemoryManager` lifecycle: provider discovery, `is_available()`, `initialize()`, current-query prefetch, `sync_turn()`, session switching, shutdown, and plugin CLI registration. Tests exercise these behaviors through the real installed host where practical.
+The relevant public host contract is Hermes's `MemoryProvider`/`MemoryManager` lifecycle: provider discovery, `is_available()`, `initialize()`, current-query prefetch, `recall_status()`, `sync_turn()`, session switching, shutdown, and plugin CLI registration. Tests exercise these behaviors through the real installed host where practical.
 
 ## Hindsight compatibility
 

@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, cast
 
-from agent.memory_provider import MemoryProvider
+from agent.memory_provider import MemoryProvider, RecallStatus
 
 from . import PROVIDER_ID
 from .client import HindsightClientError, recall_request_parameters
@@ -18,7 +18,7 @@ from .config import BetterHindsightConfig, load_config
 from .diagnostics import enqueue_recall_capture, initialize_recall_capture
 from .formatting import (
     SYSTEM_PROMPT_BLOCK,
-    format_recall_context,
+    format_recall_context_with_count,
     project_query,
 )
 from .runtime import (
@@ -48,10 +48,17 @@ _UNKNOWN_TOOL = "Unknown Better Hindsight tool."
 class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
     """A lightweight authorized handle over the shared process runtime."""
 
-    __slots__ = ("_config", "_recall_enabled", "_retain_enabled", "_runtime")
+    __slots__ = (
+        "_config",
+        "_last_recall_count",
+        "_recall_enabled",
+        "_retain_enabled",
+        "_runtime",
+    )
 
     def __init__(self) -> None:
         self._config: BetterHindsightConfig | None = None
+        self._last_recall_count = 0
         self._recall_enabled = False
         self._retain_enabled = False
         self._runtime: ProcessRuntimeHandle | None = None
@@ -135,6 +142,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         """Recall exactly the current projected query under the configured total deadline."""
 
         del session_id  # Released Hermes supplies the documented default empty value.
+        self._last_recall_count = 0
         config = self._config
         if not self._recall_enabled or config is None or self._runtime is None:
             return ""
@@ -152,7 +160,23 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         except Exception:
             logger.warning(RECALL_FAILED_DIAGNOSTIC)
             return ""
-        return self._recall_projected(projected, warn_on_format_failure=False) or ""
+        recalled = self._recall_projected(projected, warn_on_format_failure=False)
+        if recalled is None:
+            return ""
+        context, count = recalled
+        self._last_recall_count = count
+        return context
+
+    def recall_status(self) -> RecallStatus | None:
+        """Describe only the memories injected by the latest automatic prefetch."""
+
+        if self._last_recall_count <= 0:
+            return None
+        return RecallStatus(
+            provider_label="Better Hindsight",
+            count=self._last_recall_count,
+            glyph="👁️",
+        )
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
         """Remain inert so recall always uses the current query."""
@@ -248,9 +272,10 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         if not projected.strip():
             return _tool_json(error=_RECALL_TOOL_INVALID_QUERY)
 
-        context = self._recall_projected(projected, warn_on_format_failure=True)
-        if context is None:
+        recalled = self._recall_projected(projected, warn_on_format_failure=True)
+        if recalled is None:
             return _tool_json(error=_RECALL_TOOL_UNAVAILABLE)
+        context, _count = recalled
         return _tool_json(result=context or _RECALL_TOOL_NO_RESULTS)
 
     def _recall_projected(
@@ -258,7 +283,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         projected: str,
         *,
         warn_on_format_failure: bool,
-    ) -> str | None:
+    ) -> tuple[str, int] | None:
         config = self._config
         runtime = self._runtime
         if not self._recall_enabled or config is None or runtime is None:
@@ -330,9 +355,9 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             return None
         if result_count == 0:
             record("empty", formatted_bytes=0, result_count=0)
-            return ""
+            return "", 0
         try:
-            context = format_recall_context(
+            context, formatted_count = format_recall_context_with_count(
                 response,
                 max_bytes=config.recall.context_max_bytes,
             )
@@ -350,7 +375,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             formatted_bytes=len(context.encode("utf-8")),
             result_count=result_count,
         )
-        return context
+        return context, formatted_count
 
     def shutdown(self) -> None:
         """Drop this handle idempotently without finalizing process-owned sibling resources."""
@@ -360,6 +385,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
     def _deactivate(self) -> None:
         runtime = self._runtime
         self._config = None
+        self._last_recall_count = 0
         self._recall_enabled = False
         self._retain_enabled = False
         self._runtime = None

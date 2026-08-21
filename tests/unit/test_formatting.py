@@ -18,6 +18,7 @@ from better_hermes_hindsight.formatting import (
     TEXT_TRUNCATION_MARKER,
     count_query_tokens,
     format_recall_context,
+    format_recall_context_with_count,
     project_query,
 )
 
@@ -473,6 +474,24 @@ def test_context_budget_counts_preamble_separators_suffix_and_every_complete_rec
     assert len(bounded.encode("utf-8")) <= budget
     assert records == _json_records(first_only)
     assert len(_json_records(full)) == 3
+
+
+def test_context_count_reports_only_records_that_fit_the_output_budget() -> None:
+    first = _result(result_id="first", text="first memory")
+    response = _response(
+        first,
+        _result(result_id="second", text="second memory"),
+        _result(result_id="third", text="third memory"),
+    )
+    first_only = format_recall_context(_response(first), max_bytes=100_000)
+
+    context, count = format_recall_context_with_count(
+        response,
+        max_bytes=len(first_only.encode("utf-8")),
+    )
+
+    assert context == first_only
+    assert count == 1
 
 
 def test_record_too_large_even_with_minimal_marked_text_returns_empty() -> None:
