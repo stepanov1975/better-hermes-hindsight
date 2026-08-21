@@ -133,7 +133,7 @@ Retries use a stable document ID and `update_mode="replace"`. A timed-out write 
 - at most one Better-enabled profile per Hermes process;
 - Python supported by that checkout (the maintained development lane uses Python 3.13);
 - an external Hindsight 0.8.5 or 0.9.1 server;
-- `aiohttp>=3.14.1,<4` and `tiktoken>=0.12,<0.13`, which the plugin declares through Hermes's
+- `aiohttp>=3.14.1,<4` and `tiktoken>=0.12,<0.14`, which the plugin declares through Hermes's
   standard memory-plugin dependency mechanism.
 
 The plugin packages the official hash-verified `cl100k_base` encoding table, so query counting does

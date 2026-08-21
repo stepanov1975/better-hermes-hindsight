@@ -104,7 +104,7 @@ def test_root_plugin_surface_is_self_contained_and_version_aligned() -> None:
     assert root_manifest["manifest_version"] == 1
     assert root_manifest["pip_dependencies"] == [
         "aiohttp>=3.14.1,<4",
-        "tiktoken>=0.12,<0.13",
+        "tiktoken>=0.12,<0.14",
     ]
     assert "scripts" not in project
     assert all((ROOT / name).is_file() for name in ROOT_PLUGIN_FILES)

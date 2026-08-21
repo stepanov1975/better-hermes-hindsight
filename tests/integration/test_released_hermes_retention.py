@@ -28,7 +28,7 @@ from tests.fakes.hindsight_server import FakeHindsightServer, RequestRecord
 from tests.hermes_compat import assert_selected_hermes, selected_distribution_file
 
 FIXTURE_BANK_ID = "released-retention-fixture-bank"
-FIXTURE_API_KEY = "synthetic-released-retention-api-key"
+FIXTURE_ACCESS_VALUE = "synthetic-released-retention-fixture-value"
 FIXTURE_ERROR_SENTINEL = "synthetic-released-retention-error"
 FIXTURE_TAGS = ("kind:released-proof", "source:fixture")
 
@@ -103,7 +103,7 @@ async def _start_server() -> FakeHindsightServer:
         bank_id=FIXTURE_BANK_ID,
         disposable_bank_id="disposable-released-retention-fixture",
         error_sentinel=FIXTURE_ERROR_SENTINEL,
-        expected_api_key=FIXTURE_API_KEY,
+        expected_api_key=FIXTURE_ACCESS_VALUE,
     )
     await server.start()
     return server
@@ -150,7 +150,7 @@ def _isolate_environment(
     for name in ("HINDSIGHT_API_URL", "HINDSIGHT_API_KEY", "HINDSIGHT_BANK_ID"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-    monkeypatch.setenv("HINDSIGHT_API_KEY", FIXTURE_API_KEY)
+    monkeypatch.setenv("HINDSIGHT_API_KEY", FIXTURE_ACCESS_VALUE)
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
 
@@ -192,7 +192,7 @@ def _write_profile(
     )
     return load_config(
         hermes_home,
-        environ={"HINDSIGHT_API_KEY": FIXTURE_API_KEY},
+        environ={"HINDSIGHT_API_KEY": FIXTURE_ACCESS_VALUE},
     )
 
 

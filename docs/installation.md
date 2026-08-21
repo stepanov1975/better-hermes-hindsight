@@ -11,7 +11,7 @@ procedure.
 - an external Hindsight 0.8.5 or 0.9.1 service;
 - `git` available for Hermes's Git-plugin installer.
 
-The plugin declares `aiohttp>=3.14.1,<4` and `tiktoken>=0.12,<0.13` in `plugin.yaml`. Hermes checks
+The plugin declares `aiohttp>=3.14.1,<4` and `tiktoken>=0.12,<0.14` in `plugin.yaml`. Hermes checks
 and installs declared memory-plugin dependencies through its normal memory setup command. Better
 uses `tiktoken` only to match supported Hindsight servers' recall input limit; it does not import or
 replace Hermes's bundled Hindsight client.
@@ -68,7 +68,7 @@ hermes better_hindsight status
 hermes better_hindsight missions check
 ```
 
-The plugin should appear as installed at version `0.3.0`, and `memory.provider` should be
+The plugin should appear as installed at version `0.3.1`, and `memory.provider` should be
 `better_hindsight`. General-plugin enablement is not required for a selected memory provider. An
 absent outbox is reported as `uninitialized`; that is normal before the first admitted retained
 turn.

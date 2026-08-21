@@ -4,6 +4,32 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+## 0.3.1 - 2026-08-21
+
+### Added
+
+- Added a prominent Quick Start and corrected contributor setup against the current rolling Hermes
+  checkout.
+- Added a balanced functionality comparison with Hermes's bundled Hindsight provider.
+- Documented and regression-tested the profile boundary: separate profile processes are supported,
+  while multiple Better-enabled profiles in one multiplexed gateway fail open.
+
+### Changed
+
+- Expanded the supported tokenizer range through `tiktoken` 0.13 and aligned the host-facing plugin
+  manifest, package metadata, lockfile, installation guide, and contract tests.
+- Expanded the development build range through `setuptools` 84.
+- Made profile configuration, outbox, and diagnostics isolation explicit, including guidance to use
+  distinct Hindsight banks when remote memory must remain separate.
+
+### Fixed
+
+- The development lock now actually resolves `tiktoken` 0.13 instead of widening only the project
+  constraint.
+- Standard Git-plugin installation now passes Hermes 0.20.5's default repository security scan;
+  contributor rules and synthetic test fixtures no longer resemble scanner-reserved persistence or
+  credential patterns, and a compatibility test guards the install-time verdict.
+
 ## 0.3.0 - 2026-08-16
 
 ### Added

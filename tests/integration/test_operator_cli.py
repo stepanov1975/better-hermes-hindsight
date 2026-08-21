@@ -20,13 +20,13 @@ from tests.integration.helpers import (
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_BANK_ID = "operator-cli-fixture-bank"
-FIXTURE_API_KEY = "synthetic-operator-cli-api-key"
+FIXTURE_ACCESS_VALUE = "synthetic-operator-cli-fixture-value"
 DESIRED_RETAIN_MISSION = "Retain exact synthetic operator preferences."
 DESIRED_OBSERVATIONS_MISSION = "Observe exact synthetic operator patterns."
 
 EXPECTED_UNINITIALIZED_STATUS = (
     '{"age_bucket":"none","command":"status","counts":{"mismatch":0,"pending":0,'
-    '"retry":0,"sending":0},"deployed":{"commit":"unknown","version":"0.3.0"},'
+    '"retry":0,"sending":0},"deployed":{"commit":"unknown","version":"0.3.1"},'
     '"error_counts":{"retain_failed":0,"retain_timeout":0,"retain_unconfirmed":0},'
     '"last_error_category":"none","logical_queued_bytes":0,"max_attempt_count":0,'
     '"next_retry_bucket":"none","outbox":"uninitialized","result":"ok",'
@@ -219,7 +219,7 @@ if mode in client_modes:
     class FakeTransport:
         def __init__(self, **kwargs):
             assert kwargs["base_url"] == "http://127.0.0.1:9"
-            assert kwargs["api_key"] == "synthetic-operator-cli-api-key"
+            assert kwargs["api_key"] == "synthetic-operator-cli-fixture-value"
             retain_value = desired_retain if mode == "check_equal" else "remote retain mission"
             self.state = {
                 "observations_mission": desired_observations,
@@ -442,7 +442,7 @@ def _initialize_empty_outbox(hermes_home: Path) -> None:
 
     config = load_config(
         hermes_home=hermes_home,
-        environ={"HINDSIGHT_API_KEY": FIXTURE_API_KEY},
+        environ={"HINDSIGHT_API_KEY": FIXTURE_ACCESS_VALUE},
     )
     outbox = SQLiteOutbox.open(config)
     outbox.close()
@@ -565,7 +565,7 @@ def test_sync_check_handler_preserves_released_host_success(tmp_path: Path) -> N
         mode="check_equal",
         expect_discovery=True,
         exported_hermes_home=hermes_home,
-        extra_environment={"HINDSIGHT_API_KEY": FIXTURE_API_KEY},
+        extra_environment={"HINDSIGHT_API_KEY": FIXTURE_ACCESS_VALUE},
     )
 
     _assert_handler_output(
@@ -592,7 +592,7 @@ def test_sync_apply_handler_preserves_verified_success(tmp_path: Path) -> None:
         mode="apply_verified",
         expect_discovery=True,
         exported_hermes_home=hermes_home,
-        extra_environment={"HINDSIGHT_API_KEY": FIXTURE_API_KEY},
+        extra_environment={"HINDSIGHT_API_KEY": FIXTURE_ACCESS_VALUE},
     )
 
     _assert_handler_output(

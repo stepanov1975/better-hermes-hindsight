@@ -7,6 +7,9 @@ only catch broken packaging metadata and documentation links.
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
+import sys
 import tomllib
 from pathlib import Path
 from typing import cast
@@ -45,14 +48,62 @@ def test_package_and_plugin_metadata_are_consistent() -> None:
     assert root_manifest["manifest_version"] == 1
     assert root_manifest["pip_dependencies"] == [
         "aiohttp>=3.14.1,<4",
-        "tiktoken>=0.12,<0.13",
+        "tiktoken>=0.12,<0.14",
     ]
+
+
+def test_current_hermes_security_scanner_accepts_the_tracked_plugin_tree(
+    tmp_path: Path,
+) -> None:
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    ).stdout
+    staged = tmp_path / "plugin"
+    for raw_path in listed.split(b"\0"):
+        if not raw_path:
+            continue
+        relative = Path(raw_path.decode("utf-8"))
+        source = ROOT / relative
+        if not source.is_file():
+            continue
+        destination = staged / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+    scanner_root = ROOT / ".compat" / "hermes-current"
+    scanner = scanner_root / "tools" / "plugin_guard.py"
+    assert scanner.is_file(), "install the selected Hermes checkout under .compat/hermes-current"
+    scan_script = """
+import sys
+from pathlib import Path
+
+from tools.plugin_guard import format_scan_report, scan_plugin
+
+result = scan_plugin(Path(sys.argv[1]), source="stepanov1975/better-hermes-hindsight")
+if result.verdict != "safe":
+    print(format_scan_report(result), file=sys.stderr)
+    raise SystemExit(1)
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", scan_script, str(staged)],
+        cwd=tmp_path,
+        env={"PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(scanner_root)},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_required_operator_documentation_exists() -> None:
     required = {
         ROOT / "README.md",
         ROOT / "DESIGN.md",
+        ROOT / "DEVELOPMENT.md",
         ROOT / "CONTRIBUTING.md",
         ROOT / "docs" / "configuration.md",
         ROOT / "docs" / "installation.md",

@@ -2,6 +2,6 @@
 
 DISTRIBUTION_NAME = "better-hermes-hindsight"
 PROVIDER_ID = "better_hindsight"
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 __all__ = ["DISTRIBUTION_NAME", "PROVIDER_ID", "__version__"]

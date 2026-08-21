@@ -35,7 +35,7 @@ Focused tests are sufficient while iterating. Documentation-only changes need li
 ## Rules
 
 - Fix observed problems with the smallest reasonable change.
-- Preserve the scope and invariants in `AGENTS.md` and `DESIGN.md`.
+- Preserve the scope and invariants in `DEVELOPMENT.md` and `DESIGN.md`.
 - Add tests for public behavior and realistic failure paths, not for prose, commit hashes, plans, or workflow implementation details.
 - Test against the intended current Hermes checkout. Record its identity, but do not hard-code it as a permanent compatibility requirement.
 - Keep the internal HTTP contract pinned behaviorally to supported Hindsight API versions 0.8.5 and 0.9.1; do not add the Hindsight Python SDK back as a runtime dependency.

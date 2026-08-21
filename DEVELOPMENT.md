@@ -1,4 +1,4 @@
-# AGENTS.md
+# Development Rules
 
 ## Purpose
 

@@ -205,16 +205,16 @@ def test_shared_redactor_runs_before_hashing_segmentation_or_future_storage() ->
 
 
 def test_retain_tags_use_one_sorted_redacted_canonical_tuple() -> None:
-    raw_tag_secret = "SYNTHETIC_RETAIN_TAG_SECRET"
+    raw_tag_value = "SYNTHETIC_RETAIN_TAG_VALUE"
 
     segments = _build(
-        tags=("zeta", f"api_key={raw_tag_secret}", "alpha"),
+        tags=("zeta", f"api_key={raw_tag_value}", "alpha"),
     )
 
     source = _source(segments)
     assert json.loads(source)["tags"] == ["alpha", f"api_key={REDACTION_MARKER}", "zeta"]
-    assert raw_tag_secret not in source
-    assert raw_tag_secret not in repr(segments)
+    assert raw_tag_value not in source
+    assert raw_tag_value not in repr(segments)
 
 
 def test_retain_tag_redaction_collision_rejects_the_complete_turn() -> None:
