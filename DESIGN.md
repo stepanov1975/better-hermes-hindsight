@@ -21,6 +21,7 @@ Better Hermes Hindsight is an unofficial memory provider optimized for one pract
 
 - Embedded or cloud Hindsight lifecycle management.
 - Multi-user routing or dynamic bank templates.
+- Multiplexed multi-profile Better runtimes in one Hermes process.
 - Model-facing retain or reflect tools.
 - Previous-query background recall.
 - Bank migration, pruning, deduplication, reconsolidation, or remote rewind.
@@ -68,7 +69,10 @@ Durability begins only after admission commits. A network timeout may be ambiguo
 
 ## Deployment model
 
-Better is a self-contained standard Hermes Git plugin. Its root entry points and
+Better is a self-contained standard Hermes Git plugin. Each Better-enabled Hermes profile may run in
+its own process with profile-local configuration, outbox, and diagnostics. One process owns one exact
+Better configuration and runtime; another profile in that process fails open rather than crossing the
+profile boundary. Its root entry points and
 `better_hermes_hindsight` implementation package are installed together by `hermes plugins
 install`; no second package installation or runtime environment is part of deployment. Better
 implements its narrow Hindsight 0.8.5/0.9.1 wire contract over `aiohttp`, uses `tiktoken` only to
@@ -80,8 +84,9 @@ The Git commit is the working identity. A tag or version bump is optional and do
 ## Accepted limitations
 
 The intended deployment is personal Linux/POSIX with one trusted local operator/principal, one bank,
-one supported external Hindsight service, a stable Hermes-home/outbox pathname topology, and the normal Hermes
-memory-provider lifecycle. Passive status is an operational snapshot under that model, not a defense
+one Better-enabled profile per process, one supported external Hindsight service, a stable
+Hermes-home/outbox pathname topology, and the normal Hermes memory-provider lifecycle. Passive status
+is an operational snapshot under that model, not a defense
 against concurrent pathname replacement or an adversarial local writer. `codex_app_server`, typed
 provenance, automatic migration/deletion, and cross-platform sender election are outside the initial
 product. They do not block use in the intended environment.

@@ -22,13 +22,17 @@ Keep the provider narrow:
 - external/self-hosted Hindsight API versions 0.8.5 and 0.9.1 only;
 - Linux/POSIX deployment;
 - one configured principal and one static bank;
+- multiple Hermes profiles only when each Better-enabled profile runs in its own process;
 - normal Hermes memory-provider lifecycle;
 - bounded current-query recall;
 - optional durable automatic retention;
 - one read-only model tool, `better_hindsight_recall`;
 - operator-only status, mission, canary, and watchdog commands.
 
-Do not add embedded service management, cloud routing, multi-user bank templates, model-facing retain/reflect, migration frameworks, automatic deletion, Windows support, previous-query background recall, or Hermes-core patches without a concrete use case.
+Do not add embedded service management, cloud routing, multi-user bank templates, multiplexed
+multi-profile runtime routing, model-facing retain/reflect, migration frameworks, automatic deletion,
+Windows support, previous-query background recall, or Hermes-core patches without a concrete use
+case.
 
 ## Correctness and safety invariants
 
@@ -41,6 +45,8 @@ Preserve these properties:
 - outbox rows have stable destination-bound identity and survive restart;
 - retries use stable document IDs with replace mode and do not claim exactly-once delivery;
 - destination mismatches are never replayed automatically;
+- configuration, outbox, and diagnostics remain inside the supplied Hermes home;
+- one process accepts only one exact Better Hindsight configuration and fails open on a second;
 - mission writes require explicit confirmation and exact readback;
 - canary writes require explicit environment opt-in and use synthetic content;
 - tests never use production endpoints, credentials, banks, or transcripts.

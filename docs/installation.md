@@ -33,6 +33,23 @@ The first command clones the complete plugin into the current Hermes plugin dire
 selects `better_hindsight` as the active memory provider and checks its declared dependency. No
 custom install script or additional runtime is involved.
 
+### Multiple Hermes profiles
+
+Repeat installation, selection, configuration, and verification for every profile that should use
+Better. For example:
+
+```bash
+hermes -p coder plugins install stepanov1975/better-hermes-hindsight
+hermes -p coder memory setup better_hindsight
+hermes -p coder better_hindsight status
+```
+
+Multiple Better-enabled profiles are supported when their CLI or gateways run as separate processes.
+Give each profile a distinct `bank_id` unless their remote memories are intentionally shared. Do not
+select Better in more than one profile routed through a single gateway with
+`gateway.multiplex_profiles: true`; Better owns one exact runtime per process and later profile
+initializations fail open. See [compatibility](compatibility.md).
+
 The plugin does not create a Hindsight bank, store a credential, enable retention, start or restart
 a gateway, or schedule its optional canary and watchdog.
 

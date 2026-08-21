@@ -29,6 +29,12 @@ appears at any nesting level. The loader never writes credentials, and typed con
 representations omit the API key, endpoint, bank ID, outbox path, principal identifiers, and raw
 mission text.
 
+For separate-process Hermes profiles, each profile reads its own path above and resolves relative
+outbox and diagnostics paths inside that profile's Hermes home. Use a distinct `bank_id` for each
+profile that requires remote memory isolation. Process variables, including `HINDSIGHT_API_KEY`, are
+process-scoped; multiple Better-enabled profiles in one multiplexed gateway are unsupported rather
+than allowed to inherit another profile's runtime or destination.
+
 ## Minimal configuration example
 
 This example uses only synthetic/local values and contains no API key. Retention remains off.

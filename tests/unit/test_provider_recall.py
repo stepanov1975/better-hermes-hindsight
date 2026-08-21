@@ -654,6 +654,47 @@ def test_runtime_conflict_is_inactive_sanitized_and_does_not_construct_second_cl
     sibling.close()
 
 
+def test_second_profile_in_same_process_fails_open_even_for_same_remote_destination(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    first_home = tmp_path / "profiles" / "first"
+    second_home = tmp_path / "profiles" / "second"
+    document = _base_config()
+    _write_config(first_home, document)
+    _write_config(second_home, document)
+    first_config = load_config(first_home, environ={})
+    second_config = load_config(second_home, environ={})
+    factory = _RuntimeFakeFactory()
+    first_handle = acquire_process_runtime(first_config, client_factory=factory)
+    caplog.set_level(logging.WARNING)
+
+    assert first_config.api_url == second_config.api_url
+    assert first_config.bank_id == second_config.bank_id
+    assert first_config.hermes_home != second_config.hermes_home
+    assert (
+        first_config.outbox.path == (first_home / "better_hindsight" / "outbox.sqlite3").resolve()
+    )
+    assert (
+        second_config.outbox.path == (second_home / "better_hindsight" / "outbox.sqlite3").resolve()
+    )
+
+    second_provider = BetterHindsightMemoryProvider()
+    second_provider.initialize(
+        "second-profile-session",
+        hermes_home=str(second_home),
+        platform="cli",
+        agent_context="primary",
+    )
+
+    assert len(factory.clients) == 1
+    assert second_provider.prefetch("second profile query") == ""
+    assert caplog.messages == [RUNTIME_INACTIVE_DIAGNOSTIC]
+    assert str(first_home) not in caplog.text
+    assert str(second_home) not in caplog.text
+    first_handle.close()
+
+
 def test_multiple_provider_handles_share_task2_runtime_and_shutdown_is_non_owning(
     tmp_path: Path,
 ) -> None:

@@ -68,6 +68,25 @@ Compared with bundled Hindsight, this plugin deliberately focuses on:
 
 It is narrower than bundled Hindsight. It does not provide embedded/cloud service management, model-facing retain or reflect tools, multi-user bank routing, previous-query background recall, migrations, or automatic deletion.
 
+## Hermes profile compatibility
+
+Better Hindsight can serve multiple Hermes profiles on one host when each Better-enabled profile runs
+in its own CLI or gateway process. Install, select, and configure the plugin in each profile. Its
+configuration, SQLite outbox, and diagnostics remain under that profile's `$HERMES_HOME`; use a
+different Hindsight `bank_id` for each profile that requires remote memory isolation.
+
+| Profile arrangement | Support |
+| --- | --- |
+| Multiple profiles with separate Hermes/gateway processes | Supported; each process owns one profile-local Better runtime |
+| Multiple profiles intentionally using the same bank | Supported, but their remote memory is deliberately combined |
+| One multiplexed gateway with Better selected by only one profile | Supported |
+| One multiplexed gateway with Better selected by multiple profiles | Unsupported; the first profile owns the one process runtime and later profiles fail open |
+
+Hermes multiplexing (`gateway.multiplex_profiles: true`) changes the active profile inside one
+process. Better intentionally accepts only one exact configuration per process, so it never reuses one
+profile's destination or outbox for another. `HINDSIGHT_API_KEY` is likewise process-scoped. See the
+[compatibility guide](docs/compatibility.md) for the complete boundary.
+
 ## Comparison with Hermes's bundled Hindsight provider
 
 Hermes also ships a memory provider named `hindsight`. That provider is separate from Hermes's
@@ -111,6 +130,7 @@ Retries use a stable document ID and `update_mode="replace"`. A timed-out write 
 
 - Linux/POSIX;
 - the current intended Hermes checkout;
+- at most one Better-enabled profile per Hermes process;
 - Python supported by that checkout (the maintained development lane uses Python 3.13);
 - an external Hindsight 0.8.5 or 0.9.1 server;
 - `aiohttp>=3.14.1,<4` and `tiktoken>=0.12,<0.13`, which the plugin declares through Hermes's
@@ -165,7 +185,11 @@ See [operations](docs/operations.md) and [rollback](docs/rollback.md).
 
 ## Intentional limitations
 
-The initial product is external-service-only, Linux/POSIX, one principal, one static bank, and normal-Hermes-loop-only. It does not support `codex_app_server`, Windows sender election, hot reload, typed turn provenance, automatic migration, remote rewind, or exactly-once delivery. These are accepted limits, not prerequisites for a usable version.
+The initial product is external-service-only, Linux/POSIX, one principal, one static bank, one
+Better-enabled profile per process, and normal-Hermes-loop-only. It does not support multiplexed
+multi-profile Better runtimes, `codex_app_server`, Windows sender election, hot reload, typed turn
+provenance, automatic migration, remote rewind, or exactly-once delivery. These are accepted limits,
+not prerequisites for a usable version.
 
 ## Development
 

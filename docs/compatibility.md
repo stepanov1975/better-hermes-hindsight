@@ -31,6 +31,33 @@ The bundled provider can therefore keep Hermes's `hindsight-client==0.6.1` uncha
 loaded directly from its standard Git-plugin checkout and needs no separate runtime or configuration
 isolation.
 
+## Hermes profile compatibility
+
+Hermes profiles are separate Hermes homes. Better uses the exact `hermes_home` supplied by the host
+for `better_hindsight/config.json`, the SQLite outbox, and recall diagnostics. Multiple profiles are
+therefore supported when each Better-enabled profile runs in its own CLI or gateway process, which is
+Hermes's ordinary per-profile gateway model. Install and select the plugin separately in each profile,
+and use a distinct Hindsight bank whenever those profiles require remote memory isolation.
+
+One process owns one exact Better Hindsight configuration and one client/sender runtime. A second
+provider handle for the same Hermes home shares that runtime. A handle initialized with another
+Hermes home or any other configuration fails open without constructing a second client. Consequently,
+a gateway using `gateway.multiplex_profiles: true` may select Better for at most one routed profile.
+Selecting Better in several multiplexed profiles is unsupported: the first initialized profile owns
+the runtime and later profiles have Better recall and retention disabled with a sanitized warning.
+
+This is a deliberate isolation boundary rather than dynamic bank routing. The provider also reads
+`HINDSIGHT_API_KEY` from the process environment, so it cannot select different Hindsight credentials
+for profiles multiplexed inside one process.
+
+| Arrangement | Compatibility |
+| --- | --- |
+| Separate profile CLI/gateway processes | Supported |
+| Shared Hindsight service with a distinct bank per profile | Supported |
+| Shared bank across profile processes | Operational, but remote memory is combined by design |
+| Multiplexed gateway, one Better-enabled profile | Supported |
+| Multiplexed gateway, multiple Better-enabled profiles | Unsupported; later profiles fail open |
+
 ## Update behavior
 
 When Hermes changes:
@@ -45,4 +72,7 @@ CI may follow Hermes `main` and therefore occasionally report an upstream compat
 
 ## Supported deployment
 
-The practical target is Linux/POSIX, one configured principal, one static bank, one external Hindsight 0.8.5 or 0.9.1 service, and the normal Hermes memory-provider execution path. Other platforms and runtimes are best effort and do not block use in the intended environment.
+The practical target is Linux/POSIX, one configured principal, one static bank, one Better-enabled
+profile per process, one external Hindsight 0.8.5 or 0.9.1 service, and the normal Hermes
+memory-provider execution path. Other platforms and runtimes are best effort and do not block use in
+the intended environment.
