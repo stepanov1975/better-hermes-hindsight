@@ -62,14 +62,14 @@ For runtime changes, normally run:
 
 ```bash
 uv lock --check
-uv run --frozen --extra dev python -m ruff check better_hermes_hindsight tests scripts __init__.py cli.py
-uv run --frozen --extra dev python -m ruff format --check better_hermes_hindsight tests scripts __init__.py cli.py
-uv run --frozen --extra dev python -m mypy
-uv run --frozen --extra dev python -m pytest -p no:cacheprovider
+.venv/bin/python -m ruff check better_hermes_hindsight tests scripts __init__.py cli.py
+.venv/bin/python -m ruff format --check better_hermes_hindsight tests scripts __init__.py cli.py
+.venv/bin/python -m mypy
+.venv/bin/python -m pytest -p no:cacheprovider
 rm -rf dist
 uv build --out-dir dist
 uvx --from twine twine check dist/*.whl dist/*.tar.gz
-uv run --frozen --extra dev python scripts/check_sdist.py dist/*.tar.gz
+.venv/bin/python scripts/check_sdist.py dist/*.tar.gz
 ```
 
 Focused tests may be used during iteration. Run the complete applicable suite before committing runtime or packaging changes. The build/twine/sdist checks are required for packaging or release changes. Documentation-only changes need link/diff review, not the full runtime suite.

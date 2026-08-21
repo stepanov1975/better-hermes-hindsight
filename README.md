@@ -7,6 +7,52 @@ Better Hermes Hindsight is an unofficial Hermes memory provider for supported ex
 
 The provider ID is `better_hindsight`, deliberately separate from bundled `hindsight`, so the existing provider and bank remain available for rollback.
 
+## Quick start
+
+You need a working Hermes installation and an external Hindsight 0.8.5 or 0.9.1 service.
+
+```bash
+hermes plugins install stepanov1975/better-hermes-hindsight
+hermes memory setup better_hindsight
+```
+
+Create `$HERMES_HOME/better_hindsight/config.json` (normally
+`~/.hermes/better_hindsight/config.json`) with your endpoint, bank, and exact Hermes principal. For
+example, replace the placeholder principal with the platform and user ID used by your gateway:
+
+```json
+{
+  "api_url": "http://localhost:8888",
+  "bank_id": "hermes",
+  "single_principal": true,
+  "allowed_principals": [
+    {
+      "platform": "telegram",
+      "identifier_kind": "user_id",
+      "identifier": "YOUR_USER_ID"
+    }
+  ],
+  "retain": {
+    "enabled": false
+  }
+}
+```
+
+Provide `HINDSIGHT_API_KEY` to both your shell and Hermes gateway through your normal secret
+mechanism; never place it in the JSON file. Then verify the selected provider and passive outbox
+status:
+
+```bash
+hermes config get memory.provider
+hermes better_hindsight status
+```
+
+The provider should be `better_hindsight`, and status should report `"result":"ok"`. A fresh
+installation normally reports `"outbox":"uninitialized"` until the first retained turn; this is
+healthy. Confirm one synthetic recall before enabling retention. See the full
+[installation](docs/installation.md) and [configuration](docs/configuration.md) guides for the
+remaining policy and verification options.
+
 ## Why it exists
 
 Compared with bundled Hindsight, this plugin deliberately focuses on:
@@ -93,17 +139,27 @@ The initial product is external-service-only, Linux/POSIX, one principal, one st
 ## Development
 
 ```bash
+mkdir -p .compat
+git clone --depth 1 https://github.com/NousResearch/hermes-agent.git .compat/hermes-current
 uv sync --extra dev
+uv pip install --python .venv/bin/python -e .compat/hermes-current
+uv pip check --python .venv/bin/python
 uv lock --check
-uv run --frozen --extra dev python -m ruff check better_hermes_hindsight tests scripts __init__.py cli.py
-uv run --frozen --extra dev python -m ruff format --check better_hermes_hindsight tests scripts __init__.py cli.py
-uv run --frozen --extra dev python -m mypy
-uv run --frozen --extra dev python -m pytest -p no:cacheprovider
+.venv/bin/python -m ruff check better_hermes_hindsight tests scripts __init__.py cli.py
+.venv/bin/python -m ruff format --check better_hermes_hindsight tests scripts __init__.py cli.py
+.venv/bin/python -m mypy
+.venv/bin/python -m pytest -p no:cacheprovider
 rm -rf dist
 uv build --out-dir dist
 uvx --from twine twine check dist/*.whl dist/*.tar.gz
-uv run --frozen --extra dev python scripts/check_sdist.py dist/*.tar.gz
+.venv/bin/python scripts/check_sdist.py dist/*.tar.gz
 ```
+
+On later runs, update the checkout with
+`git -C .compat/hermes-current pull --ff-only` before reinstalling it into the development
+environment. The test suite imports the real Hermes host interfaces; `uv sync` alone does not
+install Hermes. Run the checks through `.venv/bin/python` rather than `uv run`, which may resync
+the environment and replace dependencies selected by the current Hermes checkout.
 
 Development follows rolling `main`; ordinary-user deployment uses Hermes's standard Git-plugin
 installer. PyPI publication is not required.

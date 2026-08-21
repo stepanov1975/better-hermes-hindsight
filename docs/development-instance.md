@@ -43,7 +43,7 @@ The test uses ordinary `try/finally` cleanup. If deletion or absence confirmatio
 ## Run
 
 ```bash
-uv run --frozen --extra dev python -m pytest \
+.venv/bin/python -m pytest \
   -p no:cacheprovider \
   tests/integration/test_isolated_hindsight.py
 ```

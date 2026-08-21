@@ -5,17 +5,26 @@ Better Hermes Hindsight follows rolling Hermes development. Keep changes practic
 ## Setup
 
 ```bash
+mkdir -p .compat
+git clone --depth 1 https://github.com/NousResearch/hermes-agent.git .compat/hermes-current
 uv sync --extra dev
+uv pip install --python .venv/bin/python -e .compat/hermes-current
+uv pip check --python .venv/bin/python
 ```
+
+The tests import Hermes's real provider and plugin interfaces, so `uv sync` alone is not a complete
+development environment. Before validating against a newer Hermes checkout, run
+`git -C .compat/hermes-current pull --ff-only` and reinstall the editable checkout with the final
+`uv pip install` command above.
 
 ## Before committing runtime changes
 
 ```bash
 uv lock --check
-uv run --frozen --extra dev python -m ruff check better_hermes_hindsight tests scripts __init__.py cli.py
-uv run --frozen --extra dev python -m ruff format --check better_hermes_hindsight tests scripts __init__.py cli.py
-uv run --frozen --extra dev python -m mypy
-uv run --frozen --extra dev python -m pytest -p no:cacheprovider
+.venv/bin/python -m ruff check better_hermes_hindsight tests scripts __init__.py cli.py
+.venv/bin/python -m ruff format --check better_hermes_hindsight tests scripts __init__.py cli.py
+.venv/bin/python -m mypy
+.venv/bin/python -m pytest -p no:cacheprovider
 uv pip check --python .venv/bin/python
 
 git diff --check
