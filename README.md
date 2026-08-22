@@ -1,7 +1,7 @@
 # Better Hermes Hindsight
 
 [![CI](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/ci.yml/badge.svg)](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/ci.yml)
-[![Secret scan](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/security.yml/badge.svg)](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/security.yml)
+[![Security scans](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/security.yml/badge.svg)](https://github.com/stepanov1975/better-hermes-hindsight/actions/workflows/security.yml)
 
 Better Hermes Hindsight is an unofficial Hermes memory provider for supported external/self-hosted Hindsight services. It is developed against a rolling Hermes checkout for a Linux, single-principal deployment.
 
@@ -133,7 +133,7 @@ Retries use a stable document ID and `update_mode="replace"`. A timed-out write 
 - Linux/POSIX;
 - the current intended Hermes checkout;
 - at most one Better-enabled profile per Hermes process;
-- Python supported by that checkout (the maintained development lane uses Python 3.13);
+- Python 3.11, 3.12, or 3.13 on Linux;
 - an external Hindsight 0.8.5 or 0.9.1 server;
 - `aiohttp>=3.14.1,<4` and `tiktoken>=0.12,<0.14`, which the plugin declares through Hermes's
   standard memory-plugin dependency mechanism.
@@ -141,7 +141,9 @@ Retries use a stable document ID and `update_mode="replace"`. A timed-out write 
 The plugin packages the official hash-verified `cl100k_base` encoding table, so query counting does
 not make a first-use network request outside the configured recall deadline.
 
-Compatibility is behavioral rather than release-matrix based. Validation records the tested Hermes commit, but another commit is not rejected solely because its identity changed.
+Compatibility is behavioral rather than release-matrix based. Required CI uses one reviewed Hermes
+commit for reproducibility across Python 3.11–3.13, while a weekly/manual Python 3.13 canary follows
+Hermes `main` and records the resolved commit.
 
 ## Installation
 
@@ -208,7 +210,7 @@ uv lock --check
 .venv/bin/python -m pytest -p no:cacheprovider
 rm -rf dist
 uv build --out-dir dist
-uvx --from twine twine check dist/*.whl dist/*.tar.gz
+uvx --from 'twine==7.0.0' twine check dist/*.whl dist/*.tar.gz
 .venv/bin/python scripts/check_sdist.py dist/*.tar.gz
 ```
 
@@ -221,7 +223,8 @@ the environment and replace dependencies selected by the current Hermes checkout
 Development follows rolling `main`; ordinary-user deployment uses Hermes's standard Git-plugin
 installer. PyPI publication is not required.
 
-See [implementation status](IMPLEMENTATION.md), [design](DESIGN.md), and [contributing](CONTRIBUTING.md).
+See [implementation status](IMPLEMENTATION.md), [design](DESIGN.md), [contributing](CONTRIBUTING.md),
+and [GitHub security](docs/github-security.md).
 
 ## Safety
 

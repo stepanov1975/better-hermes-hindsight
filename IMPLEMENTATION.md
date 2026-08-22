@@ -25,10 +25,15 @@ The existing runtime should not be rewritten merely to reduce line count. Simpli
 
 ## Development and compatibility model
 
-- Test against Alex's intended Hermes checkout and Python runtime.
+- Keep required pull-request checks reproducible against one reviewed Hermes commit across Python
+  3.11–3.13 on Linux.
+- Follow Hermes `main` in a scheduled/manual Python 3.13 compatibility canary; record the resolved
+  commit and update the required pin deliberately after a successful proof.
 - Record observed Hermes, Better, and Hindsight versions/commits in validation results.
 - Fail for missing or incompatible interfaces and broken behavior—not for an unknown but compatible Hermes commit.
 - Use the Git commit as the deployable identity. Version bumps and tags are optional snapshots.
+- When a new synchronized version reaches verified `main`, publish only a changelog-derived source
+  snapshot; PyPI and uploaded distribution assets remain outside the deployment path.
 - Ordinary-user deployment uses `hermes plugins install`; no separate package installation is
   required.
 - Keep the narrow internal HTTP contract aligned with supported Hindsight API versions 0.8.5 and 0.9.1.

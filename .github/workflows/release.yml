@@ -1,0 +1,183 @@
+name: Source snapshot release
+
+on:
+  workflow_call:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out verified commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Determine source snapshot state
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.sha }}
+          RELEASE_JSON_FILE: ${{ runner.temp }}/release.json
+          RELEASE_NOTES_FILE: ${{ runner.temp }}/release-notes.md
+        run: |
+          set -euo pipefail
+          metadata=$(python scripts/release_snapshot.py --notes-output "$RELEASE_NOTES_FILE")
+          version=$(jq -r '.version' <<<"$metadata")
+          tag=$(jq -r '.tag' <<<"$metadata")
+          prerelease=$(jq -r '.prerelease' <<<"$metadata")
+          printf 'version=%s\ntag=%s\nprerelease=%s\n' \
+            "$version" "$tag" "$prerelease" >> "$GITHUB_OUTPUT"
+
+          if ! git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            printf 'needed=true\ndraft_exists=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git fetch --no-tags origin "refs/tags/${tag}:refs/tags/${tag}"
+          tag_sha=$(git rev-list -n 1 "$tag")
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,isPrerelease,body > "$RELEASE_JSON_FILE"; then
+            echo "Tag ${tag} exists without a GitHub release; refusing to guess publication intent." >&2
+            exit 1
+          fi
+
+          if [[ $(jq -r '.isDraft' "$RELEASE_JSON_FILE") == false ]]; then
+            if [[ $(jq -r '.isPrerelease' "$RELEASE_JSON_FILE") != "$prerelease" ]]; then
+              echo "Published snapshot ${tag} has the wrong prerelease state." >&2
+              exit 1
+            fi
+            echo "Published source snapshot ${tag} already exists; no release needed."
+            printf 'needed=false\ndraft_exists=false\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$tag_sha" != "$HEAD_SHA" ]]; then
+            echo "Draft source snapshot ${tag} targets ${tag_sha}, not verified commit ${HEAD_SHA}." >&2
+            exit 1
+          fi
+          printf 'needed=true\ndraft_exists=true\n' >> "$GITHUB_OUTPUT"
+
+      - name: Create draft source snapshot
+        if: steps.release.outputs.needed == 'true' && steps.release.outputs.draft_exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.sha }}
+          RELEASE_NOTES_FILE: ${{ runner.temp }}/release-notes.md
+          RELEASE_PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          prerelease_args=()
+          if [[ "$RELEASE_PRERELEASE" == true ]]; then
+            prerelease_args+=(--prerelease)
+          fi
+          gh release create "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            "${prerelease_args[@]}" \
+            --target "$HEAD_SHA" \
+            --title "Better Hermes Hindsight ${RELEASE_VERSION}" \
+            --notes-file "$RELEASE_NOTES_FILE"
+
+      - name: Refresh existing draft notes
+        if: steps.release.outputs.needed == 'true' && steps.release.outputs.draft_exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_NOTES_FILE: ${{ runner.temp }}/release-notes.md
+          RELEASE_PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          gh release edit "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft \
+            --prerelease="$RELEASE_PRERELEASE" \
+            --title "Better Hermes Hindsight ${RELEASE_VERSION}" \
+            --notes-file "$RELEASE_NOTES_FILE"
+
+      - name: Verify draft and publish
+        if: steps.release.outputs.needed == 'true'
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_JSON_FILE: ${{ runner.temp }}/release.json
+          RELEASE_NOTES_FILE: ${{ runner.temp }}/release-notes.md
+          RELEASE_PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git fetch --force --no-tags origin \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          tag_sha=$(git rev-list -n 1 "$RELEASE_TAG")
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Draft tag ${RELEASE_TAG} points to ${tag_sha}, expected ${EXPECTED_SHA}." >&2
+            exit 1
+          fi
+
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,isPrerelease,body > "$RELEASE_JSON_FILE"
+          python - "$RELEASE_JSON_FILE" "$RELEASE_NOTES_FILE" "$RELEASE_PRERELEASE" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          release = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          notes = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
+          expected_prerelease = sys.argv[3] == "true"
+          if release["isDraft"] is not True:
+              raise SystemExit("Release is not a draft")
+          if release["isPrerelease"] is not expected_prerelease:
+              raise SystemExit("Draft release has the wrong prerelease state")
+          if release["body"].rstrip() != notes.rstrip():
+              raise SystemExit("Draft release notes do not match CHANGELOG.md")
+          PY
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --draft=false --prerelease="$RELEASE_PRERELEASE"
+
+      - name: Verify published source snapshot
+        if: steps.release.outputs.needed == 'true'
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_JSON_FILE: ${{ runner.temp }}/release-final.json
+          RELEASE_NOTES_FILE: ${{ runner.temp }}/release-notes.md
+          RELEASE_PRERELEASE: ${{ steps.release.outputs.prerelease }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --json isDraft,isPrerelease,body > "$RELEASE_JSON_FILE"
+          python - "$RELEASE_JSON_FILE" "$RELEASE_NOTES_FILE" "$RELEASE_PRERELEASE" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          release = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+          notes = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
+          expected_prerelease = sys.argv[3] == "true"
+          if release["isDraft"] is not False:
+              raise SystemExit("Release was not published")
+          if release["isPrerelease"] is not expected_prerelease:
+              raise SystemExit("Published release has the wrong prerelease state")
+          if release["body"].rstrip() != notes.rstrip():
+              raise SystemExit("Published release notes do not match CHANGELOG.md")
+          PY
+          tag_sha=$(git rev-list -n 1 "$RELEASE_TAG")
+          if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Published tag ${RELEASE_TAG} points to ${tag_sha}, expected ${EXPECTED_SHA}." >&2
+            exit 1
+          fi

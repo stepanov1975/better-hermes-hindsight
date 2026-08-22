@@ -60,7 +60,9 @@ Do not infer direct-user versus synthetic provenance from text patterns. If Herm
 - Keep working code unless simplification removes a demonstrated maintenance burden.
 - Avoid tests that freeze prose, plans, commit hashes, workflow internals, or historical release metadata.
 - Test public behavior and realistic failure paths.
-- Test the current intended Hermes checkout. Record its version/commit for diagnostics, but do not fail solely because the commit changed when the required interface still works.
+- Keep required pull-request checks reproducible against the reviewed Hermes commit and test Python
+  3.11–3.13 on Linux. Follow Hermes `main` in the scheduled/manual canary, record its commit, and update
+  the required pin deliberately after compatibility succeeds.
 - Do not bump the package version for every development commit. Bump it only for an optional tagged snapshot or when deployment identification needs it.
 
 ## Verification
@@ -75,7 +77,7 @@ uv lock --check
 .venv/bin/python -m pytest -p no:cacheprovider
 rm -rf dist
 uv build --out-dir dist
-uvx --from twine twine check dist/*.whl dist/*.tar.gz
+uvx --from 'twine==7.0.0' twine check dist/*.whl dist/*.tar.gz
 .venv/bin/python scripts/check_sdist.py dist/*.tar.gz
 ```
 

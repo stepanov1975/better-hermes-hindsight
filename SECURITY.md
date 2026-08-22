@@ -1,10 +1,20 @@
 # Security
 
+## Supported versions
+
+The `main` branch and the latest optional tagged snapshot are the supported development line.
+
 Better Hermes Hindsight is an unofficial personal plugin, not a hardened multi-tenant service.
 
 ## Reporting
 
-Do not open a public issue containing credentials, private endpoints, principal identifiers, bank names, memories, transcripts, databases, or logs. Use a private GitHub security advisory or contact the maintainer privately with a minimal synthetic reproducer.
+Do not open a public issue containing credentials, private endpoints, principal identifiers, bank names,
+memories, transcripts, databases, or logs. Use GitHub's private
+**[Report a vulnerability](https://github.com/stepanov1975/better-hermes-hindsight/security/advisories/new)**
+flow with a minimal synthetic reproducer.
+
+If a real credential is committed, rotate it first. Remove it from Git history afterward when needed;
+history rewriting is not a substitute for rotation.
 
 ## Deployment boundary
 

@@ -1,0 +1,4 @@
+# Exact top-level tools used by .github/workflows/ci.yml.
+# Dependabot maintains these pins.
+twine==7.0.0
+uv==0.12.5

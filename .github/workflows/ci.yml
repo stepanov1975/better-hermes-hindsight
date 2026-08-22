@@ -11,23 +11,82 @@ on:
 permissions:
   contents: read
 
+env:
+  PINNED_HERMES_REF: 2584b7c4eca82ada05f16eba08936d157b483329
+
 jobs:
+  test-pinned-hermes:
+    name: Python ${{ matrix.python-version }} / Hermes pinned
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Check out Better Hindsight
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out pinned Hermes
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: NousResearch/hermes-agent
+          ref: ${{ env.PINNED_HERMES_REF }}
+          path: .compat/hermes-pinned
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install development environment and pinned Hermes
+        run: |
+          python -m pip install --requirement requirements-ci.txt
+          uv sync --frozen --extra dev --python "${{ matrix.python-version }}"
+          uv pip install --python .venv/bin/python -e .compat/hermes-pinned
+          uv pip check --python .venv/bin/python
+
+      - name: Record tested source identities
+        run: |
+          echo "Better $(git rev-parse HEAD)"
+          echo "Hermes $(git -C .compat/hermes-pinned rev-parse HEAD)"
+          .venv/bin/python -c 'from importlib.metadata import version; print("Hermes package", version("hermes-agent")); print("aiohttp", version("aiohttp"))'
+
+      - name: Run deterministic tests
+        run: .venv/bin/python -m pytest -p no:cacheprovider
+
+      - name: Validate lint, types, and distributions
+        if: matrix.python-version == '3.13'
+        run: |
+          uv lock --check
+          .venv/bin/python -m ruff check better_hermes_hindsight tests scripts __init__.py cli.py
+          .venv/bin/python -m ruff format --check better_hermes_hindsight tests scripts __init__.py cli.py
+          .venv/bin/python -m mypy
+          rm -rf dist
+          uv build --out-dir dist
+          twine check dist/*.whl dist/*.tar.gz
+          .venv/bin/python scripts/check_sdist.py dist/*.tar.gz
+          git diff --check
+
   test-current-hermes:
-    name: Python 3.13 / Hermes main
+    name: Python 3.13 / Hermes main canary
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
       - name: Check out Better Hindsight
-        # actions/checkout v7.0.1
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
           persist-credentials: false
 
       - name: Check out current Hermes
-        # actions/checkout v7.0.1
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: NousResearch/hermes-agent
           ref: main
@@ -35,16 +94,13 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        # actions/setup-python v7.0.0
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
 
-      - name: Install uv
-        run: python -m pip install uv==0.11.4
-
       - name: Install development environment and current Hermes
         run: |
+          python -m pip install --requirement requirements-ci.txt
           uv sync --frozen --extra dev
           uv pip install --python .venv/bin/python -e .compat/hermes-current
           uv pip check --python .venv/bin/python
@@ -55,15 +111,13 @@ jobs:
           echo "Hermes $(git -C .compat/hermes-current rev-parse HEAD)"
           .venv/bin/python -c 'from importlib.metadata import version; print("Hermes package", version("hermes-agent")); print("aiohttp", version("aiohttp"))'
 
-      - name: Validate
-        run: |
-          uv lock --check
-          .venv/bin/python -m ruff check better_hermes_hindsight tests scripts __init__.py cli.py
-          .venv/bin/python -m ruff format --check better_hermes_hindsight tests scripts __init__.py cli.py
-          .venv/bin/python -m mypy
-          .venv/bin/python -m pytest -p no:cacheprovider
-          rm -rf dist
-          uv build --out-dir dist
-          uvx --from twine twine check dist/*.whl dist/*.tar.gz
-          .venv/bin/python scripts/check_sdist.py dist/*.tar.gz
-          git diff --check
+      - name: Run compatibility canary
+        run: .venv/bin/python -m pytest -p no:cacheprovider
+
+  release:
+    name: Publish new source snapshot
+    needs: [test-pinned-hermes]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml

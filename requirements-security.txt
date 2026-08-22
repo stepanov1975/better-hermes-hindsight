@@ -1,0 +1,4 @@
+# Exact static-security scanners used by .github/workflows/security.yml.
+# Dependabot maintains these top-level pins.
+semgrep==1.174.0
+zizmor==1.29.0
