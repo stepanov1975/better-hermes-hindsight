@@ -4,6 +4,8 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+## 0.4.0 - 2026-08-22
+
 ### Added
 
 - Added `better_hindsight_retain`, an agent-oriented write tool that accepts self-contained durable
