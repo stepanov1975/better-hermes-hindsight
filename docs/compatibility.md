@@ -4,8 +4,9 @@ Better Hermes Hindsight follows the Hermes checkout used by its maintainer rathe
 
 ## Current policy
 
-- The maintained development lane uses Python 3.13.
-- The provider is tested against the current intended Hermes source checkout.
+- Required Linux CI tests Python 3.11, 3.12, and 3.13 against one reviewed Hermes source commit.
+- A weekly/manual Python 3.13 canary follows Hermes `main`; a successful canary supports an intentional
+  update of the required commit rather than making pull-request results depend on a moving upstream.
 - Validation records the observed Hermes package version and Git commit when available.
 - A different commit is not rejected solely because its identity changed.
 - Compatibility fails only when required provider/CLI interfaces are missing or behavior tests fail.
@@ -62,7 +63,7 @@ for profiles multiplexed inside one process.
 
 When Hermes changes:
 
-1. update or select the intended Hermes checkout;
+1. update or select the intended Hermes checkout and prove it in the compatibility canary;
 2. install it into the development interpreter;
 3. verify Hermes's installed `aiohttp` satisfies Better's declared range;
 4. run the deterministic suite and isolated live smoke test;

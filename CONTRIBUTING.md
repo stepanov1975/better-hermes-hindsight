@@ -30,6 +30,15 @@ uv pip check --python .venv/bin/python
 git diff --check
 ```
 
+Packaging checks use a pinned Twine invocation:
+
+```bash
+rm -rf dist
+uv build --out-dir dist
+uvx --from 'twine==7.0.0' twine check dist/*.whl dist/*.tar.gz
+.venv/bin/python scripts/check_sdist.py dist/*.tar.gz
+```
+
 Focused tests are sufficient while iterating. Documentation-only changes need link and diff review rather than the full runtime suite.
 
 ## Rules
@@ -43,5 +52,7 @@ Focused tests are sufficient while iterating. Documentation-only changes need li
 - Use fake services and temporary Hermes homes before an explicitly enabled isolated live test.
 - Do not modify the active bundled Hermes/Hindsight deployment as part of tests.
 - Do not bump the package version for every development commit. Versions and tags are optional snapshots.
+- Keep pull-request checks reproducible against the pinned Hermes commit. Update that pin deliberately
+  after the scheduled Hermes `main` canary proves compatibility.
 
 A pull request or commit message should explain the problem, the change, and the verification performed. Additional review is proportionate to risk; concurrency, durability, authorization, and destructive-data changes deserve independent review.

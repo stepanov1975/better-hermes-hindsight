@@ -1,0 +1,4 @@
+# Exact tools used by runtime and toolchain dependency audits.
+# Dependabot maintains these pins.
+pip-audit==2.10.1
+uv==0.12.5
