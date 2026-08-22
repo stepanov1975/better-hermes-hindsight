@@ -4,6 +4,20 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+### Added
+
+- Added `better_hindsight_retain`, an agent-oriented write tool that accepts self-contained durable
+  content plus an optional context label and reuses the authorized redacted SQLite outbox path. Its
+  structured result reports local admission separately from asynchronous remote delivery.
+- Added `better_hindsight_status`, a no-argument passive health tool combining outbox state with
+  bounded query-free diagnostic summaries; it makes no remote call and cannot replay captured queries.
+
+### Fixed
+
+- Bounded model-directed retention before segment hashing with explicit content, context, and
+  canonical-segment limits, preventing pathological small segment settings from turning one rejected
+  tool call into unbounded construction work.
+
 ## 0.3.2 - 2026-08-21
 
 ### Added

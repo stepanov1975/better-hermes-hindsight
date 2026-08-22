@@ -19,6 +19,14 @@ class RetentionConstructionError(ValueError):
     """A fixed, sanitized retained-turn construction failure."""
 
 
+class RetentionCapacityError(RetentionConstructionError):
+    """A fixed construction-time segment-cap rejection."""
+
+
+class _RetentionCapacityExceeded(Exception):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class RetainedSegment:
     """One immutable segment of a complete canonical redacted turn."""
@@ -39,6 +47,7 @@ def build_retained_segments(
     assistant_content: object,
     tags: object,
     segment_max_bytes: object,
+    segment_count_limit: object = None,
 ) -> tuple[RetainedSegment, ...]:
     """Build canonical redacted segments for one completed Hermes callback.
 
@@ -55,7 +64,10 @@ def build_retained_segments(
             assistant_content=assistant_content,
             tags=tags,
             segment_max_bytes=segment_max_bytes,
+            segment_count_limit=segment_count_limit,
         )
+    except _RetentionCapacityExceeded:
+        raise RetentionCapacityError(RETENTION_REJECTED_MESSAGE) from None
     except Exception:
         raise RetentionConstructionError(RETENTION_REJECTED_MESSAGE) from None
 
@@ -92,6 +104,7 @@ def _build_retained_segments(
     assistant_content: object,
     tags: object,
     segment_max_bytes: object,
+    segment_count_limit: object,
 ) -> tuple[RetainedSegment, ...]:
     if not isinstance(session_id, str):
         _reject()
@@ -100,6 +113,16 @@ def _build_retained_segments(
     if not isinstance(assistant_content, str) or not assistant_content.strip():
         _reject()
     if type(segment_max_bytes) is not int or segment_max_bytes <= 0:
+        _reject()
+    if segment_count_limit is None:
+        validated_segment_count_limit = None
+    elif (
+        isinstance(segment_count_limit, int)
+        and not isinstance(segment_count_limit, bool)
+        and segment_count_limit > 0
+    ):
+        validated_segment_count_limit = segment_count_limit
+    else:
         _reject()
     if not isinstance(tags, Sequence) or isinstance(tags, (str, bytes, bytearray)):
         _reject()
@@ -128,7 +151,11 @@ def _build_retained_segments(
     )
     source_bytes = source.encode("utf-8")
     source_sha256 = hashlib.sha256(source_bytes).hexdigest()
-    contents = _segment_utf8(source, segment_max_bytes)
+    contents = _segment_utf8(
+        source,
+        segment_max_bytes,
+        segment_count_limit=validated_segment_count_limit,
+    )
     segment_count = len(contents)
 
     segments: list[RetainedSegment] = []
@@ -163,7 +190,12 @@ def _canonical_json(value: object) -> str:
     )
 
 
-def _segment_utf8(text: str, max_bytes: int) -> tuple[str, ...]:
+def _segment_utf8(
+    text: str,
+    max_bytes: int,
+    *,
+    segment_count_limit: int | None,
+) -> tuple[str, ...]:
     segments: list[str] = []
     characters: list[str] = []
     used_bytes = 0
@@ -172,12 +204,16 @@ def _segment_utf8(text: str, max_bytes: int) -> tuple[str, ...]:
         if character_bytes > max_bytes:
             _reject()
         if characters and used_bytes + character_bytes > max_bytes:
+            if segment_count_limit is not None and len(segments) >= segment_count_limit:
+                raise _RetentionCapacityExceeded from None
             segments.append("".join(characters))
             characters = []
             used_bytes = 0
         characters.append(character)
         used_bytes += character_bytes
     if characters:
+        if segment_count_limit is not None and len(segments) >= segment_count_limit:
+            raise _RetentionCapacityExceeded from None
         segments.append("".join(characters))
     if not segments:
         _reject()
@@ -192,6 +228,7 @@ __all__ = [
     "DOCUMENT_ID_PREFIX",
     "RETENTION_REJECTED_MESSAGE",
     "RetainedSegment",
+    "RetentionCapacityError",
     "RetentionConstructionError",
     "build_retained_segments",
     "derive_segment_payload_hash",

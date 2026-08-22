@@ -26,13 +26,14 @@ Keep the provider narrow:
 - normal Hermes memory-provider lifecycle;
 - bounded current-query recall;
 - optional durable automatic retention;
-- one read-only model tool, `better_hindsight_recall`;
-- operator-only status, mission, canary, and watchdog commands.
+- bounded model tools for recall, durable retention admission, and passive status/query-free
+  diagnostics;
+- operator-only mission changes, diagnostic replay, canary, and watchdog commands.
 
 Do not add embedded service management, cloud routing, multi-user bank templates, multiplexed
-multi-profile runtime routing, model-facing retain/reflect, migration frameworks, automatic deletion,
-Windows support, previous-query background recall, or Hermes-core patches without a concrete use
-case.
+multi-profile runtime routing, model-facing reflection or policy overrides, migration frameworks,
+automatic deletion, Windows support, previous-query background recall, or Hermes-core patches without
+a concrete use case.
 
 ## Correctness and safety invariants
 

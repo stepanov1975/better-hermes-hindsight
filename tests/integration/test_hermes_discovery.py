@@ -109,7 +109,11 @@ provider = memory_loader.load_memory_provider("better_hindsight")
 assert provider is not None
 assert provider.name == "better_hindsight"
 assert provider.is_available() is True
-assert [schema["name"] for schema in provider.get_tool_schemas()] == ["better_hindsight_recall"]
+assert [schema["name"] for schema in provider.get_tool_schemas()] == [
+    "better_hindsight_recall",
+    "better_hindsight_retain",
+    "better_hindsight_status",
+]
 assert registrations == ["better_hindsight"]
 
 commands = memory_loader.discover_plugin_cli_commands()
@@ -273,7 +277,51 @@ def test_current_loader_discovers_active_standard_plugin_cli_and_recall_tool(
                     "required": ["query"],
                     "type": "object",
                 },
-            }
+            },
+            {
+                "description": (
+                    "Durably queue one agent-selected fact, preference, decision, or convention "
+                    "for long-term memory. Use only for self-contained information that should "
+                    "remain useful across future sessions; do not store secrets or transient task "
+                    "progress. Acceptance confirms local durable admission, not remote delivery."
+                ),
+                "name": "better_hindsight_retain",
+                "parameters": {
+                    "additionalProperties": False,
+                    "properties": {
+                        "content": {
+                            "description": "The self-contained durable information to store.",
+                            "maxLength": 8192,
+                            "minLength": 1,
+                            "type": "string",
+                        },
+                        "context": {
+                            "description": (
+                                "Optional short category, such as 'user preference', 'environment "
+                                "fact', or 'project convention'."
+                            ),
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string",
+                        },
+                    },
+                    "required": ["content"],
+                    "type": "object",
+                },
+            },
+            {
+                "description": (
+                    "Inspect passive Better Hindsight health, including the durable retention "
+                    "queue and query-free recall diagnostic summaries. Makes no remote call and "
+                    "never replays private diagnostic queries."
+                ),
+                "name": "better_hindsight_status",
+                "parameters": {
+                    "additionalProperties": False,
+                    "properties": {},
+                    "type": "object",
+                },
+            },
         ],
         "registrations": ["better_hindsight"],
         "version": EXPECTED_HERMES_VERSION,

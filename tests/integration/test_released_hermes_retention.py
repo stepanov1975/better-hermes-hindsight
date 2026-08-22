@@ -231,9 +231,13 @@ def _released_retention_harness(
         )
         assert [registered.name for registered in manager.providers] == ["better_hindsight"]
         assert [schema["name"] for schema in provider.get_tool_schemas()] == [
-            "better_hindsight_recall"
+            "better_hindsight_recall",
+            "better_hindsight_retain",
+            "better_hindsight_status",
         ]
         assert manager.has_tool("better_hindsight_recall") is True
+        assert manager.has_tool("better_hindsight_retain") is True
+        assert manager.has_tool("better_hindsight_status") is True
         assert json.loads(
             manager.handle_tool_call("better_hindsight_recall", {"query": "fixture query"})
         ) == {"error": "Better Hindsight recall is unavailable."}
@@ -316,6 +320,62 @@ def _expected_segment(
     )
     assert len(segments) == 1
     return segments[0].document_id, segments[0].content
+
+
+def test_released_model_retain_and_status_tools_route_through_durable_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with _released_retention_harness(
+        tmp_path,
+        monkeypatch,
+        retain_timeout_seconds=2.0,
+        retry_initial_seconds=0.2,
+    ) as harness:
+        content = "Synthetic durable preference selected by the model tool."
+        context = "user preference"
+        expected_identity = _expected_segment(
+            session_id="better-hindsight-model-retain-v1",
+            user_content=(
+                "This is an agent-selected durable memory record, not a direct user quotation."
+            ),
+            assistant_content=f"Context: {context}\n\n{content}",
+        )
+
+        harness.loop.run(_arm_retain_delay(harness.server))
+        result = json.loads(
+            harness.manager.handle_tool_call(
+                "better_hindsight_retain",
+                {"content": content, "context": context},
+            )
+        )
+
+        assert result == {
+            "admission": "admitted",
+            "delivery": "queued",
+            "duplicate_segments": 0,
+            "inserted_segments": 1,
+            "result": "accepted",
+        }
+        assert harness.manager.flush_pending(timeout=2.0) is True
+        harness.loop.run(_wait_for_retain_delay(harness.server))
+        rows = _read_rows(harness.config)
+        assert len(rows) == 1
+        assert rows[0].state == "sending"
+        assert (rows[0].document_id, rows[0].content) == expected_identity
+
+        tool_status = json.loads(harness.manager.handle_tool_call("better_hindsight_status", {}))
+        assert tool_status["result"] == "degraded"
+        assert tool_status["status"]["counts"]["sending"] == 1
+        assert tool_status["diagnostics"]["capture_enabled"] is False
+        assert tool_status["diagnostics"]["records"] == []
+        assert tool_status["diagnostics"]["records_listed"] == 0
+
+        records = harness.loop.run(_retain_records(harness.server))
+        assert len(records) == 1
+        assert _request_identity(records[0]) == expected_identity
+        harness.loop.run(_release_retain_delay(harness.server))
+        assert _wait_for_rows(harness.config, lambda current: not current) == ()
 
 
 def test_released_callback_flush_finishes_while_real_sdk_response_is_gated(
