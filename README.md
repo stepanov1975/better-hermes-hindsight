@@ -58,15 +58,17 @@ remaining policy and verification options.
 Compared with bundled Hindsight, this plugin deliberately focuses on:
 
 - bounded recall for the **current** user query;
-- one bounded read-only model tool, `better_hindsight_recall`;
+- three bounded model tools for recall, durable retention admission, and passive status/diagnostics;
 - opt-in automatic retention through a durable SQLite outbox;
 - deterministic segmentation and reconstructable source metadata;
 - stable replace-mode retries after timeout or restart;
 - explicit principal and destination policy;
-- operator-only status and mission management; and
+- operator status and mission management; and
 - privacy-safe structured diagnostics plus opt-in synthetic canary and alert-evaluator commands.
 
-It is narrower than bundled Hindsight. It does not provide embedded/cloud service management, model-facing retain or reflect tools, multi-user bank routing, previous-query background recall, migrations, or automatic deletion.
+It is narrower than bundled Hindsight. It does not provide embedded/cloud service management,
+model-facing reflection or policy changes, multi-user bank routing, previous-query background recall,
+migrations, or automatic deletion.
 
 ## Hermes profile compatibility
 
@@ -104,14 +106,14 @@ or retrieval quality.
 | Crash behavior before remote delivery | Committed outbox rows survive process restart and are retried | Locally queued writer jobs are not persistent; shutdown drains them only within a bounded wait |
 | Retry/document strategy | Stable per-segment document IDs, `update_mode="replace"`, destination binding, and bounded retry backoff | Session-scoped `update_mode="append"` where supported, with a process-unique document fallback for older APIs |
 | Read-after-write freshness | Eventual: an immediately following recall can race the outbox sender | Background prefetch can wait for the local writer and server-side async retain operations before recalling |
-| Model-facing tools | One bounded read-only recall tool; no model-directed writes or reflection | Recall, retain, and reflect tools in tools or hybrid mode |
+| Model-facing tools | Bounded recall, durable local retain admission, and passive status/query-free diagnostics; no reflection or policy overrides | Recall, retain, and reflect tools in tools or hybrid mode |
 | Routing and authorization | One static bank with an exact single-principal allowlist | Static or templated banks across profile, workspace, platform, user, or session contexts |
 | Bank policy operations | Explicit operator check/apply for retain and observations missions | No equivalent mission drift check/apply/readback operator command |
 | Operations | Automatic recall status indicator, passive outbox status, structured diagnostics, replay, synthetic canary, watchdog evaluator, and mission drift checks | Interactive setup, recall/retain status indicators, embedded-service lifecycle, and normal provider logs |
 
 Choose Better Hindsight when a narrow self-hosted deployment prioritizes current-query alignment,
 crash-durable delivery, explicit trust framing, and operator diagnostics. Choose the bundled provider
-when setup breadth, cloud or embedded operation, dynamic bank routing, reflect/write tools, or lower
+when setup breadth, cloud or embedded operation, dynamic bank routing, reflection, or lower
 independent maintenance matters more. Better Hindsight is deliberately not a drop-in superset.
 
 This comparison follows the current intended rolling Hermes checkout. Review the
@@ -174,8 +176,8 @@ hermes better_hindsight watchdog --help
 `status` reads the existing outbox without initializing or draining it. Opt-in slow-recall
 diagnostics keep exact projected queries only in bounded private local files; list output is query-free,
 and replay is an operator-only read against the configured bank. Mission changes are never automatic
-and require explicit confirmation. There is no retry-now, row-deletion, arbitrary-bank, or model-facing
-write command.
+and require explicit confirmation. There is no retry-now, row-deletion, arbitrary-bank, model-facing
+reflection, or model-facing policy-change command.
 
 The included `hermes better_hindsight canary` and `hermes better_hindsight watchdog` commands
 provide an adapter-backed synthetic E2E check and transition-only alert evaluation over

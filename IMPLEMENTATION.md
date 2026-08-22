@@ -10,7 +10,8 @@ The provider currently includes:
 
 - external Hindsight 0.8.5 and 0.9.1 connectivity;
 - bounded, fail-open current-query recall;
-- the read-only `better_hindsight_recall` model tool;
+- model tools for bounded recall, durable retention admission, and passive status/query-free
+  diagnostics;
 - optional redacted automatic retention;
 - deterministic segmentation and reconstructable source metadata;
 - a SQLite-backed durable outbox with bounded retries;
@@ -50,4 +51,8 @@ Historical Hermes versions, PyPI publication, exact source/artifact equality, ch
 
 ## Intentional limitations
 
-The first usable version remains Linux/POSIX, external-service-only, single-principal, single-bank, and normal-Hermes-loop-only. It does not promise exactly-once delivery, typed turn provenance, automatic migration, multi-user routing, model-directed writes/reflection, hot reload, or automatic remote deletion. These are accepted scope limits rather than incomplete release tasks.
+The first usable version remains Linux/POSIX, external-service-only, single-principal, single-bank, and
+normal-Hermes-loop-only. It does not promise exactly-once delivery, typed direct-turn provenance for
+agent-selected writes, automatic migration, multi-user routing, model-facing reflection or policy
+changes, hot reload, or automatic remote deletion. These are accepted scope limits rather than
+incomplete release tasks.

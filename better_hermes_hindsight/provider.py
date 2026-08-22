@@ -21,6 +21,8 @@ from .formatting import (
     format_recall_context_with_count,
     project_query,
 )
+from .management import list_diagnostics, status
+from .outbox import AdmissionStatus
 from .runtime import (
     AsyncCallTimeoutError,
     ProcessRuntimeHandle,
@@ -42,6 +44,21 @@ _RECALL_TOOL_NAME = "better_hindsight_recall"
 _RECALL_TOOL_INVALID_QUERY = "Better Hindsight recall requires one non-empty text query."
 _RECALL_TOOL_UNAVAILABLE = "Better Hindsight recall is unavailable."
 _RECALL_TOOL_NO_RESULTS = "No relevant memories found."
+_RETAIN_TOOL_NAME = "better_hindsight_retain"
+_RETAIN_TOOL_INVALID_CONTENT = (
+    "Better Hindsight retention requires non-empty text content and an optional non-empty text "
+    "context."
+)
+_RETAIN_TOOL_UNAVAILABLE = "Better Hindsight retention is unavailable for this handle."
+_RETAIN_TOOL_REJECTED = "Better Hindsight retention was not admitted."
+_RETAIN_TOOL_SESSION_ID = "better-hindsight-model-retain-v1"
+_RETAIN_TOOL_SOURCE_MARKER = (
+    "This is an agent-selected durable memory record, not a direct user quotation."
+)
+_STATUS_TOOL_NAME = "better_hindsight_status"
+_STATUS_TOOL_INVALID_ARGUMENTS = "Better Hindsight status does not accept arguments."
+_STATUS_TOOL_UNAVAILABLE = "Better Hindsight status is unavailable for this handle."
+_STATUS_TOOL_MAX_DIAGNOSTICS = 10
 _UNKNOWN_TOOL = "Unknown Better Hindsight tool."
 
 
@@ -237,9 +254,9 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         logger.warning(RETENTION_ADMISSION_REJECTED_DIAGNOSTIC)
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
-        """Advertise one bounded read-only fallback for insufficient automatic recall."""
+        """Advertise bounded recall, durable retention, and passive status tools."""
 
-        return [_recall_tool_schema()]
+        return [_recall_tool_schema(), _retain_tool_schema(), _status_tool_schema()]
 
     def handle_tool_call(
         self,
@@ -247,11 +264,18 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         args: dict[str, Any],
         **kwargs: object,
     ) -> str:
-        """Handle the sole read-only recall tool with fixed sanitized results."""
+        """Dispatch model tools through the authorized provider handle."""
 
         del kwargs
-        if tool_name != _RECALL_TOOL_NAME:
-            return _tool_json(error=_UNKNOWN_TOOL)
+        if tool_name == _RECALL_TOOL_NAME:
+            return self._handle_recall_tool(args)
+        if tool_name == _RETAIN_TOOL_NAME:
+            return self._handle_retain_tool(args)
+        if tool_name == _STATUS_TOOL_NAME:
+            return self._handle_status_tool(args)
+        return _tool_json(error=_UNKNOWN_TOOL)
+
+    def _handle_recall_tool(self, args: dict[str, Any]) -> str:
         if not isinstance(args, dict) or set(args) != {"query"}:
             return _tool_json(error=_RECALL_TOOL_INVALID_QUERY)
         query = args["query"]
@@ -277,6 +301,102 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             return _tool_json(error=_RECALL_TOOL_UNAVAILABLE)
         context, _count = recalled
         return _tool_json(result=context or _RECALL_TOOL_NO_RESULTS)
+
+    def _handle_retain_tool(self, args: dict[str, Any]) -> str:
+        if (
+            not isinstance(args, dict)
+            or "content" not in args
+            or not set(args)
+            <= {
+                "content",
+                "context",
+            }
+        ):
+            return _tool_json(error=_RETAIN_TOOL_INVALID_CONTENT)
+        content = args["content"]
+        context = args.get("context")
+        if not isinstance(content, str) or not content.strip():
+            return _tool_json(error=_RETAIN_TOOL_INVALID_CONTENT)
+        if context is not None and (not isinstance(context, str) or not context.strip()):
+            return _tool_json(error=_RETAIN_TOOL_INVALID_CONTENT)
+
+        config = self._config
+        runtime = self._runtime
+        if not self._retain_enabled or config is None or runtime is None:
+            return _tool_json(error=_RETAIN_TOOL_UNAVAILABLE)
+        assistant_content = content
+        if context is not None:
+            assistant_content = f"Context: {context}\n\n{content}"
+        try:
+            admission = runtime.admit_turn(
+                session_id=_RETAIN_TOOL_SESSION_ID,
+                user_content=_RETAIN_TOOL_SOURCE_MARKER,
+                assistant_content=assistant_content,
+            )
+            emit_event(
+                logger,
+                "better_hindsight.admission",
+                duplicate_count=admission.duplicate_count,
+                inserted_count=admission.inserted_count,
+                outcome=admission.status.value,
+                source="model_tool",
+            )
+        except Exception:
+            emit_event(
+                logger,
+                "better_hindsight.admission",
+                duplicate_count=0,
+                inserted_count=0,
+                outcome="local_failure",
+                source="model_tool",
+            )
+            return _tool_json(error=_RETAIN_TOOL_REJECTED, reason="local_failure")
+        if not admission.accepted:
+            return _tool_json(error=_RETAIN_TOOL_REJECTED, reason=admission.status.value)
+        delivery = "already_queued" if admission.status is AdmissionStatus.DUPLICATE else "queued"
+        return _tool_json(
+            admission=admission.status.value,
+            delivery=delivery,
+            duplicate_segments=admission.duplicate_count,
+            inserted_segments=admission.inserted_count,
+            result="accepted",
+        )
+
+    def _handle_status_tool(self, args: dict[str, Any]) -> str:
+        if not isinstance(args, dict) or args:
+            return _tool_json(error=_STATUS_TOOL_INVALID_ARGUMENTS)
+        config = self._config
+        if config is None or self._runtime is None:
+            return _tool_json(error=_STATUS_TOOL_UNAVAILABLE)
+
+        try:
+            status_result = status(config)
+            diagnostic_result = list_diagnostics(config)
+        except Exception:
+            return _tool_json(error=_STATUS_TOOL_UNAVAILABLE)
+        status_outcome = status_result.payload.get("result")
+        diagnostic_outcome = diagnostic_result.payload.get("result")
+        diagnostic_payload = dict(diagnostic_result.payload)
+        if diagnostic_outcome != "error":
+            records = diagnostic_payload.get("records")
+            if not isinstance(records, list):
+                return _tool_json(error=_STATUS_TOOL_UNAVAILABLE)
+            diagnostic_payload["records"] = records[:_STATUS_TOOL_MAX_DIAGNOSTICS]
+            diagnostic_payload["records_listed"] = len(records)
+        if "error" in {status_outcome, diagnostic_outcome}:
+            overall = "error"
+        elif status_outcome == "degraded":
+            overall = "degraded"
+        else:
+            overall = "ok"
+        return _tool_json(
+            diagnostics={
+                "capture_enabled": config.diagnostics.enabled,
+                **diagnostic_payload,
+            },
+            result=overall,
+            status=status_result.payload,
+        )
 
     def _recall_projected(
         self,
@@ -414,12 +534,57 @@ def _recall_tool_schema() -> dict[str, Any]:
     }
 
 
+def _retain_tool_schema() -> dict[str, Any]:
+    return {
+        "name": _RETAIN_TOOL_NAME,
+        "description": (
+            "Durably queue one agent-selected fact, preference, decision, or convention for "
+            "long-term memory. Use only for self-contained information that should remain useful "
+            "across future sessions; do not store secrets or transient task progress. Acceptance "
+            "confirms local durable admission, not remote delivery."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "The self-contained durable information to store.",
+                },
+                "context": {
+                    "type": "string",
+                    "description": (
+                        "Optional short category, such as 'user preference', 'environment fact', "
+                        "or 'project convention'."
+                    ),
+                },
+            },
+            "required": ["content"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _status_tool_schema() -> dict[str, Any]:
+    return {
+        "name": _STATUS_TOOL_NAME,
+        "description": (
+            "Inspect passive Better Hindsight health, including the durable retention queue and "
+            "query-free recall diagnostic summaries. Makes no remote call and never replays "
+            "private diagnostic queries."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    }
+
+
 def _optional_string(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _tool_json(*, result: str | None = None, error: str | None = None) -> str:
-    payload = {"result": result} if result is not None else {"error": error}
+def _tool_json(**payload: object) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 

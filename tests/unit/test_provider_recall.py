@@ -1,4 +1,4 @@
-"""Unit tests for the recall-only Better Hindsight provider handle."""
+"""Unit tests for Better Hindsight provider recall and tool discovery."""
 
 from __future__ import annotations
 
@@ -84,6 +84,51 @@ EXPECTED_RECALL_TOOL_SCHEMA = {
         "additionalProperties": False,
     },
 }
+EXPECTED_RETAIN_TOOL_SCHEMA = {
+    "name": "better_hindsight_retain",
+    "description": (
+        "Durably queue one agent-selected fact, preference, decision, or convention for long-term "
+        "memory. Use only for self-contained information that should remain useful across future "
+        "sessions; do not store secrets or transient task progress. Acceptance confirms local "
+        "durable admission, not remote delivery."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "content": {
+                "type": "string",
+                "description": "The self-contained durable information to store.",
+            },
+            "context": {
+                "type": "string",
+                "description": (
+                    "Optional short category, such as 'user preference', 'environment fact', or "
+                    "'project convention'."
+                ),
+            },
+        },
+        "required": ["content"],
+        "additionalProperties": False,
+    },
+}
+EXPECTED_STATUS_TOOL_SCHEMA = {
+    "name": "better_hindsight_status",
+    "description": (
+        "Inspect passive Better Hindsight health, including the durable retention queue and "
+        "query-free recall diagnostic summaries. Makes no remote call and never replays private "
+        "diagnostic queries."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    },
+}
+EXPECTED_TOOL_SCHEMAS = [
+    EXPECTED_RECALL_TOOL_SCHEMA,
+    EXPECTED_RETAIN_TOOL_SCHEMA,
+    EXPECTED_STATUS_TOOL_SCHEMA,
+]
 
 
 def _recall_response(text: str = "fixture observation") -> RecallResponse:
@@ -299,19 +344,21 @@ def test_constructor_availability_and_tool_schema_are_local_repeatable_and_unini
     assert isinstance(second, BetterHindsightMemoryProvider)
     assert first.name == "better_hindsight"
     assert second.name == "better_hindsight"
-    assert first.get_tool_schemas() == [EXPECTED_RECALL_TOOL_SCHEMA]
-    assert second.get_tool_schemas() == [EXPECTED_RECALL_TOOL_SCHEMA]
+    assert first.get_tool_schemas() == EXPECTED_TOOL_SCHEMAS
+    assert second.get_tool_schemas() == EXPECTED_TOOL_SCHEMAS
 
     discovered = first.get_tool_schemas()
     discovered[0]["name"] = "poisoned_recall"
     discovered[0]["parameters"]["properties"]["query"]["description"] = "poisoned"
-    assert first.get_tool_schemas() == [EXPECTED_RECALL_TOOL_SCHEMA]
+    discovered[1]["parameters"]["properties"]["content"]["description"] = "poisoned"
+    discovered[2]["parameters"]["properties"]["poisoned"] = {"type": "string"}
+    assert first.get_tool_schemas() == EXPECTED_TOOL_SCHEMAS
     assert not hasattr(provider_module, "RECALL_TOOL_SCHEMA")
     assert first.is_available() is True
     assert first.is_available() is True
 
 
-def test_system_prompt_block_is_one_exact_byte_stable_policy_and_tool_stays_recall_only() -> None:
+def test_system_prompt_block_is_one_exact_byte_stable_policy() -> None:
     first = BetterHindsightMemoryProvider()
     second = BetterHindsightMemoryProvider()
 
@@ -327,7 +374,11 @@ def test_system_prompt_block_is_one_exact_byte_stable_policy_and_tool_stays_reca
     )
     assert EXPECTED_SYSTEM_PROMPT_BLOCK.count("[BETTER_HINDSIGHT_HISTORICAL_EVIDENCE_BEGIN]") == 1
     assert EXPECTED_SYSTEM_PROMPT_BLOCK.count("[BETTER_HINDSIGHT_HISTORICAL_EVIDENCE_END]") == 1
-    assert [schema["name"] for schema in first.get_tool_schemas()] == ["better_hindsight_recall"]
+    assert [schema["name"] for schema in first.get_tool_schemas()] == [
+        "better_hindsight_recall",
+        "better_hindsight_retain",
+        "better_hindsight_status",
+    ]
 
 
 def test_recall_tool_reuses_projection_timeout_redaction_and_untrusted_envelope(

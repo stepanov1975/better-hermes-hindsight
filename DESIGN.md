@@ -4,7 +4,8 @@
 
 Better Hermes Hindsight is an unofficial memory provider optimized for one practical deployment: a Linux Hermes installation using a supported external Hindsight service. It aims to improve recall timing and retention reliability without modifying Hermes core.
 
-“Better” is contextual, not universal. Bundled Hindsight remains preferable when embedded/cloud operation, model-facing retain/reflect, or minimum maintenance is more important.
+“Better” is contextual, not universal. Bundled Hindsight remains preferable when embedded/cloud
+operation, model-facing reflection, dynamic routing, or minimum maintenance is more important.
 
 ## Goals
 
@@ -13,7 +14,8 @@ Better Hermes Hindsight is an unofficial memory provider optimized for one pract
 - Treat recalled content as potentially stale, untrusted historical evidence.
 - Keep automatic retention optional and off the remote network path of the Hermes callback.
 - Persist admitted retained turns locally and retry them after restart.
-- Keep model authority narrow: one read-only recall tool and no model-directed writes.
+- Keep model authority narrow: bounded recall, opt-in durable retention admission, and passive
+  query-free status/diagnostics only.
 - Keep destination and mission changes explicit and operator controlled.
 - Preserve straightforward rollback to bundled Hindsight.
 
@@ -22,7 +24,7 @@ Better Hermes Hindsight is an unofficial memory provider optimized for one pract
 - Embedded or cloud Hindsight lifecycle management.
 - Multi-user routing or dynamic bank templates.
 - Multiplexed multi-profile Better runtimes in one Hermes process.
-- Model-facing retain or reflect tools.
+- Model-facing reflection, remote diagnostic replay, policy changes, or caller-selected banks/tags.
 - Previous-query background recall.
 - Bank migration, pruning, deduplication, reconsolidation, or remote rewind.
 - Windows support, hot reload, or general process supervision.
@@ -53,6 +55,16 @@ The model-facing `better_hindsight_recall` tool reuses this configured path. It 
 5. A background sender claims due rows for the current destination fingerprint.
 6. Each row is sent with a stable document ID, synchronous Hindsight retention, and `update_mode="replace"`.
 7. Confirmed rows are removed; unconfirmed rows are rescheduled with bounded backoff.
+
+The model-facing `better_hindsight_retain` tool accepts one self-contained durable memory plus an
+optional short context label. It marks the source as agent-selected rather than a direct user quote,
+applies the same redaction/segmentation path, and returns structured local admission state. It cannot
+override the configured bank, tags, scopes, limits, or retry policy. Acceptance means the outbox
+transaction committed; remote delivery remains asynchronous.
+
+The model-facing `better_hindsight_status` tool combines the same passive outbox snapshot used by the
+operator status command with bounded, query-free diagnostic summaries. It performs no remote call and
+cannot replay captured queries.
 
 Durability begins only after admission commits. A network timeout may be ambiguous and cause a safe replace-mode replay; this is not exactly-once transport.
 

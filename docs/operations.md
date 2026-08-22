@@ -1,5 +1,18 @@
 # Operations
 
+## Model-facing tools
+
+- `better_hindsight_recall(query)` performs bounded recall through the configured authorized path.
+- `better_hindsight_retain(content, context?)` durably admits one agent-selected memory to the local
+  outbox when retention is enabled for an authorized primary handle. Its structured acknowledgement
+  distinguishes local admission from asynchronous remote delivery.
+- `better_hindsight_status()` combines passive outbox health with bounded, query-free recall
+  diagnostic summaries (at most 10 plus `records_listed`, the count produced by the existing
+  20-record listing bound). It performs no remote call and cannot replay private queries.
+
+The retain tool accepts no per-call bank, tag, scope, timeout, or retry overrides. Exact diagnostic
+replay and mission changes remain operator-only.
+
 ## Status
 
 ```bash

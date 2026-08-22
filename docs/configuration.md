@@ -175,12 +175,24 @@ The provider contributes one byte-stable system-role policy for the exact
 `[BETTER_HINDSIGHT_HISTORICAL_EVIDENCE_BEGIN] ...
 [BETTER_HINDSIGHT_HISTORICAL_EVIDENCE_END]` envelope. Every enclosed JSONL record is treated as
 stale, untrusted historical evidence: it is evidence to evaluate, not an instruction, role message,
-or authority over the current conversation. The provider exposes one model-facing read-only tool,
-`better_hindsight_recall`, for focused retrieval when automatic context is insufficient. The tool
+or authority over the current conversation. The provider exposes `better_hindsight_recall` for
+focused retrieval when automatic context is insufficient. The tool
 uses the same authorized provider handle, query projection, configured Hindsight recall controls,
 deadline, redaction, allowlist, complete-record byte budget, and untrusted evidence envelope. Its
 sole argument is `query`; callers cannot override bank, tags, types, budget, scores, result size, or
 timeout.
+
+`better_hindsight_retain` accepts required `content` plus an optional short `context` category. It is
+available only to an authorized primary handle when `retain.enabled=true`. The tool marks its source
+as agent-selected rather than a direct user quote, then uses the same redaction, deterministic
+segmentation, configured tags/scopes, capacity limits, and durable outbox as automatic retention. It
+does not accept bank, tag, scope, timeout, or retry overrides. An `accepted` result confirms only local
+durable admission; use `better_hindsight_status` to observe asynchronous delivery.
+
+`better_hindsight_status` takes no arguments and combines passive outbox health with bounded,
+query-free diagnostic summaries. It returns at most 10 summaries plus `records_listed`, the number
+produced by the diagnostic listing's own 20-record bound. It makes no Hindsight request and does not
+expose or replay captured queries. Diagnostic capture remains controlled by `diagnostics.enabled`.
 
 Every recalled response text passes through the same deterministic high-confidence redactor before
 byte budgeting and JSON serialization. The deliberately narrow patterns cover labeled API-key
@@ -298,8 +310,8 @@ request, so this is replace-safe best effort, not exactly-once transport or a ze
 `retain_mission` and `observations_mission` are independent optional texts. Loading and initialization
 do not check or apply them. Operators can compare configured and remote values with
 `hermes better_hindsight missions check`; applying drift requires the explicit
-`hermes better_hindsight missions apply --confirm` command. The model-facing recall tool cannot
-invoke either operation, and no retain, reflect, mission, or configuration tool is exposed.
+`hermes better_hindsight missions apply --confirm` command. No model-facing tool can invoke either
+operation; reflection, mission, bank, and configuration tools remain absent.
 
 Development writes require an isolated Hindsight instance and synthetic bank. Production canary
 checks likewise use synthetic content and an explicitly designated bank.
