@@ -6,6 +6,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: source-snapshot-release
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Release
@@ -42,16 +46,28 @@ jobs:
           printf 'version=%s\ntag=%s\nprerelease=%s\n' \
             "$version" "$tag" "$prerelease" >> "$GITHUB_OUTPUT"
 
-          if ! git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
-            printf 'needed=true\ndraft_exists=false\n' >> "$GITHUB_OUTPUT"
-            exit 0
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
+            :
+          else
+            ls_remote_status=$?
+            if [[ "$ls_remote_status" -eq 2 ]]; then
+              printf 'needed=true\ndraft_exists=false\n' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "Unable to determine whether tag ${tag} exists (git ls-remote exit ${ls_remote_status})." >&2
+            exit "$ls_remote_status"
           fi
 
           git fetch --no-tags origin "refs/tags/${tag}:refs/tags/${tag}"
           tag_sha=$(git rev-list -n 1 "$tag")
           if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" \
-            --json isDraft,isPrerelease,body > "$RELEASE_JSON_FILE"; then
+            --json isDraft,isPrerelease,body,assets > "$RELEASE_JSON_FILE"; then
             echo "Tag ${tag} exists without a GitHub release; refusing to guess publication intent." >&2
+            exit 1
+          fi
+
+          if [[ $(jq '.assets | length' "$RELEASE_JSON_FILE") -ne 0 ]]; then
+            echo "Source snapshot ${tag} has attached assets; refusing source-only publication." >&2
             exit 1
           fi
 
@@ -129,7 +145,7 @@ jobs:
           fi
 
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json isDraft,isPrerelease,body > "$RELEASE_JSON_FILE"
+            --json isDraft,isPrerelease,body,assets > "$RELEASE_JSON_FILE"
           python - "$RELEASE_JSON_FILE" "$RELEASE_NOTES_FILE" "$RELEASE_PRERELEASE" <<'PY'
           import json
           import pathlib
@@ -142,6 +158,8 @@ jobs:
               raise SystemExit("Release is not a draft")
           if release["isPrerelease"] is not expected_prerelease:
               raise SystemExit("Draft release has the wrong prerelease state")
+          if release["assets"]:
+              raise SystemExit("Draft source snapshot has attached assets")
           if release["body"].rstrip() != notes.rstrip():
               raise SystemExit("Draft release notes do not match CHANGELOG.md")
           PY
@@ -160,7 +178,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-            --json isDraft,isPrerelease,body > "$RELEASE_JSON_FILE"
+            --json isDraft,isPrerelease,body,assets > "$RELEASE_JSON_FILE"
           python - "$RELEASE_JSON_FILE" "$RELEASE_NOTES_FILE" "$RELEASE_PRERELEASE" <<'PY'
           import json
           import pathlib
@@ -173,6 +191,8 @@ jobs:
               raise SystemExit("Release was not published")
           if release["isPrerelease"] is not expected_prerelease:
               raise SystemExit("Published release has the wrong prerelease state")
+          if release["assets"]:
+              raise SystemExit("Published source snapshot has attached assets")
           if release["body"].rstrip() != notes.rstrip():
               raise SystemExit("Published release notes do not match CHANGELOG.md")
           PY

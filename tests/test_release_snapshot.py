@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,12 @@ def test_prepare_current_source_snapshot(tmp_path: Path) -> None:
     metadata = prepare(ROOT, notes_path)
 
     version = read_version(ROOT)
-    assert metadata == {"version": version, "tag": f"v{version}", "prerelease": False}
+    expected_prerelease = re.search(r"(?:a|b|rc)\d+$", version) is not None
+    assert metadata == {
+        "version": version,
+        "tag": f"v{version}",
+        "prerelease": expected_prerelease,
+    }
     notes = notes_path.read_text(encoding="utf-8")
     assert notes.strip()
     assert "\n## " not in notes

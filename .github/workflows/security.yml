@@ -34,8 +34,10 @@ jobs:
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/repo" \
             -w /repo \
+            --entrypoint /bin/sh \
             "${GITLEAKS_IMAGE}" \
-            detect --source=/repo --config=/repo/.gitleaks.toml --redact --verbose
+            -c 'git config --global --add safe.directory /repo && \
+              exec gitleaks detect --source=/repo --config=/repo/.gitleaks.toml --redact --verbose'
 
   actionlint:
     name: actionlint
