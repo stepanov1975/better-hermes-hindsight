@@ -31,7 +31,7 @@ class _Handle:
     ) -> None:
         self.result = result or AdmissionResult(AdmissionStatus.ADMITTED, inserted_count=1)
         self.failure = failure
-        self.admissions: list[tuple[str, str, str]] = []
+        self.admissions: list[tuple[str, str, str, int | None]] = []
         self.close_calls = 0
 
     def admit_turn(
@@ -40,8 +40,9 @@ class _Handle:
         session_id: str,
         user_content: str,
         assistant_content: str,
+        segment_count_limit: int | None = None,
     ) -> AdmissionResult:
-        self.admissions.append((session_id, user_content, assistant_content))
+        self.admissions.append((session_id, user_content, assistant_content, segment_count_limit))
         if self.failure is not None:
             raise self.failure
         return self.result
@@ -142,6 +143,7 @@ def test_retain_tool_queues_agent_selected_content_with_structured_acknowledgeme
             "better-hindsight-model-retain-v1",
             "This is an agent-selected durable memory record, not a direct user quotation.",
             "Context: user preference\n\nAlex prefers durable, verified operational changes.",
+            2000,
         )
     ]
     assert "Alex prefers" not in raw
@@ -153,10 +155,20 @@ def test_retain_tool_queues_agent_selected_content_with_structured_acknowledgeme
         ({}, _INVALID_RETENTION_ERROR),
         ({"content": ""}, _INVALID_RETENTION_ERROR),
         ({"content": "durable", "context": ""}, _INVALID_RETENTION_ERROR),
+        ({"content": "x" * 8193}, _INVALID_RETENTION_ERROR),
+        ({"content": "durable", "context": "x" * 257}, _INVALID_RETENTION_ERROR),
         ({"content": "durable", "tags": ["override"]}, _INVALID_RETENTION_ERROR),
         ([], _INVALID_RETENTION_ERROR),
     ],
-    ids=["missing", "blank-content", "blank-context", "extra-field", "wrong-type"],
+    ids=[
+        "missing",
+        "blank-content",
+        "blank-context",
+        "long-content",
+        "long-context",
+        "extra-field",
+        "wrong-type",
+    ],
 )
 def test_retain_tool_rejects_malformed_arguments_before_runtime_work(
     args: object,
@@ -207,7 +219,7 @@ def test_retain_tool_reports_safe_admission_outcomes(
     raw = provider.handle_tool_call("better_hindsight_retain", {"content": "durable fact"})
 
     assert json.loads(raw) == expected
-    assert handle.admissions[0][2] == "durable fact"
+    assert handle.admissions[0][2:] == ("durable fact", 2000)
 
 
 def test_retain_tool_failure_and_nonprimary_handle_are_sanitized(

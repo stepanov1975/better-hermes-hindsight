@@ -97,10 +97,14 @@ EXPECTED_RETAIN_TOOL_SCHEMA = {
         "properties": {
             "content": {
                 "type": "string",
+                "minLength": 1,
+                "maxLength": 8192,
                 "description": "The self-contained durable information to store.",
             },
             "context": {
                 "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
                 "description": (
                     "Optional short category, such as 'user preference', 'environment fact', or "
                     "'project convention'."

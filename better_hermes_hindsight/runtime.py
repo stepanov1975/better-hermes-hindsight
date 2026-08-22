@@ -35,7 +35,7 @@ from .outbox import (
     ProfileLockStatus,
     SQLiteOutbox,
 )
-from .retention import RetainedSegment, build_retained_segments
+from .retention import RetainedSegment, RetentionCapacityError, build_retained_segments
 from .telemetry import elapsed_milliseconds, emit_event
 
 ASYNC_CANCELLATION_DRAIN_SECONDS = 0.05
@@ -731,6 +731,7 @@ class ProcessRuntime:
         session_id: str,
         user_content: str,
         assistant_content: str,
+        segment_count_limit: int | None = None,
     ) -> AdmissionResult:
         """Construct and atomically admit one turn without client or network work."""
 
@@ -739,13 +740,17 @@ class ProcessRuntime:
             outbox = self._outbox
             if outbox is None:
                 return AdmissionResult(AdmissionStatus.INVALID)
-            segments = build_retained_segments(
-                session_id=session_id,
-                user_content=user_content,
-                assistant_content=assistant_content,
-                tags=self._retain_tags,
-                segment_max_bytes=self._retain_segment_max_bytes,
-            )
+            try:
+                segments = build_retained_segments(
+                    session_id=session_id,
+                    user_content=user_content,
+                    assistant_content=assistant_content,
+                    tags=self._retain_tags,
+                    segment_max_bytes=self._retain_segment_max_bytes,
+                    segment_count_limit=segment_count_limit,
+                )
+            except RetentionCapacityError:
+                return AdmissionResult(AdmissionStatus.CAPACITY_EXCEEDED)
             result = outbox.admit(segments)
             sender = self._sender
             if result.accepted and sender is not None:
@@ -881,6 +886,7 @@ class ProcessRuntimeHandle:
         session_id: str,
         user_content: str,
         assistant_content: str,
+        segment_count_limit: int | None = None,
     ) -> AdmissionResult:
         """Request one local admission through the shared process runtime."""
 
@@ -888,6 +894,7 @@ class ProcessRuntimeHandle:
             session_id=session_id,
             user_content=user_content,
             assistant_content=assistant_content,
+            segment_count_limit=segment_count_limit,
         )
 
     def recall(self, query: str, *, timeout: float) -> object:

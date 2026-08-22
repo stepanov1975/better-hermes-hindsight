@@ -733,6 +733,29 @@ def test_runtime_admission_constructs_locally_without_any_client_operation(tmp_p
     assert client_factory.clients[0].operation_calls == []
 
 
+def test_runtime_maps_construction_segment_cap_to_capacity_without_outbox_work(
+    tmp_path: Path,
+) -> None:
+    config = _runtime_config(tmp_path)
+    outbox = _RecordingOutbox()
+    handle = acquire_process_runtime(
+        config,
+        client_factory=_ClientFactory(),
+        outbox_factory=_OutboxFactory(outbox),
+        sender_factory=_inert_sender_factory,
+    )
+
+    result = handle.admit_turn(
+        session_id="bounded-tool-session",
+        user_content="synthetic marker",
+        assistant_content="x" * 5000,
+        segment_count_limit=1,
+    )
+
+    assert result.status is AdmissionStatus.CAPACITY_EXCEEDED
+    assert outbox.admissions == []
+
+
 def _wait_for_finalized_rejection(handle: ProcessRuntimeHandle) -> None:
     deadline = time.monotonic() + 2.0
     while True:
@@ -826,6 +849,7 @@ def test_lifecycle_counter_starts_before_deterministic_turn_construction(
         assistant_content: object,
         tags: object,
         segment_max_bytes: object,
+        segment_count_limit: object,
     ) -> tuple[RetainedSegment, ...]:
         nonlocal construction_calls
         with construction_lock:
@@ -841,6 +865,7 @@ def test_lifecycle_counter_starts_before_deterministic_turn_construction(
             assistant_content=assistant_content,
             tags=tags,
             segment_max_bytes=segment_max_bytes,
+            segment_count_limit=segment_count_limit,
         )
 
     monkeypatch.setattr(

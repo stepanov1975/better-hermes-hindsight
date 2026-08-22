@@ -27,6 +27,7 @@ def _build(
     assistant_content: object = "Synthetic assistant text.",
     tags: object = ("project:sample",),
     segment_max_bytes: object = 4096,
+    segment_count_limit: object = None,
 ) -> tuple[RetainedSegment, ...]:
     return build_retained_segments(
         session_id=session_id,
@@ -34,6 +35,7 @@ def _build(
         assistant_content=assistant_content,
         tags=tags,
         segment_max_bytes=segment_max_bytes,
+        segment_count_limit=segment_count_limit,
     )
 
 
@@ -163,6 +165,8 @@ def test_non_text_or_blank_role_content_is_rejected_with_one_fixed_error(
         {"tags": ("valid", 7)},
         {"segment_max_bytes": 0},
         {"segment_max_bytes": True},
+        {"segment_count_limit": 0},
+        {"segment_count_limit": True},
     ],
 )
 def test_other_malformed_construction_inputs_are_sanitized(overrides: dict[str, object]) -> None:
@@ -291,6 +295,36 @@ def test_a_single_code_point_that_cannot_fit_rejects_the_whole_turn() -> None:
         _build(user_content="🙂", segment_max_bytes=3)
 
     assert str(caught.value) == RETENTION_REJECTED_MESSAGE
+
+
+def test_segment_count_limit_rejects_before_segment_hash_construction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def forbidden_hash(**_kwargs: object) -> str:
+        raise AssertionError("segment hashing ran after the construction cap")
+
+    monkeypatch.setattr(retention_module, "derive_segment_payload_hash", forbidden_hash)
+
+    with pytest.raises(retention_module.RetentionCapacityError) as caught:
+        _build(
+            assistant_content="x" * 500,
+            segment_max_bytes=1,
+            segment_count_limit=10,
+        )
+
+    assert str(caught.value) == RETENTION_REJECTED_MESSAGE
+    assert caught.value.__cause__ is None
+
+
+def test_segment_count_limit_allows_an_exact_fit() -> None:
+    expected = _build(segment_max_bytes=64)
+
+    limited = _build(
+        segment_max_bytes=64,
+        segment_count_limit=len(expected),
+    )
+
+    assert limited == expected
 
 
 def test_each_segment_hash_and_document_id_derive_from_the_exact_canonical_record() -> None:

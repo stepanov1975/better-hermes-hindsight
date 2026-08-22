@@ -182,8 +182,10 @@ deadline, redaction, allowlist, complete-record byte budget, and untrusted evide
 sole argument is `query`; callers cannot override bank, tags, types, budget, scores, result size, or
 timeout.
 
-`better_hindsight_retain` accepts required `content` plus an optional short `context` category. It is
-available only to an authorized primary handle when `retain.enabled=true`. The tool marks its source
+`better_hindsight_retain` accepts required `content` of at most 8,192 characters plus an optional
+`context` category of at most 256 characters. It is available only to an authorized primary handle
+when `retain.enabled=true`. Construction also stops before hashing if the canonical record would
+exceed the model tool's 2,000-segment cap. The tool marks its source
 as agent-selected rather than a direct user quote, then uses the same redaction, deterministic
 segmentation, configured tags/scopes, capacity limits, and durable outbox as automatic retention. It
 does not accept bank, tag, scope, timeout, or retry overrides. An `accepted` result confirms only local

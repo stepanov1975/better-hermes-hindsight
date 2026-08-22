@@ -291,6 +291,8 @@ def test_current_loader_discovers_active_standard_plugin_cli_and_recall_tool(
                     "properties": {
                         "content": {
                             "description": "The self-contained durable information to store.",
+                            "maxLength": 8192,
+                            "minLength": 1,
                             "type": "string",
                         },
                         "context": {
@@ -298,6 +300,8 @@ def test_current_loader_discovers_active_standard_plugin_cli_and_recall_tool(
                                 "Optional short category, such as 'user preference', 'environment "
                                 "fact', or 'project convention'."
                             ),
+                            "maxLength": 256,
+                            "minLength": 1,
                             "type": "string",
                         },
                     },

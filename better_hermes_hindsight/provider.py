@@ -51,6 +51,9 @@ _RETAIN_TOOL_INVALID_CONTENT = (
 )
 _RETAIN_TOOL_UNAVAILABLE = "Better Hindsight retention is unavailable for this handle."
 _RETAIN_TOOL_REJECTED = "Better Hindsight retention was not admitted."
+_RETAIN_TOOL_MAX_CONTENT_CHARS = 8192
+_RETAIN_TOOL_MAX_CONTEXT_CHARS = 256
+_RETAIN_TOOL_MAX_SEGMENTS = 2000
 _RETAIN_TOOL_SESSION_ID = "better-hindsight-model-retain-v1"
 _RETAIN_TOOL_SOURCE_MARKER = (
     "This is an agent-selected durable memory record, not a direct user quotation."
@@ -315,9 +318,17 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             return _tool_json(error=_RETAIN_TOOL_INVALID_CONTENT)
         content = args["content"]
         context = args.get("context")
-        if not isinstance(content, str) or not content.strip():
+        if (
+            not isinstance(content, str)
+            or not content.strip()
+            or len(content) > _RETAIN_TOOL_MAX_CONTENT_CHARS
+        ):
             return _tool_json(error=_RETAIN_TOOL_INVALID_CONTENT)
-        if context is not None and (not isinstance(context, str) or not context.strip()):
+        if context is not None and (
+            not isinstance(context, str)
+            or not context.strip()
+            or len(context) > _RETAIN_TOOL_MAX_CONTEXT_CHARS
+        ):
             return _tool_json(error=_RETAIN_TOOL_INVALID_CONTENT)
 
         config = self._config
@@ -332,6 +343,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                 session_id=_RETAIN_TOOL_SESSION_ID,
                 user_content=_RETAIN_TOOL_SOURCE_MARKER,
                 assistant_content=assistant_content,
+                segment_count_limit=_RETAIN_TOOL_MAX_SEGMENTS,
             )
             emit_event(
                 logger,
@@ -548,10 +560,14 @@ def _retain_tool_schema() -> dict[str, Any]:
             "properties": {
                 "content": {
                     "type": "string",
+                    "minLength": 1,
+                    "maxLength": _RETAIN_TOOL_MAX_CONTENT_CHARS,
                     "description": "The self-contained durable information to store.",
                 },
                 "context": {
                     "type": "string",
+                    "minLength": 1,
+                    "maxLength": _RETAIN_TOOL_MAX_CONTEXT_CHARS,
                     "description": (
                         "Optional short category, such as 'user preference', 'environment fact', "
                         "or 'project convention'."
