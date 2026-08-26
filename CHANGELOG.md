@@ -13,6 +13,8 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ### Fixed
 
+- Report the active standard Git plugin commit in passive status by reading Hermes installation
+  metadata, with a read-only local checkout fallback for legacy installs.
 - Register the recall trust policy through Hermes's cache-safe plugin system-prompt section when
   available, while retaining the provider-block fallback for older or generic host contexts. This
   keeps automatic recall evidence governed when model-facing memory tools are disabled.

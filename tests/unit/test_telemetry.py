@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 from pathlib import Path
 
 import pytest
 
 import better_hermes_hindsight.provider as provider_module
+import better_hermes_hindsight.telemetry as telemetry_module
 from better_hermes_hindsight import __version__
 from better_hermes_hindsight.client import HindsightClientError
 from better_hermes_hindsight.outbox import AdmissionResult, AdmissionStatus
@@ -20,22 +22,76 @@ from tests.unit.test_provider_recall import _base_config, _recall_response, _wri
 _PRIVATE = "private-query-sentinel"
 
 
-def test_deployed_identity_uses_only_explicit_standard_plugin_commit(
+def _write_install_metadata(hermes_home: Path, revision: object) -> None:
+    path = hermes_home / "plugins/.install-metadata.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        json.dumps({"better_hindsight": {"revision": revision}}),
+        encoding="utf-8",
+    )
+
+
+def test_deployed_identity_uses_standard_plugin_metadata_and_env_override(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("BETTER_HINDSIGHT_COMMIT", raising=False)
-    assert deployed_identity(tmp_path) == {"commit": "unknown", "version": __version__}
+    _write_install_metadata(tmp_path, "B" * 40)
+    assert deployed_identity(tmp_path) == {"commit": "b" * 40, "version": __version__}
+
+    monkeypatch.setenv("BETTER_HINDSIGHT_COMMIT", "not-a-commit")
+    assert deployed_identity(tmp_path)["commit"] == "b" * 40
 
     monkeypatch.setenv("BETTER_HINDSIGHT_COMMIT", "A" * 40)
     assert deployed_identity(tmp_path)["commit"] == "a" * 40
 
 
-def test_deployed_identity_rejects_malformed_commit(
+def test_deployed_identity_falls_back_to_standard_git_checkout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BETTER_HINDSIGHT_COMMIT", raising=False)
+    plugin_root = tmp_path / "plugin"
+    plugin_root.mkdir()
+    subprocess.run(["git", "init", "--quiet"], cwd=plugin_root, check=True)
+    subprocess.run(["git", "config", "user.name", "Identity fixture"], cwd=plugin_root, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "identity@example.invalid"],
+        cwd=plugin_root,
+        check=True,
+    )
+    (plugin_root / "plugin.yaml").write_text("name: fixture\n", encoding="utf-8")
+    subprocess.run(["git", "add", "plugin.yaml"], cwd=plugin_root, check=True)
+    subprocess.run(
+        ["git", "commit", "--quiet", "-m", "fixture plugin"], cwd=plugin_root, check=True
+    )
+    expected = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=plugin_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    monkeypatch.setattr(telemetry_module, "_plugin_root", lambda: plugin_root)
+
+    assert deployed_identity(tmp_path)["commit"] == expected
+
+    subprocess.run(["git", "pack-refs", "--all", "--prune"], cwd=plugin_root, check=True)
+    assert deployed_identity(tmp_path)["commit"] == expected
+
+
+def test_deployed_identity_returns_unknown_when_sources_are_invalid(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("BETTER_HINDSIGHT_COMMIT", "not-a-commit")
+    metadata_path = tmp_path / "plugins/.install-metadata.json"
+    _write_install_metadata(tmp_path, "also-not-a-commit")
+    monkeypatch.setattr(telemetry_module, "_checkout_commit", lambda _path: None)
+
+    assert deployed_identity(tmp_path) == {"commit": "unknown", "version": __version__}
+
+    metadata_path.write_text("[]\n", encoding="utf-8")
     assert deployed_identity(tmp_path) == {"commit": "unknown", "version": __version__}
 
 

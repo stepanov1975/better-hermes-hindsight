@@ -505,8 +505,15 @@ def test_default_home_discovers_plugin_and_reports_absent_status_without_creatin
         source=ROOT,
         hermes_home=default_home,
     )
+    installed_commit = "d" * 40
+    metadata_path = default_home / "plugins/.install-metadata.json"
+    metadata_path.write_text(
+        json.dumps({"better_hindsight": {"revision": installed_commit}}),
+        encoding="utf-8",
+    )
     _write_plugin_config(default_home)
     before_plugin = _snapshot_tree(plugin)
+    before_metadata = metadata_path.read_bytes()
     before_state = _snapshot_tree(default_home / "better_hindsight")
 
     completed = _run_released_cli(
@@ -518,8 +525,12 @@ def test_default_home_discovers_plugin_and_reports_absent_status_without_creatin
         exported_hermes_home=None,
     )
 
-    _assert_handler_output(completed, exit_code=0, stdout=EXPECTED_UNINITIALIZED_STATUS)
+    expected_status = EXPECTED_UNINITIALIZED_STATUS.replace(
+        '"commit":"unknown"', f'"commit":"{installed_commit}"'
+    )
+    _assert_handler_output(completed, exit_code=0, stdout=expected_status)
     assert _snapshot_tree(plugin) == before_plugin
+    assert metadata_path.read_bytes() == before_metadata
     assert _snapshot_tree(default_home / "better_hindsight") == before_state
     assert not (default_home / "better_hindsight" / "outbox.sqlite3").exists()
     assert not (default_home / "better_hindsight" / "outbox.sqlite3.lock").exists()
