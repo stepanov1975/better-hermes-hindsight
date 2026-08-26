@@ -213,7 +213,7 @@ request.
 ## Supported Hindsight recall controls
 
 The following optional fields remain `null` when omitted. The adapter omits them rather than
-replacing the supported Hindsight 0.8.5/0.9.1 server defaults:
+replacing the supported Hindsight 0.8.5/0.9.1/0.9.2 server defaults:
 
 - `recall.budget`: `low`, `mid`, or `high`;
 - `recall.max_tokens`: integer from 1 through 1,048,576;
