@@ -70,14 +70,16 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
 
     __slots__ = (
         "_config",
+        "_legacy_system_prompt_block",
         "_last_recall_count",
         "_recall_enabled",
         "_retain_enabled",
         "_runtime",
     )
 
-    def __init__(self) -> None:
+    def __init__(self, *, legacy_system_prompt_block: bool = True) -> None:
         self._config: BetterHindsightConfig | None = None
+        self._legacy_system_prompt_block = legacy_system_prompt_block
         self._last_recall_count = 0
         self._recall_enabled = False
         self._retain_enabled = False
@@ -95,9 +97,9 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         return is_hindsight_available()
 
     def system_prompt_block(self) -> str:
-        """Return the byte-stable policy governing the exact Better recall envelope."""
+        """Return the policy only when the host lacks plugin prompt sections."""
 
-        return SYSTEM_PROMPT_BLOCK
+        return SYSTEM_PROMPT_BLOCK if self._legacy_system_prompt_block else ""
 
     def initialize(self, session_id: str, **kwargs: object) -> None:
         """Authorize one handle, then acquire the shared local process runtime.
@@ -604,10 +606,12 @@ def _tool_json(**payload: object) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
-def create_provider() -> MemoryProvider:
+def create_provider(*, legacy_system_prompt_block: bool = True) -> MemoryProvider:
     """Construct one zero-argument provider instance for the released Hermes loader."""
 
-    return BetterHindsightMemoryProvider()
+    return BetterHindsightMemoryProvider(
+        legacy_system_prompt_block=legacy_system_prompt_block,
+    )
 
 
 __all__ = [

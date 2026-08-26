@@ -538,6 +538,41 @@ def test_plugin_shim_registers_once_and_exports_no_provider_class_for_loader_fal
     assert not hasattr(hermes_plugin, "BetterHindsightMemoryProvider")
 
 
+def test_plugin_shim_registers_cache_safe_trust_policy_without_provider_duplication() -> None:
+    class _Context:
+        def __init__(self) -> None:
+            self.providers: list[MemoryProvider] = []
+            self.sections: list[tuple[str, str, str, int]] = []
+
+        def register_memory_provider(self, provider: MemoryProvider) -> None:
+            self.providers.append(provider)
+
+        def register_system_prompt_section(
+            self,
+            section_id: str,
+            content: str,
+            *,
+            position: str,
+            max_chars: int,
+        ) -> None:
+            self.sections.append((section_id, content, position, max_chars))
+
+    context = _Context()
+
+    hermes_plugin.register(context)
+
+    assert context.sections == [
+        (
+            "better_hindsight.recall_trust_policy",
+            EXPECTED_SYSTEM_PROMPT_BLOCK,
+            "after_memory",
+            len(EXPECTED_SYSTEM_PROMPT_BLOCK),
+        )
+    ]
+    assert len(context.providers) == 1
+    assert context.providers[0].system_prompt_block() == ""
+
+
 def test_plugin_shim_ignores_generic_doctor_context() -> None:
     """Hermes generic plugin doctor must not invoke memory-only registration."""
 
