@@ -4,6 +4,13 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+### Added
+
+- Added explicit support for Hindsight API version 0.9.2 after review of Better's narrow HTTP
+  contract and an isolated live retain, outbox restart recovery, recall, replay, and cleanup proof.
+- Added contract coverage confirming Better continues to omit the optional 0.9.2 retain
+  `resolve_entities` field.
+
 ## 0.4.0 - 2026-08-22
 
 ### Added

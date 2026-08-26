@@ -9,7 +9,7 @@ The provider ID is `better_hindsight`, deliberately separate from bundled `hinds
 
 ## Quick start
 
-You need a working Hermes installation and an external Hindsight 0.8.5 or 0.9.1 service.
+You need a working Hermes installation and an external Hindsight 0.8.5, 0.9.1, or 0.9.2 service.
 
 ```bash
 hermes plugins install stepanov1975/better-hermes-hindsight
@@ -98,7 +98,7 @@ or retrieval quality.
 
 | Area | Better Hindsight | Bundled Hermes Hindsight |
 | --- | --- | --- |
-| Installation target | Standard Git plugin for a supported external Hindsight 0.8.5 or 0.9.1 service | Included with Hermes; interactive setup supports Hindsight Cloud, a local embedded service, or an external service |
+| Installation target | Standard Git plugin for a supported external Hindsight 0.8.5, 0.9.1, or 0.9.2 service | Included with Hermes; interactive setup supports Hindsight Cloud, a local embedded service, or an external service |
 | Automatic recall | When enabled, recalls against the current user query, synchronously under character, token, response-size, and total-time bounds | Background previous-query recall by default; optional synchronous current-query recall |
 | Recalled context | Complete byte-bounded JSONL records with available type, score, time, and evidence metadata; redacted and explicitly framed as stale, untrusted evidence | Formatted memory text or a reflect synthesis with configurable preamble, token budget, types, and tags |
 | Automatic retention | Opt-in; authorized, eligible turns are admitted all-or-none to a bounded SQLite WAL outbox before asynchronous delivery | Enabled by default; completed turns enter a process-local FIFO writer and then optional server-side async processing |
@@ -134,7 +134,7 @@ Retries use a stable document ID and `update_mode="replace"`. A timed-out write 
 - the current intended Hermes checkout;
 - at most one Better-enabled profile per Hermes process;
 - Python 3.11, 3.12, or 3.13 on Linux;
-- an external Hindsight 0.8.5 or 0.9.1 server;
+- an external Hindsight 0.8.5, 0.9.1, or 0.9.2 server;
 - `aiohttp>=3.14.1,<4` and `tiktoken>=0.12,<0.14`, which the plugin declares through Hermes's
   standard memory-plugin dependency mechanism.
 

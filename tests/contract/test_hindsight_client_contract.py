@@ -413,6 +413,9 @@ def test_retain_uses_exact_replace_batch_and_typed_confirmation(
     request_body = transport.calls[0][2]
     assert request_body is not None
     assert "operation_id" not in request_body
+    items = request_body["items"]
+    assert isinstance(items, list)
+    assert "resolve_entities" not in items[0]
 
 
 @pytest.mark.parametrize(

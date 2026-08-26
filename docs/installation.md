@@ -8,7 +8,7 @@ procedure.
 ## Prerequisites
 
 - Hermes installed and working;
-- an external Hindsight 0.8.5 or 0.9.1 service;
+- an external Hindsight 0.8.5, 0.9.1, or 0.9.2 service;
 - `git` available for Hermes's Git-plugin installer.
 
 The plugin declares `aiohttp>=3.14.1,<4` and `tiktoken>=0.12,<0.14` in `plugin.yaml`. Hermes checks
