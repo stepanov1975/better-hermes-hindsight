@@ -19,7 +19,7 @@ There is no canonical-plan hash, immutable candidate, or mandatory release check
 
 Keep the provider narrow:
 
-- external/self-hosted Hindsight API versions 0.8.5 and 0.9.1 only;
+- external/self-hosted Hindsight API versions 0.8.5, 0.9.1, and 0.9.2 only;
 - Linux/POSIX deployment;
 - one configured principal and one static bank;
 - multiple Hermes profiles only when each Better-enabled profile runs in its own process;

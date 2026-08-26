@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -32,6 +33,9 @@ from .runtime import (
 from .telemetry import elapsed_milliseconds, emit_event
 
 logger = logging.getLogger(__name__)
+
+_SYSTEM_PROMPT_SECTION_LOCK = threading.Lock()
+_system_prompt_section_registration: object | None = None
 
 CONFIG_INACTIVE_DIAGNOSTIC = "Better Hindsight is inactive: configuration could not be loaded."
 AUTHORIZATION_INACTIVE_DIAGNOSTIC = "Better Hindsight is inactive: this handle is not authorized."
@@ -65,23 +69,48 @@ _STATUS_TOOL_MAX_DIAGNOSTICS = 10
 _UNKNOWN_TOOL = "Unknown Better Hindsight tool."
 
 
+def _ensure_system_prompt_section(
+    registrar: Callable[[], object | None],
+) -> bool:
+    """Register one live process-global trust policy section."""
+
+    global _system_prompt_section_registration
+    with _SYSTEM_PROMPT_SECTION_LOCK:
+        registration = _system_prompt_section_registration
+        if registration is not None and getattr(registration, "active", True) is not False:
+            return True
+        registration = registrar()
+        if registration is None:
+            return False
+        _system_prompt_section_registration = registration
+        return True
+
+
 class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
     """A lightweight authorized handle over the shared process runtime."""
 
     __slots__ = (
         "_config",
+        "_legacy_system_prompt_block",
         "_last_recall_count",
         "_recall_enabled",
         "_retain_enabled",
         "_runtime",
+        "_system_prompt_section_registrar",
     )
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        system_prompt_section_registrar: Callable[[], object | None] | None = None,
+    ) -> None:
         self._config: BetterHindsightConfig | None = None
+        self._legacy_system_prompt_block = True
         self._last_recall_count = 0
         self._recall_enabled = False
         self._retain_enabled = False
         self._runtime: ProcessRuntimeHandle | None = None
+        self._system_prompt_section_registrar = system_prompt_section_registrar
 
     @property
     def name(self) -> str:
@@ -95,9 +124,9 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         return is_hindsight_available()
 
     def system_prompt_block(self) -> str:
-        """Return the byte-stable policy governing the exact Better recall envelope."""
+        """Return the policy only when the host lacks plugin prompt sections."""
 
-        return SYSTEM_PROMPT_BLOCK
+        return SYSTEM_PROMPT_BLOCK if self._legacy_system_prompt_block else ""
 
     def initialize(self, session_id: str, **kwargs: object) -> None:
         """Authorize one handle, then acquire the shared local process runtime.
@@ -157,6 +186,14 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         self._recall_enabled = authorization.recall_enabled
         self._retain_enabled = authorization.retain_enabled
         self._runtime = runtime
+        registrar = self._system_prompt_section_registrar
+        if self._recall_enabled and registrar is not None:
+            self._system_prompt_section_registrar = None
+            try:
+                if _ensure_system_prompt_section(registrar):
+                    self._legacy_system_prompt_block = False
+            except Exception:
+                logger.warning("Better Hindsight recall trust policy registration failed.")
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Recall exactly the current projected query under the configured total deadline."""
@@ -604,10 +641,15 @@ def _tool_json(**payload: object) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
-def create_provider() -> MemoryProvider:
+def create_provider(
+    *,
+    system_prompt_section_registrar: Callable[[], object | None] | None = None,
+) -> MemoryProvider:
     """Construct one zero-argument provider instance for the released Hermes loader."""
 
-    return BetterHindsightMemoryProvider()
+    return BetterHindsightMemoryProvider(
+        system_prompt_section_registrar=system_prompt_section_registrar,
+    )
 
 
 __all__ = [

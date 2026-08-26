@@ -538,6 +538,125 @@ def test_plugin_shim_registers_once_and_exports_no_provider_class_for_loader_fal
     assert not hasattr(hermes_plugin, "BetterHindsightMemoryProvider")
 
 
+def test_plugin_shim_registers_cache_safe_trust_policy_without_provider_duplication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Registration:
+        def __init__(self) -> None:
+            self.active = True
+
+    class _Context:
+        def __init__(self) -> None:
+            self.providers: list[MemoryProvider] = []
+            self.sections: list[tuple[str, str, str, int]] = []
+            self.registrations: list[_Registration] = []
+
+        def register_memory_provider(self, provider: MemoryProvider) -> None:
+            self.providers.append(provider)
+
+        def register_system_prompt_section(
+            self,
+            section_id: str,
+            content: str,
+            *,
+            position: str,
+            max_chars: int,
+        ) -> _Registration:
+            self.sections.append((section_id, content, position, max_chars))
+            registration = _Registration()
+            self.registrations.append(registration)
+            return registration
+
+    context = _Context()
+
+    monkeypatch.setattr(provider_module, "_system_prompt_section_registration", None)
+    hermes_plugin.register(context)
+    hermes_plugin.register(context)
+
+    assert context.sections == []
+    assert len(context.providers) == 2
+    for provider in context.providers:
+        assert provider.system_prompt_block() == EXPECTED_SYSTEM_PROMPT_BLOCK
+
+    _write_config(tmp_path, _base_config())
+    monkeypatch.setattr(
+        provider_module,
+        "acquire_process_runtime",
+        lambda _config: _RecordingHandle(),
+    )
+    for index, provider in enumerate(context.providers):
+        provider.initialize(
+            f"session-{index}",
+            hermes_home=str(tmp_path),
+            platform="cli",
+            agent_context="primary",
+        )
+
+    assert context.sections == [
+        (
+            "better_hindsight.recall_trust_policy",
+            EXPECTED_SYSTEM_PROMPT_BLOCK,
+            "after_memory",
+            len(EXPECTED_SYSTEM_PROMPT_BLOCK),
+        )
+    ]
+    assert len(context.registrations) == 1
+    for provider in context.providers:
+        assert provider.system_prompt_block() == ""
+        provider.shutdown()
+
+    context.registrations[0].active = False
+    context.sections.clear()
+    hermes_plugin.register(context)
+    replacement = context.providers[-1]
+    replacement.initialize(
+        "replacement-session",
+        hermes_home=str(tmp_path),
+        platform="cli",
+        agent_context="primary",
+    )
+
+    assert len(context.registrations) == 2
+    assert len(context.sections) == 1
+    assert replacement.system_prompt_block() == ""
+    replacement.shutdown()
+
+
+def test_failed_prompt_section_registration_keeps_provider_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    def reject_registration() -> object | None:
+        nonlocal attempts
+        attempts += 1
+        return None
+
+    provider = BetterHindsightMemoryProvider(
+        system_prompt_section_registrar=reject_registration,
+    )
+    monkeypatch.setattr(provider_module, "_system_prompt_section_registration", None)
+    _write_config(tmp_path, _base_config())
+    monkeypatch.setattr(
+        provider_module,
+        "acquire_process_runtime",
+        lambda _config: _RecordingHandle(),
+    )
+
+    provider.initialize(
+        "session",
+        hermes_home=str(tmp_path),
+        platform="cli",
+        agent_context="primary",
+    )
+
+    assert attempts == 1
+    assert provider.system_prompt_block() == EXPECTED_SYSTEM_PROMPT_BLOCK
+    provider.shutdown()
+
+
 def test_plugin_shim_ignores_generic_doctor_context() -> None:
     """Hermes generic plugin doctor must not invoke memory-only registration."""
 

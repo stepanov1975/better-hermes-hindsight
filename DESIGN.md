@@ -87,8 +87,8 @@ Better configuration and runtime; another profile in that process fails open rat
 profile boundary. Its root entry points and
 `better_hermes_hindsight` implementation package are installed together by `hermes plugins
 install`; no second package installation or runtime environment is part of deployment. Better
-implements its narrow Hindsight 0.8.5/0.9.1 wire contract over `aiohttp`, uses `tiktoken` only to
-match those servers' recall input validation, and does not import the Hindsight Python SDK, so the
+implements its narrow Hindsight 0.8.5/0.9.1/0.9.2 wire contract over `aiohttp`, uses `tiktoken` only
+to match those servers' recall input validation, and does not import the Hindsight Python SDK, so the
 untouched bundled provider remains available.
 
 The Git commit is the working identity. A tag or version bump is optional and does not define compatibility. Validation records the current Better and Hermes commits and tests behavior against that checkout.

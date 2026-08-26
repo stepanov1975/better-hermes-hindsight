@@ -47,7 +47,8 @@ Focused tests are sufficient while iterating. Documentation-only changes need li
 - Preserve the scope and invariants in `DEVELOPMENT.md` and `DESIGN.md`.
 - Add tests for public behavior and realistic failure paths, not for prose, commit hashes, plans, or workflow implementation details.
 - Test against the intended current Hermes checkout. Record its identity, but do not hard-code it as a permanent compatibility requirement.
-- Keep the internal HTTP contract pinned behaviorally to supported Hindsight API versions 0.8.5 and 0.9.1; do not add the Hindsight Python SDK back as a runtime dependency.
+- Keep the internal HTTP contract pinned behaviorally to supported Hindsight API versions 0.8.5,
+  0.9.1, and 0.9.2; do not add the Hindsight Python SDK back as a runtime dependency.
 - Never place credentials, private endpoints, bank IDs, principal IDs, memories, transcripts, databases, or logs in the repository.
 - Use fake services and temporary Hermes homes before an explicitly enabled isolated live test.
 - Do not modify the active bundled Hermes/Hindsight deployment as part of tests.

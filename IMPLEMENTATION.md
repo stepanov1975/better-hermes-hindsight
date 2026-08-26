@@ -8,7 +8,7 @@ There is no separate canonical implementation plan, plan hash, immutable candida
 
 The provider currently includes:
 
-- external Hindsight 0.8.5 and 0.9.1 connectivity;
+- external Hindsight 0.8.5, 0.9.1, and 0.9.2 connectivity;
 - bounded, fail-open current-query recall;
 - model tools for bounded recall, durable retention admission, and passive status/query-free
   diagnostics;
@@ -36,7 +36,8 @@ The existing runtime should not be rewritten merely to reduce line count. Simpli
   snapshot; PyPI and uploaded distribution assets remain outside the deployment path.
 - Ordinary-user deployment uses `hermes plugins install`; no separate package installation is
   required.
-- Keep the narrow internal HTTP contract aligned with supported Hindsight API versions 0.8.5 and 0.9.1.
+- Keep the narrow internal HTTP contract aligned with supported Hindsight API versions 0.8.5,
+  0.9.1, and 0.9.2.
 - Run Better through Hermes's normal memory-provider lifecycle alongside the untouched bundled
   Hindsight client; keep live-write validation on an isolated Hindsight service/bank.
 

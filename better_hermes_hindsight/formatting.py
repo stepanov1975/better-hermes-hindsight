@@ -109,8 +109,8 @@ def project_query(query: str, *, max_chars: int, max_tokens: int) -> str:
 
     Ordinary bracketed or XML-like user text is preserved. Only complete Hermes memory-context
     blocks and complete Better Hindsight evidence blocks are recognized as provider envelopes.
-    Token counting matches Hindsight 0.8.5 and 0.9.1: cl100k_base with special-token literals
-    treated as ordinary text.
+    Token counting matches Hindsight 0.8.5, 0.9.1, and 0.9.2: cl100k_base with
+    special-token literals treated as ordinary text.
     """
 
     if not isinstance(query, str):
