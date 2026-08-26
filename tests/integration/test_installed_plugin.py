@@ -161,6 +161,11 @@ def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
     assert all((installed / name).is_file() for name in ROOT_PLUGIN_FILES)
     assert (installed / "better_hermes_hindsight" / "provider.py").is_file()
     assert (installed / ".git").is_dir()
+    installed_commit = _run(["git", "rev-parse", "HEAD"], cwd=installed).stdout.strip()
+    install_metadata = json.loads(
+        (home / "plugins/.install-metadata.json").read_text(encoding="utf-8")
+    )
+    assert install_metadata["better_hindsight"]["revision"] == installed_commit
 
     assert "provider: better_hindsight" in (home / "config.yaml").read_text(encoding="utf-8")
 

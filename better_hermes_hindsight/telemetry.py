@@ -44,11 +44,67 @@ def _valid_commit(value: object) -> str | None:
     return candidate
 
 
+def _installed_commit(hermes_home: Path) -> str | None:
+    path = hermes_home / "plugins/.install-metadata.json"
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(document, dict):
+            return None
+        plugin = document.get("better_hindsight")
+        if not isinstance(plugin, dict):
+            return None
+        return _valid_commit(plugin.get("revision"))
+    except (OSError, TypeError, ValueError):
+        return None
+
+
+def _plugin_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _checkout_commit(plugin_root: Path) -> str | None:
+    git_dir = plugin_root / ".git"
+    if not git_dir.is_dir():
+        return None
+    try:
+        head = (git_dir / "HEAD").read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
+        return None
+    candidate = _valid_commit(head)
+    if candidate is not None:
+        return candidate
+    prefix = "ref: "
+    if not head.startswith(prefix):
+        return None
+    ref_name = head[len(prefix) :]
+    ref_path = Path(ref_name)
+    if not ref_name.startswith("refs/") or ref_path.is_absolute() or ".." in ref_path.parts:
+        return None
+    try:
+        candidate = _valid_commit((git_dir / ref_path).read_text(encoding="ascii").strip())
+    except (OSError, UnicodeError):
+        candidate = None
+    if candidate is not None:
+        return candidate
+    try:
+        packed_refs = (git_dir / "packed-refs").read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeError):
+        return None
+    for line in packed_refs:
+        commit, separator, packed_ref = line.partition(" ")
+        if separator and packed_ref == ref_name:
+            return _valid_commit(commit)
+    return None
+
+
 def deployed_identity(hermes_home: Path | None = None) -> dict[str, str]:
     """Return bounded plugin identity without exposing installation paths."""
 
-    del hermes_home
     candidate = _valid_commit(os.environ.get("BETTER_HINDSIGHT_COMMIT"))
+    if candidate is None and hermes_home is not None:
+        candidate = _installed_commit(hermes_home)
+    if candidate is None:
+        candidate = _checkout_commit(_plugin_root())
     return {"commit": candidate or "unknown", "version": __version__[:64]}
 
 
