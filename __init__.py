@@ -17,22 +17,23 @@ class _RegistrationContext(Protocol):
 def register(ctx: _RegistrationContext) -> None:
     """Register one provider instance when loaded by the memory-plugin host."""
 
-    system_section_registered = False
     register_system_prompt_section = getattr(ctx, "register_system_prompt_section", None)
-    if callable(register_system_prompt_section):
-        register_system_prompt_section(
+
+    def register_trust_policy() -> object | None:
+        if not callable(register_system_prompt_section):
+            return None
+        return register_system_prompt_section(
             "better_hindsight.recall_trust_policy",
             SYSTEM_PROMPT_BLOCK,
             position="after_memory",
             max_chars=len(SYSTEM_PROMPT_BLOCK),
         )
-        system_section_registered = True
 
     register_memory_provider = getattr(ctx, "register_memory_provider", None)
     if callable(register_memory_provider):
         register_memory_provider(
             create_provider(
-                legacy_system_prompt_block=not system_section_registered,
+                system_prompt_section_registrar=register_trust_policy,
             )
         )
 
