@@ -3,13 +3,15 @@
 ## Model-facing tools
 
 - `better_hindsight_recall(query)` performs bounded recall through the configured authorized path.
+  It returns a structured `memories` list with a fixed untrusted-history label and without internal
+  ranking scores or source-identifier counts.
 - `better_hindsight_retain(content, context?)` durably admits one agent-selected memory to the local
-  outbox when retention is enabled for an authorized primary handle. Its structured acknowledgement
-  distinguishes local admission from asynchronous remote delivery. Model input is capped before
+  outbox when retention is enabled for an authorized primary handle. Its canonical acknowledgement is
+  `queued_locally` or `already_queued`; neither claims remote delivery. Model input is capped before
   construction at 8,192 content characters, 256 context characters, and 2,000 canonical segments.
-- `better_hindsight_status()` combines passive outbox health with bounded, query-free recall
-  diagnostic summaries (at most 10 plus `records_listed`, the count produced by the existing
-  20-record listing bound). It performs no remote call and cannot replay private queries.
+- `better_hindsight_status()` returns compact passive outbox health. Healthy output contains queue
+  state and total queued work; degraded output adds only actionable nonzero counts and relevant state.
+  It performs no remote call. Full diagnostics remain operator-only.
 
 The retain tool accepts no per-call bank, tag, scope, timeout, or retry overrides. Exact diagnostic
 replay and mission changes remain operator-only.

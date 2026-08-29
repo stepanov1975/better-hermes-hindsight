@@ -13,6 +13,9 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ### Fixed
 
+- Reduced model-facing output to actionable state: recall omits internal score and source-count
+  metadata, explicit recall returns structured memories, retain returns one canonical local-admission
+  outcome, and status no longer exposes operator-only diagnostic records or healthy-path internals.
 - Report the active standard Git plugin commit in passive status by reading Hermes installation
   metadata, with a read-only local checkout fallback for legacy installs.
 - Register the recall trust policy through Hermes's cache-safe plugin system-prompt section when

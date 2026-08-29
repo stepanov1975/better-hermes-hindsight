@@ -251,19 +251,14 @@ def test_automatic_context_is_deterministic_ranked_jsonl_with_only_allowed_field
     assert project_query(first, max_chars=len(first) + 1, max_tokens=10_000) == ""
     assert records == [
         {
-            "final_score": 0.9,
             "memory": injection_text,
             "mentioned_at": "2026-01-04T05:06:07Z",
             "occurred_end": "2026-01-03",
             "occurred_start": "2026-01-02",
-            "reranker_score": 0.7,
-            "source_fact_count": 2,
             "type": "observation",
         },
         {
-            "final_score": 0.6,
             "memory": "second ranked memory",
-            "source_fact_count": 0,
             "type": "world",
         },
     ]
@@ -278,6 +273,9 @@ def test_automatic_context_is_deterministic_ranked_jsonl_with_only_allowed_field
         "chunk_id",
         "source_fact_ids",
         "source_facts",
+        "source_fact_count",
+        "final_score",
+        "reranker_score",
         "semantic_score",
         "keyword_score",
         "trace",
@@ -446,10 +444,7 @@ def test_whole_utf8_envelope_exact_fit_and_one_byte_over_truncates_only_memory_t
     assert isinstance(records[0]["memory"], str)
     assert str(records[0]["memory"]).endswith(TEXT_TRUNCATION_MARKER)
     assert set(records[0]) == {
-        "final_score",
         "memory",
-        "reranker_score",
-        "source_fact_count",
         "type",
     }
     assert json.loads(json.dumps(records[0], ensure_ascii=False, allow_nan=False)) == records[0]
@@ -501,7 +496,7 @@ def test_record_too_large_even_with_minimal_marked_text_returns_empty() -> None:
     assert format_recall_context(RecallResponse(results=[]), max_bytes=8_192) == ""
 
 
-def test_malformed_or_non_json_score_data_fails_open_without_partial_json() -> None:
+def test_unexposed_score_data_does_not_affect_model_context() -> None:
     nan_result = SimpleNamespace(
         text="memory",
         type="observation",
@@ -513,7 +508,9 @@ def test_malformed_or_non_json_score_data_fails_open_without_partial_json() -> N
     )
     malformed_response = SimpleNamespace(results="not-a-result-list")
 
-    assert format_recall_context(SimpleNamespace(results=[nan_result]), max_bytes=8_192) == ""
+    assert _json_records(
+        format_recall_context(SimpleNamespace(results=[nan_result]), max_bytes=8_192)
+    ) == [{"memory": "memory", "type": "observation"}]
     assert format_recall_context(malformed_response, max_bytes=8_192) == ""
 
 

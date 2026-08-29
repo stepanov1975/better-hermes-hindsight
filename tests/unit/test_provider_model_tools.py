@@ -131,13 +131,7 @@ def test_retain_tool_queues_agent_selected_content_with_structured_acknowledgeme
         },
     )
 
-    assert json.loads(raw) == {
-        "admission": "admitted",
-        "delivery": "queued",
-        "duplicate_segments": 1,
-        "inserted_segments": 2,
-        "result": "accepted",
-    }
+    assert json.loads(raw) == {"result": "queued_locally"}
     assert handle.admissions == [
         (
             "better-hindsight-model-retain-v1",
@@ -186,13 +180,7 @@ def test_retain_tool_rejects_malformed_arguments_before_runtime_work(
     [
         (
             AdmissionResult(AdmissionStatus.DUPLICATE, duplicate_count=1),
-            {
-                "admission": "duplicate",
-                "delivery": "already_queued",
-                "duplicate_segments": 1,
-                "inserted_segments": 0,
-                "result": "accepted",
-            },
+            {"result": "already_queued"},
         ),
         (
             AdmissionResult(AdmissionStatus.CAPACITY_EXCEEDED),
@@ -252,7 +240,7 @@ def test_retain_tool_failure_and_nonprimary_handle_are_sanitized(
     }
 
 
-def test_status_tool_combines_passive_queue_health_and_query_free_diagnostics(
+def test_status_tool_returns_compact_actionable_degraded_queue_health(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -266,40 +254,39 @@ def test_status_tool_combines_passive_queue_health_and_query_free_diagnostics(
         "counts": {"mismatch": 0, "pending": 2, "retry": 1, "sending": 0},
         "result": "degraded",
     }
-    diagnostic_payload: dict[str, object] = {
-        "command": "diagnostics_list",
-        "records": [{"elapsed_ms": 6000, "outcome": "timeout", "record_id": "safe-id"}],
-        "result": "ok",
-    }
+    status_payload.update(
+        {
+            "age_bucket": "1h_to_lt_24h",
+            "last_error_category": "retain_timeout",
+            "next_retry_bucket": "5m_to_lt_1h",
+            "outbox": "ready",
+            "sender_ownership": "held",
+        }
+    )
     seen_configs: list[object] = []
 
     def passive_status(config: object) -> ManagementResult:
         seen_configs.append(config)
         return ManagementResult(payload=status_payload, exit_code=1)
 
-    def passive_diagnostics(config: object) -> ManagementResult:
-        seen_configs.append(config)
-        return ManagementResult(payload=diagnostic_payload, exit_code=0)
-
     monkeypatch.setattr(provider_module, "status", passive_status)
-    monkeypatch.setattr(provider_module, "list_diagnostics", passive_diagnostics)
 
     raw = provider.handle_tool_call("better_hindsight_status", {})
 
     assert json.loads(raw) == {
-        "diagnostics": {
-            "capture_enabled": True,
-            **diagnostic_payload,
-            "records_listed": 1,
-        },
+        "age_bucket": "1h_to_lt_24h",
+        "last_error_category": "retain_timeout",
+        "next_retry_bucket": "5m_to_lt_1h",
+        "pending": 2,
+        "queued": 3,
         "result": "degraded",
-        "status": status_payload,
+        "retention_queue": "ready",
+        "retrying": 1,
     }
-    assert len(seen_configs) == 2
-    assert seen_configs[0] is seen_configs[1]
+    assert len(seen_configs) == 1
 
 
-def test_status_tool_limits_diagnostic_records_for_agent_context(
+def test_status_tool_returns_minimal_healthy_queue_health(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -308,28 +295,29 @@ def test_status_tool_limits_diagnostic_records_for_agent_context(
     monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
     provider = BetterHindsightMemoryProvider()
     _initialize(provider, tmp_path)
-    records = [{"record_id": f"record-{index:02d}"} for index in range(12)]
     monkeypatch.setattr(
         provider_module,
         "status",
-        lambda _config: ManagementResult(payload={"result": "ok"}, exit_code=0),
-    )
-    monkeypatch.setattr(
-        provider_module,
-        "list_diagnostics",
         lambda _config: ManagementResult(
-            payload={"command": "diagnostics_list", "records": records, "result": "ok"},
+            payload={
+                "command": "status",
+                "counts": {"mismatch": 0, "pending": 0, "retry": 0, "sending": 0},
+                "deployed": {"commit": "opaque", "version": "0.4.0"},
+                "error_counts": {"retain_failed": 0},
+                "outbox": "ready",
+                "result": "ok",
+                "sender_ownership": "held",
+            },
             exit_code=0,
         ),
     )
 
     payload = json.loads(provider.handle_tool_call("better_hindsight_status", {}))
 
-    assert payload["diagnostics"]["records"] == records[:10]
-    assert payload["diagnostics"]["records_listed"] == 12
+    assert payload == {"queued": 0, "result": "ok", "retention_queue": "ready"}
 
 
-def test_status_tool_preserves_sanitized_diagnostic_listing_failure(
+def test_status_tool_maps_passive_status_failure_to_fixed_tool_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -341,26 +329,15 @@ def test_status_tool_preserves_sanitized_diagnostic_listing_failure(
     monkeypatch.setattr(
         provider_module,
         "status",
-        lambda _config: ManagementResult(payload={"result": "ok"}, exit_code=0),
-    )
-    diagnostic_error: dict[str, object] = {
-        "command": "diagnostics_list",
-        "error": "diagnostics_unavailable",
-        "result": "error",
-    }
-    monkeypatch.setattr(
-        provider_module,
-        "list_diagnostics",
-        lambda _config: ManagementResult(payload=diagnostic_error, exit_code=3),
+        lambda _config: ManagementResult(
+            payload={"command": "status", "error": "status_unavailable", "result": "error"},
+            exit_code=3,
+        ),
     )
 
     payload = json.loads(provider.handle_tool_call("better_hindsight_status", {}))
 
-    assert payload == {
-        "diagnostics": {"capture_enabled": True, **diagnostic_error},
-        "result": "error",
-        "status": {"result": "ok"},
-    }
+    assert payload == {"error": "Better Hindsight status is unavailable for this handle."}
 
 
 def test_status_tool_rejects_arguments_and_sanitizes_unexpected_failures(

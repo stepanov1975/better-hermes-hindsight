@@ -29,7 +29,7 @@ Install Better through the standard Hermes plugin lifecycle and use the least-pr
 - opt-in automatic retention;
 - destination-bound durable outbox rows;
 - model-facing writes only through the same opt-in, redacted, destination-bound local admission path;
-- passive model-facing status with query-free diagnostic summaries and no replay;
+- compact passive model-facing queue status with operator-only diagnostics and replay;
 - no model-facing reflection, mission/configuration changes, or bank/policy overrides;
 - confirmation-gated mission writes with readback;
 - no automatic replay to another destination or remote deletion.

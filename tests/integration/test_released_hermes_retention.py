@@ -350,13 +350,7 @@ def test_released_model_retain_and_status_tools_route_through_durable_runtime(
             )
         )
 
-        assert result == {
-            "admission": "admitted",
-            "delivery": "queued",
-            "duplicate_segments": 0,
-            "inserted_segments": 1,
-            "result": "accepted",
-        }
+        assert result == {"result": "queued_locally"}
         assert harness.manager.flush_pending(timeout=2.0) is True
         harness.loop.run(_wait_for_retain_delay(harness.server))
         rows = _read_rows(harness.config)
@@ -365,11 +359,12 @@ def test_released_model_retain_and_status_tools_route_through_durable_runtime(
         assert (rows[0].document_id, rows[0].content) == expected_identity
 
         tool_status = json.loads(harness.manager.handle_tool_call("better_hindsight_status", {}))
-        assert tool_status["result"] == "degraded"
-        assert tool_status["status"]["counts"]["sending"] == 1
-        assert tool_status["diagnostics"]["capture_enabled"] is False
-        assert tool_status["diagnostics"]["records"] == []
-        assert tool_status["diagnostics"]["records_listed"] == 0
+        assert tool_status == {
+            "queued": 1,
+            "result": "degraded",
+            "retention_queue": "ready",
+            "sending": 1,
+        }
 
         records = harness.loop.run(_retain_records(harness.server))
         assert len(records) == 1

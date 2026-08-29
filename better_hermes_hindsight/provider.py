@@ -18,11 +18,12 @@ from .client import is_available as is_hindsight_available
 from .config import BetterHindsightConfig, load_config
 from .diagnostics import enqueue_recall_capture, initialize_recall_capture
 from .formatting import (
+    RECALL_TRUST_LABEL,
     SYSTEM_PROMPT_BLOCK,
-    format_recall_context_with_count,
+    format_recall_context_with_records,
     project_query,
 )
-from .management import list_diagnostics, status
+from .management import status
 from .outbox import AdmissionStatus
 from .runtime import (
     AsyncCallTimeoutError,
@@ -47,7 +48,7 @@ RETENTION_ADMISSION_REJECTED_DIAGNOSTIC = "Better Hindsight local retention admi
 _RECALL_TOOL_NAME = "better_hindsight_recall"
 _RECALL_TOOL_INVALID_QUERY = "Better Hindsight recall requires one non-empty text query."
 _RECALL_TOOL_UNAVAILABLE = "Better Hindsight recall is unavailable."
-_RECALL_TOOL_NO_RESULTS = "No relevant memories found."
+
 _RETAIN_TOOL_NAME = "better_hindsight_retain"
 _RETAIN_TOOL_INVALID_CONTENT = (
     "Better Hindsight retention requires non-empty text content and an optional non-empty text "
@@ -65,7 +66,7 @@ _RETAIN_TOOL_SOURCE_MARKER = (
 _STATUS_TOOL_NAME = "better_hindsight_status"
 _STATUS_TOOL_INVALID_ARGUMENTS = "Better Hindsight status does not accept arguments."
 _STATUS_TOOL_UNAVAILABLE = "Better Hindsight status is unavailable for this handle."
-_STATUS_TOOL_MAX_DIAGNOSTICS = 10
+
 _UNKNOWN_TOOL = "Unknown Better Hindsight tool."
 
 
@@ -220,8 +221,8 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         recalled = self._recall_projected(projected, warn_on_format_failure=False)
         if recalled is None:
             return ""
-        context, count = recalled
-        self._last_recall_count = count
+        context, records = recalled
+        self._last_recall_count = len(records)
         return context
 
     def recall_status(self) -> RecallStatus | None:
@@ -339,8 +340,12 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         recalled = self._recall_projected(projected, warn_on_format_failure=True)
         if recalled is None:
             return _tool_json(error=_RECALL_TOOL_UNAVAILABLE)
-        context, _count = recalled
-        return _tool_json(result=context or _RECALL_TOOL_NO_RESULTS)
+        _context, records = recalled
+        return _tool_json(
+            memories=records,
+            result="ok" if records else "empty",
+            trust=RECALL_TRUST_LABEL,
+        )
 
     def _handle_retain_tool(self, args: dict[str, Any]) -> str:
         if (
@@ -402,14 +407,10 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             return _tool_json(error=_RETAIN_TOOL_REJECTED, reason="local_failure")
         if not admission.accepted:
             return _tool_json(error=_RETAIN_TOOL_REJECTED, reason=admission.status.value)
-        delivery = "already_queued" if admission.status is AdmissionStatus.DUPLICATE else "queued"
-        return _tool_json(
-            admission=admission.status.value,
-            delivery=delivery,
-            duplicate_segments=admission.duplicate_count,
-            inserted_segments=admission.inserted_count,
-            result="accepted",
+        result = (
+            "already_queued" if admission.status is AdmissionStatus.DUPLICATE else "queued_locally"
         )
+        return _tool_json(result=result)
 
     def _handle_status_tool(self, args: dict[str, Any]) -> str:
         if not isinstance(args, dict) or args:
@@ -420,39 +421,19 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
 
         try:
             status_result = status(config)
-            diagnostic_result = list_diagnostics(config)
         except Exception:
             return _tool_json(error=_STATUS_TOOL_UNAVAILABLE)
-        status_outcome = status_result.payload.get("result")
-        diagnostic_outcome = diagnostic_result.payload.get("result")
-        diagnostic_payload = dict(diagnostic_result.payload)
-        if diagnostic_outcome != "error":
-            records = diagnostic_payload.get("records")
-            if not isinstance(records, list):
-                return _tool_json(error=_STATUS_TOOL_UNAVAILABLE)
-            diagnostic_payload["records"] = records[:_STATUS_TOOL_MAX_DIAGNOSTICS]
-            diagnostic_payload["records_listed"] = len(records)
-        if "error" in {status_outcome, diagnostic_outcome}:
-            overall = "error"
-        elif status_outcome == "degraded":
-            overall = "degraded"
-        else:
-            overall = "ok"
-        return _tool_json(
-            diagnostics={
-                "capture_enabled": config.diagnostics.enabled,
-                **diagnostic_payload,
-            },
-            result=overall,
-            status=status_result.payload,
-        )
+        payload = _compact_status_payload(status_result.payload)
+        if payload is None:
+            return _tool_json(error=_STATUS_TOOL_UNAVAILABLE)
+        return _tool_json(**payload)
 
     def _recall_projected(
         self,
         projected: str,
         *,
         warn_on_format_failure: bool,
-    ) -> tuple[str, int] | None:
+    ) -> tuple[str, list[dict[str, object]]] | None:
         config = self._config
         runtime = self._runtime
         if not self._recall_enabled or config is None or runtime is None:
@@ -524,9 +505,9 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             return None
         if result_count == 0:
             record("empty", formatted_bytes=0, result_count=0)
-            return "", 0
+            return "", []
         try:
-            context, formatted_count = format_recall_context_with_count(
+            context, records = format_recall_context_with_records(
                 response,
                 max_bytes=config.recall.context_max_bytes,
             )
@@ -544,7 +525,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             formatted_bytes=len(context.encode("utf-8")),
             result_count=result_count,
         )
-        return context, formatted_count
+        return context, records
 
     def shutdown(self) -> None:
         """Drop this handle idempotently without finalizing process-owned sibling resources."""
@@ -621,9 +602,8 @@ def _status_tool_schema() -> dict[str, Any]:
     return {
         "name": _STATUS_TOOL_NAME,
         "description": (
-            "Inspect passive Better Hindsight health, including the durable retention queue and "
-            "query-free recall diagnostic summaries. Makes no remote call and never replays "
-            "private diagnostic queries."
+            "Inspect compact passive health for the durable Better Hindsight retention queue. "
+            "Makes no remote call and exposes extra detail only when the queue is degraded."
         ),
         "parameters": {
             "type": "object",
@@ -635,6 +615,55 @@ def _status_tool_schema() -> dict[str, Any]:
 
 def _optional_string(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _compact_status_payload(payload: object) -> dict[str, object] | None:
+    """Project operator status into the smallest model-actionable queue snapshot."""
+
+    if not isinstance(payload, dict):
+        return None
+    outcome = payload.get("result")
+    outbox = payload.get("outbox")
+    counts = payload.get("counts")
+    if outcome not in {"ok", "degraded"} or not isinstance(outbox, str) or not outbox:
+        return None
+    if not isinstance(counts, dict):
+        return None
+
+    queue_counts: dict[str, int] = {}
+    for name in ("mismatch", "pending", "retry", "sending"):
+        value = counts.get(name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return None
+        queue_counts[name] = value
+
+    compact: dict[str, object] = {
+        "queued": sum(queue_counts.values()),
+        "result": outcome,
+        "retention_queue": outbox,
+    }
+    if outcome == "ok":
+        return compact
+
+    count_names = {
+        "mismatch": "mismatched",
+        "pending": "pending",
+        "retry": "retrying",
+        "sending": "sending",
+    }
+    for source, target in count_names.items():
+        if queue_counts[source] > 0:
+            compact[target] = queue_counts[source]
+    age_bucket = payload.get("age_bucket")
+    if age_bucket in {"1h_to_lt_24h", "gte_24h"}:
+        compact["age_bucket"] = age_bucket
+    for name in ("next_retry_bucket", "last_error_category"):
+        value = payload.get(name)
+        if isinstance(value, str) and value and value != "none":
+            compact[name] = value
+    if payload.get("sender_ownership") == "unavailable":
+        compact["sender_ownership"] = "unavailable"
+    return compact
 
 
 def _tool_json(**payload: object) -> str:
