@@ -26,8 +26,7 @@ Keep the provider narrow:
 - normal Hermes memory-provider lifecycle;
 - bounded current-query recall;
 - optional durable automatic retention;
-- bounded model tools for recall, durable retention admission, and passive status/query-free
-  diagnostics;
+- bounded model tools for recall, durable retention admission, and compact passive queue status;
 - operator-only mission changes, diagnostic replay, canary, and watchdog commands.
 
 Do not add embedded service management, cloud routing, multi-user bank templates, multiplexed

@@ -58,7 +58,7 @@ remaining policy and verification options.
 Compared with bundled Hindsight, this plugin deliberately focuses on:
 
 - bounded recall for the **current** user query;
-- three bounded model tools for recall, durable retention admission, and passive status/diagnostics;
+- three bounded model tools for recall, durable retention admission, and compact passive queue status;
 - opt-in automatic retention through a durable SQLite outbox;
 - deterministic segmentation and reconstructable source metadata;
 - stable replace-mode retries after timeout or restart;
@@ -100,13 +100,13 @@ or retrieval quality.
 | --- | --- | --- |
 | Installation target | Standard Git plugin for a supported external Hindsight 0.8.5, 0.9.1, or 0.9.2 service | Included with Hermes; interactive setup supports Hindsight Cloud, a local embedded service, or an external service |
 | Automatic recall | When enabled, recalls against the current user query, synchronously under character, token, response-size, and total-time bounds | Background previous-query recall by default; optional synchronous current-query recall |
-| Recalled context | Complete byte-bounded JSONL records with available type, score, time, and evidence metadata; redacted and explicitly framed as stale, untrusted evidence | Formatted memory text or a reflect synthesis with configurable preamble, token budget, types, and tags |
+| Recalled context | Complete byte-bounded JSONL records with available type and time metadata; redacted and explicitly framed as stale, untrusted evidence | Formatted memory text or a reflect synthesis with configurable preamble, token budget, types, and tags |
 | Automatic retention | Opt-in; authorized, eligible turns are admitted all-or-none to a bounded SQLite WAL outbox before asynchronous delivery | Enabled by default; completed turns enter a process-local FIFO writer and then optional server-side async processing |
 | Retained payload | Pattern-redacted deterministic segments with a hashed session identity and bounded provenance metadata | Labeled user/assistant transcripts with richer session, platform, user, chat, and lineage metadata |
 | Crash behavior before remote delivery | Committed outbox rows survive process restart and are retried | Locally queued writer jobs are not persistent; shutdown drains them only within a bounded wait |
 | Retry/document strategy | Stable per-segment document IDs, `update_mode="replace"`, destination binding, and bounded retry backoff | Session-scoped `update_mode="append"` where supported, with a process-unique document fallback for older APIs |
 | Read-after-write freshness | Eventual: an immediately following recall can race the outbox sender | Background prefetch can wait for the local writer and server-side async retain operations before recalling |
-| Model-facing tools | Bounded recall, durable local retain admission, and passive status/query-free diagnostics; no reflection or policy overrides | Recall, retain, and reflect tools in tools or hybrid mode |
+| Model-facing tools | Bounded structured recall, durable local retain admission, and compact passive queue status; no reflection or policy overrides | Recall, retain, and reflect tools in tools or hybrid mode |
 | Routing and authorization | One static bank with an exact single-principal allowlist | Static or templated banks across profile, workspace, platform, user, or session contexts |
 | Bank policy operations | Explicit operator check/apply for retain and observations missions | No equivalent mission drift check/apply/readback operator command |
 | Operations | Automatic recall status indicator, passive outbox status, structured diagnostics, replay, synthetic canary, watchdog evaluator, and mission drift checks | Interactive setup, recall/retain status indicators, embedded-service lifecycle, and normal provider logs |

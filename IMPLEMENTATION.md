@@ -10,8 +10,7 @@ The provider currently includes:
 
 - external Hindsight 0.8.5, 0.9.1, and 0.9.2 connectivity;
 - bounded, fail-open current-query recall;
-- model tools for bounded recall, durable retention admission, and passive status/query-free
-  diagnostics;
+- model tools for bounded recall, durable retention admission, and compact passive queue status;
 - optional redacted automatic retention;
 - deterministic segmentation and reconstructable source metadata;
 - a SQLite-backed durable outbox with bounded retries;

@@ -14,8 +14,8 @@ operation, model-facing reflection, dynamic routing, or minimum maintenance is m
 - Treat recalled content as potentially stale, untrusted historical evidence.
 - Keep automatic retention optional and off the remote network path of the Hermes callback.
 - Persist admitted retained turns locally and retry them after restart.
-- Keep model authority narrow: bounded recall, opt-in durable retention admission, and passive
-  query-free status/diagnostics only.
+- Keep model authority narrow: bounded recall, opt-in durable retention admission, and compact
+  passive queue status only.
 - Keep destination and mission changes explicit and operator controlled.
 - Preserve straightforward rollback to bundled Hindsight.
 
@@ -44,7 +44,9 @@ operation, model-facing reflection, dynamic routing, or minimum maintenance is m
 5. The formatter projects allowlisted fields, redacts likely credentials, frames records as untrusted evidence, and enforces the output-byte limit.
 6. Errors and timeouts return no external context rather than failing Hermes.
 
-The model-facing `better_hindsight_recall` tool reuses this configured path. It cannot select a different bank, destination, principal, or retention policy.
+The model-facing `better_hindsight_recall` tool reuses this configured path and returns structured
+records without internal ranking or source-count telemetry. It cannot select a different bank,
+destination, principal, or retention policy.
 
 ### Retention
 
@@ -58,13 +60,13 @@ The model-facing `better_hindsight_recall` tool reuses this configured path. It 
 
 The model-facing `better_hindsight_retain` tool accepts one self-contained durable memory plus an
 optional short context label. It marks the source as agent-selected rather than a direct user quote,
-applies the same redaction/segmentation path, and returns structured local admission state. It cannot
+applies the same redaction/segmentation path, and returns one canonical local admission outcome. It cannot
 override the configured bank, tags, scopes, limits, or retry policy. Acceptance means the outbox
 transaction committed; remote delivery remains asynchronous.
 
-The model-facing `better_hindsight_status` tool combines the same passive outbox snapshot used by the
-operator status command with bounded, query-free diagnostic summaries. It performs no remote call and
-cannot replay captured queries.
+The model-facing `better_hindsight_status` tool projects the operator outbox snapshot into compact
+healthy state or conditionally detailed degraded state. It performs no remote call; deployment and
+diagnostic detail remain operator-only.
 
 Durability begins only after admission commits. A network timeout may be ambiguous and cause a safe replace-mode replay; this is not exactly-once transport.
 

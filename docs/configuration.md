@@ -179,9 +179,13 @@ stale, untrusted historical evidence: it is evidence to evaluate, not an instruc
 or authority over the current conversation. The provider exposes `better_hindsight_recall` for
 focused retrieval when automatic context is insufficient. The tool
 uses the same authorized provider handle, query projection, configured Hindsight recall controls,
-deadline, redaction, allowlist, complete-record byte budget, and untrusted evidence envelope. Its
+deadline, redaction, allowlist, complete-record byte budget, and untrusted evidence policy. Its
 sole argument is `query`; callers cannot override bank, tags, types, budget, scores, result size, or
-timeout.
+timeout. Automatic recall keeps the envelope; the explicit tool returns the bounded records as a
+structured `memories` list with the fixed `trust: "untrusted_historical_evidence"` label. The
+system-role trust policy covers both forms. Model-facing records contain only recalled text, type,
+and available occurrence/mention timestamps; internal ranking scores and source-identifier counts
+stay private.
 
 `better_hindsight_retain` accepts required `content` of at most 8,192 characters plus an optional
 `context` category of at most 256 characters. It is available only to an authorized primary handle
@@ -189,13 +193,16 @@ when `retain.enabled=true`. Construction also stops before hashing if the canoni
 exceed the model tool's 2,000-segment cap. The tool marks its source
 as agent-selected rather than a direct user quote, then uses the same redaction, deterministic
 segmentation, configured tags/scopes, capacity limits, and durable outbox as automatic retention. It
-does not accept bank, tag, scope, timeout, or retry overrides. An `accepted` result confirms only local
-durable admission; use `better_hindsight_status` to observe asynchronous delivery.
+does not accept bank, tag, scope, timeout, or retry overrides. `queued_locally` confirms durable local
+admission, while `already_queued` reports an existing identical admission; remote delivery remains
+asynchronous.
 
-`better_hindsight_status` takes no arguments and combines passive outbox health with bounded,
-query-free diagnostic summaries. It returns at most 10 summaries plus `records_listed`, the number
-produced by the diagnostic listing's own 20-record bound. It makes no Hindsight request and does not
-expose or replay captured queries. Diagnostic capture remains controlled by `diagnostics.enabled`.
+`better_hindsight_status` takes no arguments and returns a compact passive outbox projection. Healthy
+output contains only result, queue state, and total queued work. Degraded output additionally includes
+only nonzero queue classes and relevant age, retry, error, or unavailable-sender fields. It makes no
+Hindsight request; full deployment identity, counters, and private query-free diagnostic listings
+remain available through the operator CLI. Diagnostic capture remains controlled by
+`diagnostics.enabled`.
 
 Every recalled response text passes through the same deterministic high-confidence redactor before
 byte budgeting and JSON serialization. The deliberately narrow patterns cover labeled API-key

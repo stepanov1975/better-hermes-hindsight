@@ -311,9 +311,9 @@ def test_current_loader_discovers_active_standard_plugin_cli_and_recall_tool(
             },
             {
                 "description": (
-                    "Inspect passive Better Hindsight health, including the durable retention "
-                    "queue and query-free recall diagnostic summaries. Makes no remote call and "
-                    "never replays private diagnostic queries."
+                    "Inspect compact passive health for the durable Better Hindsight retention "
+                    "queue. Makes no remote call and exposes extra detail only when the queue is "
+                    "degraded."
                 ),
                 "name": "better_hindsight_status",
                 "parameters": {
