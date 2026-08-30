@@ -102,6 +102,12 @@ def _exact_keys(value: Mapping[str, object], allowed: set[str], field: str) -> N
 def _nonempty_string(value: object, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         _fail(f"{field} must be a non-empty string")
+    return _unicode_string(value, field)
+
+
+def _unicode_string(value: object, field: str) -> str:
+    if not isinstance(value, str):
+        _fail(f"{field} must be text")
     try:
         value.encode("utf-8")
     except UnicodeEncodeError:
@@ -341,12 +347,24 @@ def comparison_configs(
     return config, replace(config, recall=preferred_recall)
 
 
+def _validate_live_formatter_input(response: RecallResponse) -> None:
+    for index, result in enumerate(response.results):
+        field = f"live results[{index}]"
+        _nonempty_string(result.id, f"{field}.id")
+        _nonempty_string(result.text, f"{field}.text")
+        for attribute in ("type", "occurred_start", "occurred_end", "mentioned_at"):
+            value = getattr(result, attribute)
+            if value is not None:
+                _unicode_string(value, f"{field}.{attribute}")
+
+
 def _response_for_evaluation(
     response: RecallResponse,
     elapsed_ms: float,
     *,
     max_bytes: int,
 ) -> VariantResponse:
+    _validate_live_formatter_input(response)
     _context, records, selected_results = format_recall_context_with_selected_results(
         response,
         max_bytes=max_bytes,

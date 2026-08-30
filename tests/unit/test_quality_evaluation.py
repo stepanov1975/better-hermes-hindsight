@@ -203,6 +203,19 @@ def test_live_comparison_projects_queries_with_the_production_bounds(
     [
         (RecallResponse(results=[RecallResult(id=" ", text="valid memory")]), "non-empty"),
         (RecallResponse(results=[RecallResult(id="valid", text="   ")]), "non-empty"),
+        (RecallResponse(results=[RecallResult(id="valid", text="\ud800")]), "valid Unicode"),
+        (
+            RecallResponse(
+                results=[
+                    RecallResult(
+                        id="valid",
+                        text="valid memory",
+                        occurred_start="\ud800",
+                    )
+                ]
+            ),
+            "valid Unicode",
+        ),
         (
             RecallResponse(
                 results=[

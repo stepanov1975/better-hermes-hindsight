@@ -61,9 +61,9 @@ HINDSIGHT_API_KEY=... .venv/bin/python scripts/evaluate_recall_quality.py \
 The capture file is created once with mode `0600` inside a mode-`0700` directory. It contains the
 private queries and production-projected selected responses needed for labeling; stdout contains only
 case and returned-size counts. The destination's absolute path, private parent, and non-existence are
-preflighted before live configuration or recall. Live timeout/client failure or a malformed selected
-result aborts the all-or-nothing capture before the private file is created rather than recording an
-unreadable artifact or misclassifying a failed recall as an empty result. Review the union of both
+preflighted before live configuration or recall. Live timeout/client failure or malformed model-facing
+result data aborts the all-or-nothing capture before the private file is created rather than recording
+an unreadable artifact or misclassifying a failed recall as an empty result. Review the union of both
 variants and classify every returned result ID as useful, redundant, or irrelevant. Set
 `expect_recall` for every case, change `labels_complete` to `true`, then evaluate the labeled capture
 offline with the first command above. The evaluator refuses an incomplete corpus before loading live

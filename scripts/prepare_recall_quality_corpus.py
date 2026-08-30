@@ -25,6 +25,10 @@ _TIMESTAMP_PREFIX = re.compile(
 )
 _MEMORY_CONTEXT_OPEN = "<memory-context>"
 _MEMORY_CONTEXT_CLOSE = "</memory-context>"
+_MEMORY_CONTEXT_ENVELOPE = re.compile(
+    re.escape(_MEMORY_CONTEXT_OPEN) + ".*?" + re.escape(_MEMORY_CONTEXT_CLOSE),
+    flags=re.DOTALL,
+)
 _INTERNAL_PREFIXES = (
     "[INTERNAL DELEGATION CLOSEOUT",
     "[OUT-OF-BAND USER MESSAGE",
@@ -58,10 +62,9 @@ def clean_historical_query(content: object) -> str:
     query = _TIMESTAMP_PREFIX.sub("", content, count=1)
     without_trailing_space = query.rstrip()
     if without_trailing_space.endswith(_MEMORY_CONTEXT_CLOSE):
-        close_start = len(without_trailing_space) - len(_MEMORY_CONTEXT_CLOSE)
-        open_start = without_trailing_space.rfind(_MEMORY_CONTEXT_OPEN, 0, close_start)
-        if open_start >= 0:
-            query = without_trailing_space[:open_start]
+        matches = list(_MEMORY_CONTEXT_ENVELOPE.finditer(without_trailing_space))
+        if matches and matches[-1].end() == len(without_trailing_space):
+            query = without_trailing_space[: matches[-1].start()]
     return query.strip()
 
 

@@ -121,6 +121,13 @@ def test_clean_historical_query_removes_transport_wrappers() -> None:
         )
         == "Keep <memory-context>literal</memory-context> query text"
     )
+    assert (
+        clean_historical_query(
+            "Real query\n<memory-context>evidence mentions <memory-context> literally"
+            "</memory-context>"
+        )
+        == "Real query"
+    )
 
 
 def test_session_cap_uses_an_equivalent_query_from_an_uncapped_session() -> None:
