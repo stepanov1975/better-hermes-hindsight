@@ -151,6 +151,14 @@ def test_clean_historical_query_removes_transport_wrappers() -> None:
         )
         == "Real query"
     )
+    user_signed_literal = f"<memory-context>\n{header}\nquoted block</memory-context>"
+    assert (
+        clean_historical_query(
+            f"{user_signed_literal}\nquestion after quote\n\n"
+            f"<memory-context>\n{header}\nappended evidence</memory-context>"
+        )
+        == f"{user_signed_literal}\nquestion after quote"
+    )
     assert (
         clean_historical_query(
             f"Real query\n\n<memory-context>\n{header}\nouter evidence\n\n"

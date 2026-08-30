@@ -111,9 +111,9 @@ def _mapping(value: object, field: str) -> Mapping[str, object]:
 
 
 def _exact_keys(value: Mapping[str, object], allowed: set[str], field: str) -> None:
-    unknown = sorted(set(value) - allowed)
+    unknown = set(value) - allowed
     if unknown:
-        _fail(f"{field} has unknown key(s): {', '.join(unknown)}")
+        _fail(f"{field} has {len(unknown)} unknown key(s)")
 
 
 def _nonempty_string(value: object, field: str) -> str:
@@ -215,9 +215,9 @@ def _parse_case(value: object, index: int) -> QualityCase:
         _fail(f"{field} cannot label useful results when expect_recall is false")
     raw_responses = case.get("responses", {})
     responses_mapping = _mapping(raw_responses, f"{field}.responses")
-    unknown_variants = sorted(set(responses_mapping) - set(_VARIANTS))
+    unknown_variants = set(responses_mapping) - set(_VARIANTS)
     if unknown_variants:
-        _fail(f"{field}.responses has unknown variant(s): {', '.join(unknown_variants)}")
+        _fail(f"{field}.responses has {len(unknown_variants)} unknown variant(s)")
     responses = {
         variant: _parse_response(response, f"{field}.responses.{variant}")
         for variant, response in responses_mapping.items()
@@ -243,8 +243,8 @@ def load_corpus(path: Path) -> tuple[QualityCase, ...]:
         raise EvaluationInputError("corpus file does not exist") from None
     except (OSError, UnicodeError):
         raise EvaluationInputError("corpus file could not be read as UTF-8") from None
-    except _DuplicateJsonKey as error:
-        raise EvaluationInputError(f"corpus contains duplicate JSON key: {error.args[0]}") from None
+    except _DuplicateJsonKey:
+        raise EvaluationInputError("corpus contains a duplicate JSON key") from None
     except json.JSONDecodeError as error:
         raise EvaluationInputError(
             f"corpus is not valid JSON at line {error.lineno}, column {error.colno}"

@@ -505,13 +505,22 @@ def test_corpus_rejects_unknown_fields_and_duplicate_json_keys(tmp_path: Path) -
         json.dumps({"schema_version": 1, "cases": [], "unexpected": True}),
         encoding="utf-8",
     )
+    private_key = "private-query-derived-key"
+    case_unknown = tmp_path / "case-unknown.json"
+    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    payload["cases"][0][private_key] = True
+    case_unknown.write_text(json.dumps(payload), encoding="utf-8")
     duplicate = tmp_path / "duplicate.json"
     duplicate.write_text(
-        '{"schema_version":1,"schema_version":1,"cases":[]}',
+        f'{{"{private_key}":1,"{private_key}":2}}',
         encoding="utf-8",
     )
 
     with pytest.raises(EvaluationInputError, match="exactly schema_version and cases"):
         load_corpus(unknown)
-    with pytest.raises(EvaluationInputError, match="duplicate JSON key"):
+    with pytest.raises(EvaluationInputError, match="1 unknown key") as unknown_error:
+        load_corpus(case_unknown)
+    assert private_key not in str(unknown_error.value)
+    with pytest.raises(EvaluationInputError, match="duplicate JSON key") as duplicate_error:
         load_corpus(duplicate)
+    assert private_key not in str(duplicate_error.value)
