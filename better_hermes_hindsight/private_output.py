@@ -6,6 +6,7 @@ import contextlib
 import json
 import os
 import stat
+import time
 from pathlib import Path
 
 
@@ -82,39 +83,50 @@ def validate_private_output_path(path: Path) -> None:
 
 
 def write_private_json(path: Path, payload: object) -> None:
-    """Create one owner-only JSON file without overwriting an existing artifact."""
+    """Atomically publish one owner-only JSON file without overwriting an artifact."""
 
     _validate_private_path_shape(path)
 
     data = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8") + b"\n"
     parent_descriptor = _open_private_parent(path.parent)
     descriptor = -1
+    temporary_name = f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp"
+    temporary_exists = False
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC
     try:
-        descriptor = os.open(path.name, flags, 0o600, dir_fd=parent_descriptor)
-    except FileExistsError:
-        os.close(parent_descriptor)
-        raise PrivateOutputError("private output file already exists") from None
-    except OSError as error:
-        os.close(parent_descriptor)
-        raise PrivateOutputError("private output file could not be created") from error
-
-    try:
+        descriptor = os.open(temporary_name, flags, 0o600, dir_fd=parent_descriptor)
+        temporary_exists = True
         os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "wb", closefd=True) as output:
             descriptor = -1
             output.write(data)
             output.flush()
             os.fsync(output.fileno())
+        try:
+            os.link(
+                temporary_name,
+                path.name,
+                src_dir_fd=parent_descriptor,
+                dst_dir_fd=parent_descriptor,
+                follow_symlinks=False,
+            )
+        except FileExistsError:
+            raise PrivateOutputError("private output file already exists") from None
+        os.unlink(temporary_name, dir_fd=parent_descriptor)
+        temporary_exists = False
+        os.fsync(parent_descriptor)
+    except PrivateOutputError:
+        raise
     except OSError as error:
-        with contextlib.suppress(OSError):
-            os.unlink(path.name, dir_fd=parent_descriptor)
         raise PrivateOutputError("private output file could not be written") from error
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+        if temporary_exists:
+            with contextlib.suppress(OSError):
+                os.unlink(temporary_name, dir_fd=parent_descriptor)
         os.close(parent_descriptor)
 
 

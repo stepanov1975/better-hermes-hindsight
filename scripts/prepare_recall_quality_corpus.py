@@ -31,7 +31,6 @@ _MEMORY_CONTEXT_START = re.compile(
     + r"\s*\n\[System note:\s*The following is recalled memory context,[^\]]*\]\s*)",
     flags=re.IGNORECASE,
 )
-_MEMORY_CONTEXT_TAG = re.compile(r"</?memory-context>", flags=re.IGNORECASE)
 _INTERNAL_PREFIXES = (
     "[INTERNAL DELEGATION CLOSEOUT",
     "[OUT-OF-BAND USER MESSAGE",
@@ -58,19 +57,8 @@ def _fail(message: str) -> NoReturn:
 
 
 def _outer_signed_memory_context_start(content: str) -> int | None:
-    signed_starts = {match.start("envelope") for match in _MEMORY_CONTEXT_START.finditer(content)}
-    stack: list[int] = []
-    for tag in _MEMORY_CONTEXT_TAG.finditer(content):
-        if not tag.group().startswith("</"):
-            stack.append(tag.start())
-            continue
-        if tag.end() == len(content):
-            active_signed = [position for position in stack if position in signed_starts]
-            if active_signed:
-                return active_signed[0]
-        if stack:
-            stack.pop()
-    return None
+    match = _MEMORY_CONTEXT_START.search(content)
+    return None if match is None else match.start("envelope")
 
 
 def clean_historical_query(content: object) -> str:

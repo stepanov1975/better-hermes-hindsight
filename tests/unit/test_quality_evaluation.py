@@ -148,6 +148,22 @@ def test_comparison_config_changes_only_prefer_observations(tmp_path: Path) -> N
     assert replace(preferred, recall=config.recall) == config
 
 
+def test_missing_variant_error_uses_private_case_position() -> None:
+    source = load_corpus(FIXTURE)[0]
+    private_id = "private-personal-case-id"
+    case = replace(
+        source,
+        case_id=private_id,
+        responses={"baseline": source.responses["baseline"]},
+    )
+
+    with pytest.raises(EvaluationInputError) as error:
+        _offline_responses((case,), ("baseline", "prefer_observations"))
+
+    assert "cases[0]" in str(error.value)
+    assert private_id not in str(error.value)
+
+
 def test_live_comparison_projects_queries_with_the_production_bounds(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -323,6 +339,13 @@ def test_live_capture_rejects_results_that_cannot_round_trip(
 ) -> None:
     with pytest.raises(EvaluationInputError, match=message):
         _response_for_evaluation(response, 1.0, max_bytes=8_192)
+
+
+def test_live_capture_rejects_nonempty_response_that_cannot_fit_context() -> None:
+    response = RecallResponse(results=[RecallResult(id="valid", text="valid memory")])
+
+    with pytest.raises(EvaluationInputError, match="could not be formatted"):
+        _response_for_evaluation(response, 1.0, max_bytes=1)
 
 
 def test_comparison_rejects_a_baseline_that_already_prefers_observations(tmp_path: Path) -> None:

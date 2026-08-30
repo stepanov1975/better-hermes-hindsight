@@ -293,8 +293,10 @@ def evaluate_variant(
     fully_truncated_returns = 0
     elapsed_values: list[float] = []
 
-    for case in cases:
-        response = responses[case.case_id]
+    for case_index, case in enumerate(cases):
+        response = responses.get(case.case_id)
+        if response is None:
+            _fail(f"cases[{case_index}] has no response for this variant")
         result_ids = [result.result_id for result in response.results]
         usable_result_ids = {
             result.result_id
@@ -358,10 +360,10 @@ def _offline_responses(
     cases: Sequence[QualityCase], variants: Sequence[str]
 ) -> dict[str, dict[str, VariantResponse]]:
     by_variant: dict[str, dict[str, VariantResponse]] = {variant: {} for variant in variants}
-    for case in cases:
+    for case_index, case in enumerate(cases):
         missing = [variant for variant in variants if variant not in case.responses]
         if missing:
-            _fail(f"case {case.case_id!r} has no fixture response for: {', '.join(missing)}")
+            _fail(f"cases[{case_index}] has no fixture response for: {', '.join(missing)}")
         for variant in variants:
             by_variant[variant][case.case_id] = case.responses[variant]
     return by_variant
@@ -405,6 +407,8 @@ def _response_for_evaluation(
         response,
         max_bytes=max_bytes,
     )
+    if response.results and not _context:
+        _fail("live response could not be formatted within the context limit")
     results: list[LabeledResult] = []
     seen_result_ids: set[str] = set()
     for index, (record, result) in enumerate(zip(records, selected_results, strict=True)):

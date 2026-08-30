@@ -138,6 +138,14 @@ def test_clean_historical_query_removes_transport_wrappers() -> None:
     assert (
         clean_historical_query(
             f"Real query\n\n<memory-context>\n{header}\n"
+            "evidence mentions </memory-context> literally then continues"
+            "</memory-context>"
+        )
+        == "Real query"
+    )
+    assert (
+        clean_historical_query(
+            f"Real query\n\n<memory-context>\n{header}\n"
             "evidence quotes <memory-context>literal</memory-context> then continues"
             "</memory-context>"
         )
@@ -331,6 +339,26 @@ def test_private_json_refuses_insecure_parent_and_existing_output(tmp_path: Path
     write_private_json(first, {"private": True})
     with pytest.raises(PrivateOutputError, match="already exists"):
         write_private_json(first, {"private": False})
+
+
+def test_private_json_does_not_publish_a_partial_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    destination = private / "artifact.json"
+
+    def fail_link(*_args: object, **_kwargs: object) -> None:
+        raise OSError("synthetic publication failure")
+
+    monkeypatch.setattr(os, "link", fail_link)
+
+    with pytest.raises(PrivateOutputError, match="could not be written"):
+        write_private_json(destination, {"private": True})
+
+    assert not destination.exists()
+    assert list(private.iterdir()) == []
 
 
 def test_private_json_refuses_a_symlinked_ancestor(tmp_path: Path) -> None:
