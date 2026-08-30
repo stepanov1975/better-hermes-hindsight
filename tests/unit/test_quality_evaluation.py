@@ -6,16 +6,19 @@ import subprocess
 import sys
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 import scripts.evaluate_recall_quality as evaluation_module
 from better_hermes_hindsight.client import RecallResponse, RecallResult
 from better_hermes_hindsight.config import load_config
-from better_hermes_hindsight.formatting import QUERY_OMISSION_MARKER
+from better_hermes_hindsight.formatting import QUERY_OMISSION_MARKER, TEXT_TRUNCATION_MARKER
 from scripts.evaluate_recall_quality import (
     EvaluationInputError,
+    LabeledResult,
     QualityCase,
+    VariantResponse,
     _offline_responses,
     collect_live_responses,
     comparison_configs,
@@ -62,6 +65,7 @@ def test_synthetic_corpus_reports_deterministic_baseline_and_observation_metrics
                 "expected_memory_coverage": 1.0,
                 "expected_memory_hits": 2,
                 "expected_recall_cases": 2,
+                "fully_truncated_returns": 0,
                 "irrelevant_returns": 2,
                 "negative_cases": 1,
                 "no_context_correct": 0,
@@ -80,6 +84,7 @@ def test_synthetic_corpus_reports_deterministic_baseline_and_observation_metrics
                 "expected_memory_coverage": 1.0,
                 "expected_memory_hits": 2,
                 "expected_recall_cases": 2,
+                "fully_truncated_returns": 0,
                 "irrelevant_returns": 1,
                 "negative_cases": 1,
                 "no_context_correct": 1,
@@ -204,6 +209,102 @@ def test_comparison_rejects_a_baseline_that_already_prefers_observations(tmp_pat
 
     with pytest.raises(EvaluationInputError, match="already sets"):
         comparison_configs(config)
+
+
+@pytest.mark.parametrize("elapsed", ["NaN", "Infinity", "1e400"])
+def test_corpus_rejects_non_finite_elapsed_values(tmp_path: Path, elapsed: str) -> None:
+    corpus = tmp_path / "non-finite.json"
+    source = FIXTURE.read_text(encoding="utf-8").replace(
+        '"elapsed_ms": 12.5',
+        f'"elapsed_ms": {elapsed}',
+        1,
+    )
+    corpus.write_text(source, encoding="utf-8")
+
+    with pytest.raises(EvaluationInputError, match="finite non-negative"):
+        load_corpus(corpus)
+
+
+def test_elapsed_total_is_absent_when_any_case_has_no_timing() -> None:
+    cases = load_corpus(FIXTURE)
+    responses = _offline_responses(cases, ("baseline",))
+    first_case = cases[0].case_id
+    responses["baseline"][first_case] = replace(
+        responses["baseline"][first_case],
+        elapsed_ms=None,
+    )
+
+    report = evaluate(cases, responses)
+    variants = cast(dict[str, dict[str, int | float | None]], report["variants"])
+
+    assert variants["baseline"]["elapsed_ms_total"] is None
+
+
+def test_fully_truncated_useful_result_is_not_counted_as_evidence() -> None:
+    case = QualityCase(
+        case_id="marker-only",
+        query="remember the useful result",
+        expect_recall=True,
+        useful_result_ids=frozenset({"useful"}),
+        redundant_result_ids=frozenset(),
+        irrelevant_result_ids=frozenset(),
+        responses={},
+    )
+    responses = {
+        "baseline": {
+            case.case_id: VariantResponse(
+                results=(LabeledResult("useful", TEXT_TRUNCATION_MARKER),),
+                elapsed_ms=1.0,
+            )
+        }
+    }
+
+    report = evaluate((case,), responses)
+    variants = cast(dict[str, dict[str, int | float | None]], report["variants"])
+    metrics = variants["baseline"]
+
+    assert metrics["expected_memory_hits"] == 0
+    assert metrics["expected_memory_coverage"] == 0.0
+    assert metrics["useful_at_3_hits"] == 0
+    assert metrics["fully_truncated_returns"] == 1
+    assert metrics["returned_records"] == 1
+
+
+def test_live_evaluation_skips_whitespace_only_projected_queries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_config(
+        tmp_path,
+        environ={},
+        injected={"single_principal": True, "recall": {"enabled": True}},
+    )
+    case = QualityCase(
+        case_id="provider-envelope-only",
+        query="<memory-context>private prior recall</memory-context>   ",
+        expect_recall=False,
+        useful_result_ids=frozenset(),
+        redundant_result_ids=frozenset(),
+        irrelevant_result_ids=frozenset(),
+        responses={},
+    )
+    clients: list[_FakeClient] = []
+
+    def create_client(_config: object) -> _FakeClient:
+        client = _FakeClient()
+        clients.append(client)
+        return client
+
+    monkeypatch.setattr(evaluation_module, "create_hindsight_client", create_client)
+
+    responses = asyncio.run(
+        collect_live_responses((case,), config, compare_prefer_observations=False)
+    )
+
+    assert len(clients) == 1
+    assert clients[0].calls == []
+    assert clients[0].closed is True
+    assert responses["baseline"][case.case_id].results == ()
 
 
 def test_corpus_rejects_unknown_fields_and_duplicate_json_keys(tmp_path: Path) -> None:

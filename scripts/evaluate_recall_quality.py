@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -15,6 +16,7 @@ from typing import NoReturn, cast
 from better_hermes_hindsight.client import RecallResponse, RecallResult, create_hindsight_client
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.formatting import (
+    TEXT_TRUNCATION_MARKER,
     format_recall_context_with_selected_results,
     project_query,
 )
@@ -132,9 +134,12 @@ def _parse_response(value: object, field: str) -> VariantResponse:
         _fail(f"{field}.results must not contain duplicate IDs")
     elapsed = response.get("elapsed_ms")
     if elapsed is not None and (
-        isinstance(elapsed, bool) or not isinstance(elapsed, (int, float)) or elapsed < 0
+        isinstance(elapsed, bool)
+        or not isinstance(elapsed, (int, float))
+        or not math.isfinite(elapsed)
+        or elapsed < 0
     ):
-        _fail(f"{field}.elapsed_ms must be a non-negative number")
+        _fail(f"{field}.elapsed_ms must be a finite non-negative number")
     return VariantResponse(
         results=results,
         elapsed_ms=None if elapsed is None else float(elapsed),
@@ -229,15 +234,21 @@ def evaluate_variant(
     no_context_correct = 0
     returned_records = 0
     returned_text_bytes = 0
+    fully_truncated_returns = 0
     elapsed_values: list[float] = []
 
     for case in cases:
         response = responses[case.case_id]
         result_ids = [result.result_id for result in response.results]
-        result_id_set = set(result_ids)
-        expected_memory_hits += len(case.useful_result_ids & result_id_set)
-        top_3 = result_ids[:3]
-        useful_at_3_hits += sum(result_id in case.useful_result_ids for result_id in top_3)
+        usable_result_ids = {
+            result.result_id for result in response.results if result.text != TEXT_TRUNCATION_MARKER
+        }
+        expected_memory_hits += len(case.useful_result_ids & usable_result_ids)
+        top_3 = response.results[:3]
+        useful_at_3_hits += sum(
+            result.result_id in case.useful_result_ids and result.text != TEXT_TRUNCATION_MARKER
+            for result in top_3
+        )
         useful_at_3_slots += len(top_3)
         irrelevant_returns += sum(
             result_id in case.irrelevant_result_ids for result_id in result_ids
@@ -251,16 +262,22 @@ def evaluate_variant(
             no_context_correct += 1
         returned_records += len(response.results)
         returned_text_bytes += sum(len(result.text.encode("utf-8")) for result in response.results)
+        fully_truncated_returns += sum(
+            result.text == TEXT_TRUNCATION_MARKER for result in response.results
+        )
         if response.elapsed_ms is not None:
             elapsed_values.append(response.elapsed_ms)
 
     return {
         "case_count": len(cases),
-        "elapsed_ms_total": None if not elapsed_values else round(sum(elapsed_values), 3),
+        "elapsed_ms_total": (
+            round(sum(elapsed_values), 3) if len(elapsed_values) == len(cases) else None
+        ),
         "expected_memory_count": expected_memory_count,
         "expected_memory_coverage": _safe_ratio(expected_memory_hits, expected_memory_count),
         "expected_memory_hits": expected_memory_hits,
         "expected_recall_cases": expected_recall_cases,
+        "fully_truncated_returns": fully_truncated_returns,
         "irrelevant_returns": irrelevant_returns,
         "negative_cases": negative_cases,
         "no_context_correct": no_context_correct,
@@ -337,7 +354,7 @@ async def collect_live_responses(
                     max_chars=variant_config.recall.input_max_chars,
                     max_tokens=variant_config.recall.input_max_tokens,
                 )
-                if not projected:
+                if not projected.strip():
                     variant_responses[case.case_id] = VariantResponse(results=(), elapsed_ms=0.0)
                     continue
                 started = time.perf_counter()
