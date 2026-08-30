@@ -23,7 +23,10 @@ _TIMESTAMP_PREFIX = re.compile(
     r"^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) "
     r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC\]\s*"
 )
-_MEMORY_CONTEXT_SUFFIX = re.compile(r"\s*<memory-context>.*\Z", flags=re.DOTALL)
+_MEMORY_CONTEXT_SUFFIX = re.compile(
+    r"\s*<memory-context>.*</memory-context>\s*\Z",
+    flags=re.DOTALL,
+)
 _INTERNAL_PREFIXES = (
     "[INTERNAL DELEGATION CLOSEOUT",
     "[OUT-OF-BAND USER MESSAGE",
@@ -135,8 +138,13 @@ def collect_historical_queries(
         _fail("at least one non-empty source is required")
     cutoff = (time.time() if now is None else now) - days * 86_400
     placeholders = ",".join("?" for _ in sources)
+    scan_limit = limit * 100
+    stored_char_limit = max_chars + 65_536
     uri = f"file:{quote(str(state_db))}?mode=ro"
     connection: sqlite3.Connection | None = None
+    excluded: Counter[str] = Counter()
+    candidates: list[_Candidate] = []
+    scanned = 0
     try:
         connection = sqlite3.connect(uri, uri=True)
         connection.execute("PRAGMA query_only=ON")
@@ -151,33 +159,35 @@ def collect_historical_queries(
               AND COALESCE(m._compressed_summary, 0) = 0
               AND m.display_kind IS NULL
               AND m.display_metadata IS NULL
+              AND typeof(m.content) = 'text'
+              AND length(m.content) <= ?
+            ORDER BY m.timestamp DESC, m.rowid DESC
+            LIMIT ?
             """,
-            (cutoff, *sources),
-        ).fetchall()
+            (cutoff, *sources, stored_char_limit, scan_limit),
+        )
+        for session_id, content in rows:
+            scanned += 1
+            query = clean_historical_query(content)
+            reason = _exclusion_reason(query, max_chars=max_chars, max_lines=max_lines)
+            if reason is not None:
+                excluded[reason] += 1
+                continue
+            normalized = _normalized_query(query)
+            rank = hashlib.sha256(f"{seed}\0{normalized}".encode()).digest()
+            candidates.append(
+                _Candidate(
+                    session_id=str(session_id),
+                    query=query,
+                    normalized=normalized,
+                    rank=rank,
+                )
+            )
     except sqlite3.Error as error:
         raise CollectionError("Hermes state database could not be read") from error
     finally:
         if connection is not None:
             connection.close()
-
-    excluded: Counter[str] = Counter()
-    candidates: list[_Candidate] = []
-    for session_id, content in rows:
-        query = clean_historical_query(content)
-        reason = _exclusion_reason(query, max_chars=max_chars, max_lines=max_lines)
-        if reason is not None:
-            excluded[reason] += 1
-            continue
-        normalized = _normalized_query(query)
-        rank = hashlib.sha256(f"{seed}\0{normalized}".encode()).digest()
-        candidates.append(
-            _Candidate(
-                session_id=str(session_id),
-                query=query,
-                normalized=normalized,
-                rank=rank,
-            )
-        )
 
     unique_queries = {candidate.normalized for candidate in candidates}
     excluded["duplicate"] += len(candidates) - len(unique_queries)
@@ -190,7 +200,7 @@ def collect_historical_queries(
 
     stats = {
         "eligible": len(unique_queries),
-        "scanned": len(rows),
+        "scanned": scanned,
         "selected": len(selected),
         **{f"excluded_{key}": value for key, value in sorted(excluded.items())},
     }

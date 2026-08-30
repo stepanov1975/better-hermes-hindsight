@@ -20,6 +20,7 @@ from scripts.evaluate_recall_quality import (
     QualityCase,
     VariantResponse,
     _offline_responses,
+    _response_for_evaluation,
     collect_live_responses,
     comparison_configs,
     evaluate,
@@ -197,6 +198,30 @@ def test_live_comparison_projects_queries_with_the_production_bounds(
     ]
 
 
+@pytest.mark.parametrize(
+    ("response", "message"),
+    [
+        (RecallResponse(results=[RecallResult(id=" ", text="valid memory")]), "non-empty"),
+        (RecallResponse(results=[RecallResult(id="valid", text="   ")]), "non-empty"),
+        (
+            RecallResponse(
+                results=[
+                    RecallResult(id="duplicate", text="first memory"),
+                    RecallResult(id="duplicate", text="second memory"),
+                ]
+            ),
+            "duplicate IDs",
+        ),
+    ],
+)
+def test_live_capture_rejects_results_that_cannot_round_trip(
+    response: RecallResponse,
+    message: str,
+) -> None:
+    with pytest.raises(EvaluationInputError, match=message):
+        _response_for_evaluation(response, 1.0, max_bytes=8_192)
+
+
 def test_comparison_rejects_a_baseline_that_already_prefers_observations(tmp_path: Path) -> None:
     config = load_config(
         tmp_path,
@@ -238,6 +263,19 @@ def test_elapsed_total_is_absent_when_any_case_has_no_timing() -> None:
     variants = cast(dict[str, dict[str, int | float | None]], report["variants"])
 
     assert variants["baseline"]["elapsed_ms_total"] is None
+
+
+def test_elapsed_total_rejects_aggregate_overflow() -> None:
+    cases = load_corpus(FIXTURE)[:2]
+    responses = _offline_responses(cases, ("baseline",))
+    for case in cases:
+        responses["baseline"][case.case_id] = replace(
+            responses["baseline"][case.case_id],
+            elapsed_ms=1e308,
+        )
+
+    with pytest.raises(EvaluationInputError, match="total must be finite"):
+        evaluate(cases, responses)
 
 
 def test_fully_truncated_useful_result_is_not_counted_as_evidence() -> None:

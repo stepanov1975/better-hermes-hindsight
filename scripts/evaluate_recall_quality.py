@@ -287,11 +287,16 @@ def evaluate_variant(
         if response.elapsed_ms is not None:
             elapsed_values.append(response.elapsed_ms)
 
+    elapsed_ms_total: float | None = None
+    if len(elapsed_values) == len(cases):
+        elapsed_sum = sum(elapsed_values)
+        if not math.isfinite(elapsed_sum):
+            _fail("elapsed_ms total must be finite")
+        elapsed_ms_total = round(elapsed_sum, 3)
+
     return {
         "case_count": len(cases),
-        "elapsed_ms_total": (
-            round(sum(elapsed_values), 3) if len(elapsed_values) == len(cases) else None
-        ),
+        "elapsed_ms_total": elapsed_ms_total,
         "expected_memory_count": expected_memory_count,
         "expected_memory_coverage": _safe_ratio(expected_memory_hits, expected_memory_count),
         "expected_memory_hits": expected_memory_hits,
@@ -342,14 +347,20 @@ def _response_for_evaluation(
         response,
         max_bytes=max_bytes,
     )
+    results: list[LabeledResult] = []
+    seen_result_ids: set[str] = set()
+    for index, (record, result) in enumerate(zip(records, selected_results, strict=True)):
+        result_id = _nonempty_string(
+            cast(RecallResult, result).id,
+            f"live results[{index}].id",
+        )
+        text = _nonempty_string(record["memory"], f"live results[{index}].text")
+        if result_id in seen_result_ids:
+            _fail("live results must not contain duplicate IDs")
+        seen_result_ids.add(result_id)
+        results.append(LabeledResult(result_id=result_id, text=text))
     return VariantResponse(
-        results=tuple(
-            LabeledResult(
-                result_id=cast(RecallResult, result).id,
-                text=cast(str, record["memory"]),
-            )
-            for record, result in zip(records, selected_results, strict=True)
-        ),
+        results=tuple(results),
         elapsed_ms=round(elapsed_ms, 3),
     )
 
@@ -487,6 +498,8 @@ def main() -> int:
     args = parser.parse_args()
     try:
         cases = load_corpus(args.corpus)
+        if args.capture_private is None and any(not case.labels_complete for case in cases):
+            _fail("corpus contains incomplete labels")
         if args.capture_private is not None and args.hermes_home is None:
             _fail("--capture-private requires --hermes-home live recall")
         if args.hermes_home is None:

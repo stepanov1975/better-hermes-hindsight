@@ -31,6 +31,7 @@ from scripts.prepare_recall_quality_corpus import (
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "prepare_recall_quality_corpus.py"
+EVALUATOR_SCRIPT = ROOT / "scripts" / "evaluate_recall_quality.py"
 
 
 def _state_db(path: Path) -> None:
@@ -109,6 +110,9 @@ def test_clean_historical_query_removes_transport_wrappers() -> None:
             "<memory-context>not part of the query</memory-context>"
         )
         == "Remember this query"
+    )
+    assert clean_historical_query("Keep a literal <memory-context> marker") == (
+        "Keep a literal <memory-context> marker"
     )
 
 
@@ -195,6 +199,39 @@ def test_collector_reads_active_wal_without_changing_rows(tmp_path: Path) -> Non
     assert "Which setting did we use?" in queries
 
 
+def test_collector_bounds_raw_rows_and_streamed_candidate_window(tmp_path: Path) -> None:
+    database = tmp_path / "state.db"
+    _state_db(database)
+    connection = sqlite3.connect(database)
+    connection.executemany(
+        "INSERT INTO messages(session_id, role, content, timestamp) VALUES (?, 'user', ?, ?)",
+        [("direct", f"Bounded historical query number {index}", 1_000_002) for index in range(150)],
+    )
+    connection.execute(
+        "INSERT INTO messages(session_id, role, content, timestamp) VALUES (?, 'user', ?, ?)",
+        ("direct", "X" * 70_000, 1_000_003),
+    )
+    connection.commit()
+    connection.close()
+
+    queries, stats = collect_historical_queries(
+        database,
+        days=1,
+        limit=1,
+        max_per_session=200,
+        max_chars=1_200,
+        max_lines=12,
+        sources=("telegram",),
+        seed="synthetic-seed",
+        now=1_000_100,
+    )
+
+    assert stats["scanned"] == 100
+    assert stats["selected"] == 1
+    assert len(queries) == 1
+    assert len(queries[0]) <= 1_200
+
+
 def test_collector_cli_prints_only_aggregate_counts_and_creates_private_file(
     tmp_path: Path,
 ) -> None:
@@ -271,6 +308,31 @@ def test_incomplete_labels_cannot_be_scored() -> None:
 
     with pytest.raises(EvaluationInputError, match="incomplete labels"):
         evaluate((case,), responses)
+
+
+def test_live_cli_rejects_incomplete_labels_before_loading_live_config(tmp_path: Path) -> None:
+    corpus = tmp_path / "unlabelled.json"
+    corpus.write_text(
+        json.dumps(corpus_payload(["Which host runs the service?"])),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(EVALUATOR_SCRIPT),
+            str(corpus),
+            "--hermes-home",
+            str(tmp_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "corpus contains incomplete labels" in completed.stderr
+    assert "configured CLI principal" not in completed.stderr
 
 
 def test_capture_payload_round_trips_private_responses_without_provenance(tmp_path: Path) -> None:

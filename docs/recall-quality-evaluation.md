@@ -38,13 +38,15 @@ mkdir -m 700 -p "$PWD/.hermes/recall-quality"
 
 The collector opens the state database query-only, considers direct `telegram`, `cli`, and `tui`
 user sessions by default—including their compression, reset, and branch continuations—removes the
-transport timestamp and appended `<memory-context>`, deduplicates normalized queries, and rejects typed
-internal traffic, compaction-summary scaffolding, attachments, credential-pattern matches, very large
-turns, and non-user sources. As
-with normal SQLite WAL readers, opening an active read-only database may update its existing
-shared-memory coordination file; it does not change message or session rows. The corpus stores no
-session or message identifiers, and the command prints only aggregate counts. The selected query pool
-has `labels_complete=false`; review it privately and remove unsuitable cases before recall capture.
+transport timestamp and a complete appended `<memory-context>...</memory-context>` envelope,
+deduplicates normalized queries, and rejects typed internal traffic, compaction-summary scaffolding,
+attachments, credential-pattern matches, very large turns, and non-user sources. It streams at most
+`100 * --limit` newest matching rows and filters stored turns larger than `--max-chars + 64 KiB` in
+SQLite before reading their content. As with normal SQLite WAL readers, opening an active read-only
+database may update its existing shared-memory coordination file; it does not change message or
+session rows. The corpus stores no session or message identifiers, and the command prints only
+aggregate counts. The selected query pool has `labels_complete=false`; review it privately and remove
+unsuitable cases before recall capture.
 
 Capture production-processed responses from the configured real bank without mutating it:
 
@@ -58,12 +60,14 @@ HINDSIGHT_API_KEY=... .venv/bin/python scripts/evaluate_recall_quality.py \
 
 The capture file is created once with mode `0600` inside a mode-`0700` directory. It contains the
 private queries and production-projected selected responses needed for labeling; stdout contains only
-case and returned-size counts. Live timeout/client failure aborts the all-or-nothing capture before the
-private file is created rather than misclassifying a failed recall as an empty result. Review the union
-of both variants and classify every returned result ID as useful, redundant, or irrelevant. Set
+case and returned-size counts. Live timeout/client failure or a malformed selected result aborts the
+all-or-nothing capture before the private file is created rather than recording an unreadable artifact
+or misclassifying a failed recall as an empty result. Review the union of both variants and classify
+every returned result ID as useful, redundant, or irrelevant. Set
 `expect_recall` for every case, change `labels_complete` to `true`, then evaluate the labeled capture
-offline with the first command above. The evaluator refuses an incomplete corpus; also require
-`unlabeled_returns=0` before treating a run as a completed benchmark.
+offline with the first command above. The evaluator refuses an incomplete corpus before loading live
+configuration or issuing recall requests; also require `unlabeled_returns=0` before treating a run as
+a completed benchmark.
 
 A captured real run is the reproducible primary comparison. A later live rerun can detect current-bank
 changes, but new IDs remain unlabeled until reviewed. No synthetic bank is part of this workflow.
