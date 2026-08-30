@@ -38,15 +38,17 @@ mkdir -m 700 -p "$PWD/.hermes/recall-quality"
 
 The collector opens the state database query-only, considers direct `telegram`, `cli`, and `tui`
 user sessions by default—including their compression, reset, and branch continuations—removes the
-transport timestamp and a complete appended `<memory-context>...</memory-context>` envelope,
-deduplicates normalized queries, and rejects typed internal traffic, compaction-summary scaffolding,
-attachments, credential-pattern matches, very large turns, and non-user sources. It streams at most
-`100 * --limit` newest matching rows and filters stored turns larger than `--max-chars + 64 KiB` in
-SQLite before reading their content. As with normal SQLite WAL readers, opening an active read-only
-database may update its existing shared-memory coordination file; it does not change message or
-session rows. The corpus stores no session or message identifiers, and the command prints only
-aggregate counts. The selected query pool has `labels_complete=false`; review it privately and remove
-unsuitable cases before recall capture.
+transport timestamp and one unambiguous appended `<memory-context>...</memory-context>` envelope,
+deduplicates normalized queries, and rejects turns with multiple signed envelope openers, typed
+internal traffic, compaction-summary scaffolding, attachments, credential-pattern matches, very large
+turns, and non-user sources. It streams at most
+`100 * --limit` newest matching rows, caps `--limit` at 500 so recursive session reassignment remains
+within Python's call-depth bound, and filters stored turns larger than `--max-chars + 64 KiB` in SQLite
+before reading their content. As with normal SQLite WAL readers, opening an active read-only database
+may update its existing shared-memory coordination file; it does not change message or session rows.
+The corpus stores no session or message identifiers, and the command prints only aggregate counts. The
+selected query pool has `labels_complete=false`; review it privately and remove unsuitable cases before
+recall capture.
 
 Capture production-processed responses from the configured real bank without mutating it:
 
@@ -58,8 +60,9 @@ HINDSIGHT_API_KEY=... .venv/bin/python scripts/evaluate_recall_quality.py \
   --capture-private "$PWD/.hermes/recall-quality/capture.json"
 ```
 
-The capture file is written and synced under an owner-only temporary name, then atomically published
-without overwriting an existing mode-`0600` destination inside a mode-`0700` directory. Interrupted
+The capture file is written and synced under a short, fixed-length owner-only temporary name, then
+atomically published without overwriting an existing mode-`0600` destination inside a mode-`0700`
+directory. Destination and temporary filename capacity are preflighted before recall. Interrupted
 writes never claim the final pathname. It contains the private queries and production-projected
 selected responses needed for labeling; stdout and validation errors contain only aggregate counts or
 array positions, never query text, recalled text, or private case/result IDs. The destination's absolute

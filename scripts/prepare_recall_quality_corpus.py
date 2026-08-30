@@ -31,7 +31,6 @@ _MEMORY_CONTEXT_START = re.compile(
     + r"\s*\n\[System note:\s*The following is recalled memory context,[^\]]*\]\s*)",
     flags=re.IGNORECASE,
 )
-_MEMORY_CONTEXT_CLOSE_TAG = re.compile(re.escape(_MEMORY_CONTEXT_CLOSE), flags=re.IGNORECASE)
 _INTERNAL_PREFIXES = (
     "[INTERNAL DELEGATION CLOSEOUT",
     "[OUT-OF-BAND USER MESSAGE",
@@ -39,6 +38,7 @@ _INTERNAL_PREFIXES = (
 )
 _ATTACHMENT_PREFIXES = ("[File:", "[Image:", "[Audio:", "[Video:")
 _DEFAULT_SOURCES = ("telegram", "cli", "tui")
+_MAX_CORPUS_LIMIT = 500
 
 
 class CollectionError(ValueError):
@@ -57,32 +57,20 @@ def _fail(message: str) -> NoReturn:
     raise CollectionError(message)
 
 
-def _outer_signed_memory_context_start(content: str) -> int | None:
-    events = [(match.start("envelope"), True) for match in _MEMORY_CONTEXT_START.finditer(content)]
-    events.extend((match.start(), False) for match in _MEMORY_CONTEXT_CLOSE_TAG.finditer(content))
-    depth = 0
-    candidate: int | None = None
-    for position, is_signed_start in sorted(events):
-        if is_signed_start:
-            if depth == 0:
-                candidate = position
-            depth += 1
-        elif depth > 0:
-            depth -= 1
-    return candidate
-
-
 def clean_historical_query(content: object) -> str:
-    """Remove transport timestamp and only the final appended memory envelope."""
+    """Remove one unambiguous appended memory envelope from a persisted user turn."""
 
     if not isinstance(content, str):
         return ""
     query = _TIMESTAMP_PREFIX.sub("", content, count=1)
     without_trailing_space = query.rstrip()
-    if without_trailing_space.endswith(_MEMORY_CONTEXT_CLOSE):
-        start = _outer_signed_memory_context_start(without_trailing_space)
-        if start is not None:
-            query = without_trailing_space[:start]
+    signed_starts = list(_MEMORY_CONTEXT_START.finditer(without_trailing_space))
+    if len(signed_starts) > 1:
+        # User literals and recalled evidence can contain arbitrary delimiters.
+        # Exclude ambiguous turns rather than silently altering private query text.
+        return ""
+    if without_trailing_space.endswith(_MEMORY_CONTEXT_CLOSE) and signed_starts:
+        query = without_trailing_space[: signed_starts[0].start("envelope")]
     return query.strip()
 
 
@@ -200,6 +188,8 @@ def collect_historical_queries(
         _fail("state database path must be absolute")
     if days <= 0 or limit <= 0 or max_per_session <= 0 or max_chars <= 0 or max_lines <= 0:
         _fail("collection bounds must be positive integers")
+    if limit > _MAX_CORPUS_LIMIT:
+        _fail(f"collection limit must not exceed {_MAX_CORPUS_LIMIT}")
     if not sources or any(not source.strip() for source in sources):
         _fail("at least one non-empty source is required")
     cutoff = (time.time() if now is None else now) - days * 86_400

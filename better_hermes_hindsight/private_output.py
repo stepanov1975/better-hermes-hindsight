@@ -5,13 +5,29 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import secrets
 import stat
-import time
 from pathlib import Path
 
 
 class PrivateOutputError(ValueError):
     """Raised when a private evaluation artifact cannot be written safely."""
+
+
+_TEMPORARY_NAME_LENGTH = len(".rq-" + "0" * 16 + ".tmp")
+
+
+def _temporary_name() -> str:
+    return f".rq-{secrets.token_hex(8)}.tmp"
+
+
+def _validate_name_capacity(parent_descriptor: int, destination_name: str) -> None:
+    try:
+        name_max = os.fpathconf(parent_descriptor, "PC_NAME_MAX")
+    except (OSError, ValueError) as error:
+        raise PrivateOutputError("private output filename capacity could not be checked") from error
+    if len(os.fsencode(destination_name)) > name_max or name_max < _TEMPORARY_NAME_LENGTH:
+        raise PrivateOutputError("private output filename is too long")
 
 
 def _open_private_parent(parent: Path) -> int:
@@ -71,6 +87,7 @@ def validate_private_output_path(path: Path) -> None:
     _validate_private_path_shape(path)
     parent_descriptor = _open_private_parent(path.parent)
     try:
+        _validate_name_capacity(parent_descriptor, path.name)
         try:
             os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
         except FileNotFoundError:
@@ -90,12 +107,13 @@ def write_private_json(path: Path, payload: object) -> None:
     data = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8") + b"\n"
     parent_descriptor = _open_private_parent(path.parent)
     descriptor = -1
-    temporary_name = f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp"
+    temporary_name = _temporary_name()
     temporary_exists = False
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC
     try:
+        _validate_name_capacity(parent_descriptor, path.name)
         descriptor = os.open(temporary_name, flags, 0o600, dir_fd=parent_descriptor)
         temporary_exists = True
         os.fchmod(descriptor, 0o600)

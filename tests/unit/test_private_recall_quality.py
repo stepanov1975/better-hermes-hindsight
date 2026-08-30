@@ -10,7 +10,11 @@ from pathlib import Path
 
 import pytest
 
-from better_hermes_hindsight.private_output import PrivateOutputError, write_private_json
+from better_hermes_hindsight.private_output import (
+    PrivateOutputError,
+    validate_private_output_path,
+    write_private_json,
+)
 from scripts.evaluate_recall_quality import (
     EvaluationInputError,
     LabeledResult,
@@ -22,6 +26,7 @@ from scripts.evaluate_recall_quality import (
     load_corpus,
 )
 from scripts.prepare_recall_quality_corpus import (
+    CollectionError,
     _Candidate,
     _select_candidates,
     clean_historical_query,
@@ -151,13 +156,43 @@ def test_clean_historical_query_removes_transport_wrappers() -> None:
         )
         == "Real query"
     )
+    assert (
+        clean_historical_query(
+            f"Real query\n\n<memory-context>\n{header}\n"
+            "evidence has unmatched </memory-context> then a quote\n\n"
+            f"<memory-context>\n{header}\nquoted block</memory-context>\n"
+            "more evidence</memory-context>"
+        )
+        == ""
+    )
+    assert (
+        clean_historical_query(
+            f"Real query\n\n<memory-context>\n{header}\nouter evidence before quote\n\n"
+            f"<memory-context>\n{header}\nunclosed quoted block\n"
+            "more outer evidence</memory-context>"
+        )
+        == ""
+    )
     user_signed_literal = f"<memory-context>\n{header}\nquoted block</memory-context>"
     assert (
         clean_historical_query(
             f"{user_signed_literal}\nquestion after quote\n\n"
             f"<memory-context>\n{header}\nappended evidence</memory-context>"
         )
-        == f"{user_signed_literal}\nquestion after quote"
+        == ""
+    )
+    assert (
+        clean_historical_query(
+            f"{user_signed_literal}\n\n{user_signed_literal}\nquestion after quotations"
+        )
+        == ""
+    )
+    assert (
+        clean_historical_query(
+            f"{user_signed_literal}\nquestion with unmatched <memory-context>\n\n"
+            f"<memory-context>\n{header}\nappended evidence</memory-context>"
+        )
+        == ""
     )
     assert (
         clean_historical_query(
@@ -165,7 +200,7 @@ def test_clean_historical_query_removes_transport_wrappers() -> None:
             f"<memory-context>\n{header}\nnested evidence</memory-context>\n"
             "outer evidence continues</memory-context>"
         )
-        == "Real query"
+        == ""
     )
 
 
@@ -266,6 +301,20 @@ def test_collector_reads_active_wal_without_changing_rows(tmp_path: Path) -> Non
     assert "Which setting did we use?" in queries
 
 
+def test_collector_rejects_limits_above_safe_reassignment_depth(tmp_path: Path) -> None:
+    with pytest.raises(CollectionError, match="must not exceed 500"):
+        collect_historical_queries(
+            (tmp_path / "state.db").resolve(),
+            days=1,
+            limit=501,
+            max_per_session=1,
+            max_chars=1_200,
+            max_lines=12,
+            sources=("telegram",),
+            seed="seed",
+        )
+
+
 def test_collector_bounds_raw_rows_and_streamed_candidate_window(tmp_path: Path) -> None:
     database = tmp_path / "state.db"
     _state_db(database)
@@ -347,6 +396,15 @@ def test_private_json_refuses_insecure_parent_and_existing_output(tmp_path: Path
     write_private_json(first, {"private": True})
     with pytest.raises(PrivateOutputError, match="already exists"):
         write_private_json(first, {"private": False})
+
+
+def test_private_json_uses_a_bounded_temporary_basename(tmp_path: Path) -> None:
+    destination = (tmp_path / "private" / ("x" * 240 + ".json")).resolve()
+
+    validate_private_output_path(destination)
+    write_private_json(destination, {"private": True})
+
+    assert json.loads(destination.read_text(encoding="utf-8")) == {"private": True}
 
 
 def test_private_json_does_not_publish_a_partial_destination(
