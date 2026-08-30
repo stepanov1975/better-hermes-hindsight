@@ -224,16 +224,33 @@ def format_recall_context_with_selected_results(
 ) -> tuple[str, list[dict[str, object]], list[object]]:
     """Return bounded context, model records, and their ranked source results."""
 
+    context, records, selected_results, _truncated = (
+        format_recall_context_with_selected_results_and_provenance(
+            response,
+            max_bytes=max_bytes,
+        )
+    )
+    return context, records, selected_results
+
+
+def format_recall_context_with_selected_results_and_provenance(
+    response: object,
+    *,
+    max_bytes: int,
+) -> tuple[str, list[dict[str, object]], list[object], list[bool]]:
+    """Return selected context records plus formatter-owned truncation provenance."""
+
     if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
-        return "", [], []
+        return "", [], [], []
     try:
         results = cast(_RecallResponseLike, response).results
         if not isinstance(results, Sequence) or isinstance(results, (str, bytes, bytearray)):
-            return "", [], []
+            return "", [], [], []
 
         lines: list[str] = []
         records: list[dict[str, object]] = []
         selected_results: list[object] = []
+        truncated_flags: list[bool] = []
         seen_memories: set[tuple[str, str | None, str | None, str | None]] = set()
         for result in results:
             record = _project_record(result)
@@ -249,6 +266,7 @@ def format_recall_context_with_selected_results(
                 lines.append(line)
                 records.append(record)
                 selected_results.append(result)
+                truncated_flags.append(False)
                 continue
 
             truncated = _fit_truncated_record(record, lines=lines, max_bytes=max_bytes)
@@ -257,11 +275,16 @@ def format_recall_context_with_selected_results(
                 lines.append(line)
                 records.append(record)
                 selected_results.append(result)
+                truncated_flags.append(True)
             break
 
-        return ("", [], []) if not lines else (_render(lines), records, selected_results)
+        return (
+            ("", [], [], [])
+            if not lines
+            else (_render(lines), records, selected_results, truncated_flags)
+        )
     except Exception:
-        return "", [], []
+        return "", [], [], []
 
 
 def _project_record(result: object) -> dict[str, object]:

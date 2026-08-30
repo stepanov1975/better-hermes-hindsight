@@ -22,7 +22,7 @@ from better_hermes_hindsight.client import (
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.formatting import (
     TEXT_TRUNCATION_MARKER,
-    format_recall_context_with_selected_results,
+    format_recall_context_with_selected_results_and_provenance,
     project_query,
 )
 from better_hermes_hindsight.private_output import (
@@ -30,7 +30,6 @@ from better_hermes_hindsight.private_output import (
     validate_private_output_path,
     write_private_json,
 )
-from better_hermes_hindsight.redaction import redact_sensitive_text
 
 _SCHEMA_VERSION = 1
 _VARIANTS = ("baseline", "prefer_observations")
@@ -415,15 +414,19 @@ def _response_for_evaluation(
     max_bytes: int,
 ) -> VariantResponse:
     _validate_live_formatter_input(response)
-    _context, records, selected_results = format_recall_context_with_selected_results(
-        response,
-        max_bytes=max_bytes,
+    _context, records, selected_results, truncated_flags = (
+        format_recall_context_with_selected_results_and_provenance(
+            response,
+            max_bytes=max_bytes,
+        )
     )
     if response.results and not _context:
         _fail("live response could not be formatted within the context limit")
     results: list[LabeledResult] = []
     seen_result_ids: set[str] = set()
-    for index, (record, result) in enumerate(zip(records, selected_results, strict=True)):
+    for index, (record, result, truncated) in enumerate(
+        zip(records, selected_results, truncated_flags, strict=True)
+    ):
         selected_result = cast(RecallResult, result)
         result_id = _nonempty_string(
             selected_result.id,
@@ -441,7 +444,7 @@ def _response_for_evaluation(
                 occurred_start=_record_metadata(record, "occurred_start", index),
                 occurred_end=_record_metadata(record, "occurred_end", index),
                 mentioned_at=_record_metadata(record, "mentioned_at", index),
-                truncated=text != redact_sensitive_text(selected_result.text),
+                truncated=truncated,
             )
         )
     return VariantResponse(
@@ -461,6 +464,7 @@ async def collect_live_responses(
     variant_configs = tuple(zip(variants, configs, strict=True))
     responses: dict[str, dict[str, VariantResponse]] = {variant: {} for variant in variants}
     clients: dict[str, HindsightClientAdapter] = {}
+    collection_error: BaseException | None = None
     try:
         for variant, variant_config in variant_configs:
             clients[variant] = create_hindsight_client(variant_config)
@@ -502,9 +506,19 @@ async def collect_live_responses(
                 responses[variant][case.case_id] = replace(processed, elapsed_ms=elapsed_ms)
             if issued_recall:
                 recall_pair_index += 1
+    except BaseException as error:
+        collection_error = error
+        raise
     finally:
+        cleanup_error: BaseException | None = None
         for client in clients.values():
-            await client.close()
+            try:
+                await client.close()
+            except BaseException as error:
+                if cleanup_error is None:
+                    cleanup_error = error
+        if collection_error is None and cleanup_error is not None:
+            raise cleanup_error
     return responses
 
 

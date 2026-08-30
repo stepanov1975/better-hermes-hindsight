@@ -304,6 +304,96 @@ def test_live_elapsed_time_includes_production_formatting(
     assert responses["baseline"]["timed"].elapsed_ms == 250.0
 
 
+def test_live_cleanup_attempts_every_client_and_preserves_primary_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_config(tmp_path, environ={}, injected={"single_principal": True})
+    cases = (
+        QualityCase(
+            case_id="cleanup",
+            query="historical query",
+            expect_recall=True,
+            useful_result_ids=frozenset(),
+            redundant_result_ids=frozenset(),
+            irrelevant_result_ids=frozenset(),
+            responses={},
+            labels_complete=False,
+        ),
+    )
+    close_calls: list[str] = []
+
+    class Client:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def recall(self, query: str) -> RecallResponse:
+            del query
+            raise RuntimeError("primary recall failure")
+
+        async def close(self) -> None:
+            close_calls.append(self.name)
+            if self.name == "baseline":
+                raise RuntimeError("cleanup failure")
+
+    clients = [Client("baseline"), Client("preferred")]
+    monkeypatch.setattr(
+        evaluation_module,
+        "create_hindsight_client",
+        lambda _config: clients.pop(0),
+    )
+
+    with pytest.raises(RuntimeError, match="primary recall failure"):
+        asyncio.run(collect_live_responses(cases, config, compare_prefer_observations=True))
+
+    assert close_calls == ["baseline", "preferred"]
+
+
+def test_live_cleanup_error_waits_until_every_client_is_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_config(tmp_path, environ={}, injected={"single_principal": True})
+    cases = (
+        QualityCase(
+            case_id="cleanup-success",
+            query="historical query",
+            expect_recall=True,
+            useful_result_ids=frozenset(),
+            redundant_result_ids=frozenset(),
+            irrelevant_result_ids=frozenset(),
+            responses={},
+            labels_complete=False,
+        ),
+    )
+    close_calls: list[str] = []
+
+    class Client:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def recall(self, query: str) -> RecallResponse:
+            del query
+            return RecallResponse(results=[])
+
+        async def close(self) -> None:
+            close_calls.append(self.name)
+            if self.name == "baseline":
+                raise RuntimeError("cleanup failure")
+
+    clients = [Client("baseline"), Client("preferred")]
+    monkeypatch.setattr(
+        evaluation_module,
+        "create_hindsight_client",
+        lambda _config: clients.pop(0),
+    )
+
+    with pytest.raises(RuntimeError, match="cleanup failure"):
+        asyncio.run(collect_live_responses(cases, config, compare_prefer_observations=True))
+
+    assert close_calls == ["baseline", "preferred"]
+
+
 @pytest.mark.parametrize(
     ("response", "message"),
     [
