@@ -223,6 +223,10 @@ the environment and replace dependencies selected by the current Hermes checkout
 Development follows rolling `main`; ordinary-user deployment uses Hermes's standard Git-plugin
 installer. PyPI publication is not required.
 
+Use the [recall-quality evaluator](docs/recall-quality-evaluation.md) for strict synthetic fixtures
+or privacy-preserving read-only comparison of the configured baseline with
+`prefer_observations=true`.
+
 See [implementation status](IMPLEMENTATION.md), [design](DESIGN.md), [contributing](CONTRIBUTING.md),
 and [GitHub security](docs/github-security.md).
 

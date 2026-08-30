@@ -283,6 +283,53 @@ def test_automatic_context_is_deterministic_ranked_jsonl_with_only_allowed_field
     assert all(forbidden.isdisjoint(record) for record in records)
 
 
+def test_model_context_deduplicates_normalized_memory_text_after_redaction() -> None:
+    first = "User prefers full-width Ａ text\nwith stable spacing."
+    duplicate = "User prefers full-width A text   with stable spacing."
+    response = _response(
+        _result(result_id="rank-1", text=first, result_type="observation"),
+        _result(result_id="rank-2", text=duplicate, result_type="world"),
+        _result(result_id="rank-3", text="Distinct memory", result_type="experience"),
+    )
+
+    context = format_recall_context(response, max_bytes=16_384)
+
+    assert _json_records(context) == [
+        {"memory": first, "type": "observation"},
+        {"memory": "Distinct memory", "type": "experience"},
+    ]
+
+
+def test_model_context_deduplicates_equal_redacted_text_and_preserves_first_rank() -> None:
+    first_secret = _synthetic_secret("first")
+    second_secret = _synthetic_secret("second")
+    response = _response(
+        _result(result_id="rank-1", text=f"api_key={first_secret}", result_type="world"),
+        _result(result_id="rank-2", text=f"api_key={second_secret}", result_type="observation"),
+    )
+
+    context, count = format_recall_context_with_count(response, max_bytes=8_192)
+
+    assert count == 1
+    assert _json_records(context) == [{"memory": "api_key=[REDACTED]", "type": "world"}]
+
+
+def test_duplicate_does_not_consume_byte_budget_before_next_distinct_record() -> None:
+    first = _result(result_id="rank-1", text="stable memory")
+    duplicate = _result(result_id="rank-2", text="stable   memory")
+    distinct = _result(result_id="rank-3", text="next memory")
+    expected = format_recall_context(_response(first, distinct), max_bytes=100_000)
+    budget = len(expected.encode("utf-8"))
+
+    actual = format_recall_context(_response(first, duplicate, distinct), max_bytes=budget)
+
+    assert actual == expected
+    assert [record["memory"] for record in _json_records(actual)] == [
+        "stable memory",
+        "next memory",
+    ]
+
+
 @pytest.mark.parametrize(
     "kind",
     ["api-key", "bearer-token", "authorization-header", "private-key", "url-userinfo"],

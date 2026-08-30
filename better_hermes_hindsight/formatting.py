@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import re
+import unicodedata
 from collections.abc import Sequence
 from functools import lru_cache
 from importlib.resources import files
@@ -209,21 +210,45 @@ def format_recall_context_with_records(
 ) -> tuple[str, list[dict[str, object]]]:
     """Return one bounded context envelope and its model-facing records."""
 
+    context, records, _selected = format_recall_context_with_selected_results(
+        response,
+        max_bytes=max_bytes,
+    )
+    return context, records
+
+
+def format_recall_context_with_selected_results(
+    response: object,
+    *,
+    max_bytes: int,
+) -> tuple[str, list[dict[str, object]], list[object]]:
+    """Return bounded context, model records, and their ranked source results."""
+
     if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
-        return "", []
+        return "", [], []
     try:
         results = cast(_RecallResponseLike, response).results
         if not isinstance(results, Sequence) or isinstance(results, (str, bytes, bytearray)):
-            return "", []
+            return "", [], []
 
         lines: list[str] = []
         records: list[dict[str, object]] = []
+        selected_results: list[object] = []
+        seen_memories: set[str] = set()
         for result in results:
             record = _project_record(result)
+            memory = record["memory"]
+            if not isinstance(memory, str):
+                raise TypeError("recall result text is malformed")
+            fingerprint = _memory_fingerprint(memory)
+            if fingerprint in seen_memories:
+                continue
+            seen_memories.add(fingerprint)
             line = _serialize_record(record)
             if _fits([*lines, line], max_bytes=max_bytes):
                 lines.append(line)
                 records.append(record)
+                selected_results.append(result)
                 continue
 
             truncated = _fit_truncated_record(record, lines=lines, max_bytes=max_bytes)
@@ -231,11 +256,12 @@ def format_recall_context_with_records(
                 line, record = truncated
                 lines.append(line)
                 records.append(record)
+                selected_results.append(result)
             break
 
-        return ("", []) if not lines else (_render(lines), records)
+        return ("", [], []) if not lines else (_render(lines), records, selected_results)
     except Exception:
-        return "", []
+        return "", [], []
 
 
 def _project_record(result: object) -> dict[str, object]:
@@ -258,6 +284,12 @@ def _project_record(result: object) -> dict[str, object]:
             record[field_name] = value
 
     return record
+
+
+def _memory_fingerprint(text: str) -> str:
+    """Normalize model-facing text only for exact duplicate comparison."""
+
+    return " ".join(unicodedata.normalize("NFKC", text).split())
 
 
 def _serialize_record(record: dict[str, object]) -> str:
@@ -339,5 +371,6 @@ __all__ = [
     "format_recall_context",
     "format_recall_context_with_count",
     "format_recall_context_with_records",
+    "format_recall_context_with_selected_results",
     "project_query",
 ]
