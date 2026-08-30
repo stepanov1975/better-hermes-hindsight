@@ -4,6 +4,7 @@ import asyncio
 import json
 import subprocess
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -12,7 +13,7 @@ import pytest
 
 import scripts.evaluate_recall_quality as evaluation_module
 from better_hermes_hindsight.client import RecallResponse, RecallResult
-from better_hermes_hindsight.config import load_config
+from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.formatting import QUERY_OMISSION_MARKER, TEXT_TRUNCATION_MARKER
 from scripts.evaluate_recall_quality import (
     EvaluationInputError,
@@ -196,6 +197,88 @@ def test_live_comparison_projects_queries_with_the_production_bounds(
     assert [result.result_id for result in responses["baseline"]["bounded-query"].results] == [
         "rank-1"
     ]
+
+
+def test_live_comparison_pairs_cases_and_counterbalances_variant_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_config(tmp_path, environ={}, injected={"single_principal": True})
+    cases = tuple(
+        QualityCase(
+            case_id=f"case-{index}",
+            query=f"historical query {index}",
+            expect_recall=True,
+            useful_result_ids=frozenset(),
+            redundant_result_ids=frozenset(),
+            irrelevant_result_ids=frozenset(),
+            responses={},
+        )
+        for index in range(2)
+    )
+    call_order: list[str] = []
+
+    class OrderedClient(_FakeClient):
+        def __init__(self, variant: str) -> None:
+            super().__init__()
+            self.variant = variant
+
+        async def recall(self, query: str) -> RecallResponse:
+            call_order.append(self.variant)
+            return await super().recall(query)
+
+    def create_client(client_config: BetterHindsightConfig) -> OrderedClient:
+        variant = "preferred" if client_config.recall.prefer_observations else "baseline"
+        return OrderedClient(variant)
+
+    monkeypatch.setattr(evaluation_module, "create_hindsight_client", create_client)
+
+    asyncio.run(collect_live_responses(cases, config, compare_prefer_observations=True))
+
+    assert call_order == ["baseline", "preferred", "preferred", "baseline"]
+
+
+def test_live_elapsed_time_includes_production_formatting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = load_config(tmp_path, environ={}, injected={"single_principal": True})
+    case = QualityCase(
+        case_id="timed",
+        query="historical query",
+        expect_recall=True,
+        useful_result_ids=frozenset(),
+        redundant_result_ids=frozenset(),
+        irrelevant_result_ids=frozenset(),
+        responses={},
+    )
+    events: list[str] = []
+    ticks = iter((1.0, 1.25))
+    original_formatter = evaluation_module._response_for_evaluation
+
+    def perf_counter() -> float:
+        events.append("clock")
+        return next(ticks)
+
+    def format_response(
+        response: RecallResponse,
+        elapsed_ms: float,
+        *,
+        max_bytes: int,
+    ) -> VariantResponse:
+        events.append("format")
+        return original_formatter(response, elapsed_ms, max_bytes=max_bytes)
+
+    monkeypatch.setattr(evaluation_module, "create_hindsight_client", lambda _config: _FakeClient())
+    monkeypatch.setattr(time, "perf_counter", perf_counter)
+    monkeypatch.setattr(evaluation_module, "_response_for_evaluation", format_response)
+
+    responses = asyncio.run(
+        collect_live_responses((case,), config, compare_prefer_observations=False)
+    )
+
+    assert events == ["clock", "format", "clock"]
+    assert responses["baseline"]["timed"].elapsed_ms == 250.0
 
 
 @pytest.mark.parametrize(

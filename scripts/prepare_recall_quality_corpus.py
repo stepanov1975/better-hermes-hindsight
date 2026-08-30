@@ -25,9 +25,11 @@ _TIMESTAMP_PREFIX = re.compile(
 )
 _MEMORY_CONTEXT_OPEN = "<memory-context>"
 _MEMORY_CONTEXT_CLOSE = "</memory-context>"
-_MEMORY_CONTEXT_ENVELOPE = re.compile(
-    re.escape(_MEMORY_CONTEXT_OPEN) + ".*?" + re.escape(_MEMORY_CONTEXT_CLOSE),
-    flags=re.DOTALL,
+_MEMORY_CONTEXT_START = re.compile(
+    r"(?:\A|\n\n)(?P<envelope>"
+    + re.escape(_MEMORY_CONTEXT_OPEN)
+    + r"\s*\n\[System note:\s*The following is recalled memory context,[^\]]*\]\s*)",
+    flags=re.IGNORECASE,
 )
 _INTERNAL_PREFIXES = (
     "[INTERNAL DELEGATION CLOSEOUT",
@@ -62,9 +64,9 @@ def clean_historical_query(content: object) -> str:
     query = _TIMESTAMP_PREFIX.sub("", content, count=1)
     without_trailing_space = query.rstrip()
     if without_trailing_space.endswith(_MEMORY_CONTEXT_CLOSE):
-        matches = list(_MEMORY_CONTEXT_ENVELOPE.finditer(without_trailing_space))
-        if matches and matches[-1].end() == len(without_trailing_space):
-            query = without_trailing_space[: matches[-1].start()]
+        starts = list(_MEMORY_CONTEXT_START.finditer(without_trailing_space))
+        if starts:
+            query = without_trailing_space[: starts[-1].start("envelope")]
     return query.strip()
 
 

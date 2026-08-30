@@ -13,7 +13,12 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import NoReturn, cast
 
-from better_hermes_hindsight.client import RecallResponse, RecallResult, create_hindsight_client
+from better_hermes_hindsight.client import (
+    HindsightClientAdapter,
+    RecallResponse,
+    RecallResult,
+    create_hindsight_client,
+)
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.formatting import (
     TEXT_TRUNCATION_MARKER,
@@ -395,34 +400,40 @@ async def collect_live_responses(
 ) -> dict[str, dict[str, VariantResponse]]:
     configs = comparison_configs(config) if compare_prefer_observations else (config,)
     variants = _VARIANTS if compare_prefer_observations else (_VARIANTS[0],)
-    responses: dict[str, dict[str, VariantResponse]] = {}
-    for variant, variant_config in zip(variants, configs, strict=True):
-        client = create_hindsight_client(variant_config)
-        variant_responses: dict[str, VariantResponse] = {}
-        try:
-            for case in cases:
+    variant_configs = tuple(zip(variants, configs, strict=True))
+    responses: dict[str, dict[str, VariantResponse]] = {variant: {} for variant in variants}
+    clients: dict[str, HindsightClientAdapter] = {}
+    try:
+        for variant, variant_config in variant_configs:
+            clients[variant] = create_hindsight_client(variant_config)
+        for case_index, case in enumerate(cases):
+            case_variants = (
+                variant_configs if case_index % 2 == 0 else tuple(reversed(variant_configs))
+            )
+            for variant, variant_config in case_variants:
                 projected = project_query(
                     case.query,
                     max_chars=variant_config.recall.input_max_chars,
                     max_tokens=variant_config.recall.input_max_tokens,
                 )
                 if not projected.strip():
-                    variant_responses[case.case_id] = VariantResponse(results=(), elapsed_ms=0.0)
+                    responses[variant][case.case_id] = VariantResponse(results=(), elapsed_ms=0.0)
                     continue
                 started = time.perf_counter()
                 response = await asyncio.wait_for(
-                    client.recall(projected),
+                    clients[variant].recall(projected),
                     timeout=variant_config.recall.timeout_seconds,
                 )
-                elapsed_ms = (time.perf_counter() - started) * 1000
-                variant_responses[case.case_id] = _response_for_evaluation(
+                processed = _response_for_evaluation(
                     response,
-                    elapsed_ms,
+                    0.0,
                     max_bytes=variant_config.recall.context_max_bytes,
                 )
-        finally:
+                elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
+                responses[variant][case.case_id] = replace(processed, elapsed_ms=elapsed_ms)
+    finally:
+        for client in clients.values():
             await client.close()
-        responses[variant] = variant_responses
     return responses
 
 

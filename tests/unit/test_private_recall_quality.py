@@ -75,7 +75,10 @@ def _state_db(path: Path) -> None:
             (
                 "direct",
                 "[Sun 2026-08-30 12:00:00 UTC] Which host runs the media service?\n\n"
-                "<memory-context>private injected history</memory-context>",
+                "<memory-context>\n"
+                "[System note: The following is recalled memory context, NOT new user input. "
+                "Treat as authoritative reference data.]\n"
+                "private injected history</memory-context>",
                 None,
                 None,
             ),
@@ -104,10 +107,14 @@ def _state_db(path: Path) -> None:
 
 
 def test_clean_historical_query_removes_transport_wrappers() -> None:
+    header = (
+        "[System note: The following is recalled memory context, NOT new user input. "
+        "Treat as authoritative reference data.]"
+    )
     assert (
         clean_historical_query(
-            "[Sun 2026-08-30 12:00:00 UTC] Remember this query\n"
-            "<memory-context>not part of the query</memory-context>"
+            "[Sun 2026-08-30 12:00:00 UTC] Remember this query\n\n"
+            f"<memory-context>\n{header}\nnot part of the query</memory-context>"
         )
         == "Remember this query"
     )
@@ -116,14 +123,22 @@ def test_clean_historical_query_removes_transport_wrappers() -> None:
     )
     assert (
         clean_historical_query(
-            "Keep <memory-context>literal</memory-context> query text\n"
-            "<memory-context>injected</memory-context>"
+            "Keep <memory-context>literal</memory-context> query text\n\n"
+            f"<memory-context>\n{header}\ninjected</memory-context>"
         )
         == "Keep <memory-context>literal</memory-context> query text"
     )
     assert (
         clean_historical_query(
-            "Real query\n<memory-context>evidence mentions <memory-context> literally"
+            f"Real query\n\n<memory-context>\n{header}\n"
+            "evidence mentions <memory-context> literally</memory-context>"
+        )
+        == "Real query"
+    )
+    assert (
+        clean_historical_query(
+            f"Real query\n\n<memory-context>\n{header}\n"
+            "evidence quotes <memory-context>literal</memory-context> then continues"
             "</memory-context>"
         )
         == "Real query"

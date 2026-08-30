@@ -86,13 +86,16 @@ HINDSIGHT_API_KEY=... .venv/bin/python scripts/evaluate_recall_quality.py \
 ```
 
 The Hermes home must be explicit and absolute. The configured principal must authorize CLI recall.
-The evaluator performs two sequential read-only recall passes:
+For each case, the evaluator performs the two read-only recalls adjacently and alternates which variant
+runs first across cases:
 
 1. the configured Hindsight request policy;
 2. the same immutable configuration with only `recall.prefer_observations` changed to `true`.
 
-Each pass applies the configured production input projection, recall deadline, redaction, candidate
-normalized exact deduplication, and model-context byte bound before scoring labeled results. Both
+Each variant applies the configured production input projection, recall deadline, redaction, candidate
+normalized exact deduplication, and model-context byte bound before scoring labeled results. Reported
+live elapsed time includes that production processing. Pairing and counterbalancing reduce live-bank
+drift and order bias; use a fixed real-bank snapshot when strict snapshot equivalence is required. Both
 variants use the same candidate deduplication; the comparison therefore isolates observation
 preference rather than measuring deduplication against the currently deployed formatter. The script
 rejects the comparison when the configured baseline already prefers observations. The evaluator never
