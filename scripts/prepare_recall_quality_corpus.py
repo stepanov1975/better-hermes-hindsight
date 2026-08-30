@@ -24,7 +24,6 @@ _TIMESTAMP_PREFIX = re.compile(
     r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC\]\s*"
 )
 _MEMORY_CONTEXT_OPEN = "<memory-context>"
-_MEMORY_CONTEXT_CLOSE = "</memory-context>"
 _MEMORY_CONTEXT_START = re.compile(
     r"(?:\A|\n\n)(?P<envelope>"
     + re.escape(_MEMORY_CONTEXT_OPEN)
@@ -57,21 +56,19 @@ def _fail(message: str) -> NoReturn:
     raise CollectionError(message)
 
 
-def clean_historical_query(content: object) -> str:
-    """Remove one unambiguous appended memory envelope from a persisted user turn."""
+def clean_historical_query(content: object, *, trusted_raw: bool = False) -> str:
+    """Remove transport timestamp and reject signed wrappers without source provenance."""
 
     if not isinstance(content, str):
         return ""
-    query = _TIMESTAMP_PREFIX.sub("", content, count=1)
-    without_trailing_space = query.rstrip()
-    signed_starts = list(_MEMORY_CONTEXT_START.finditer(without_trailing_space))
-    if len(signed_starts) > 1:
-        # User literals and recalled evidence can contain arbitrary delimiters.
-        # Exclude ambiguous turns rather than silently altering private query text.
+    query = _TIMESTAMP_PREFIX.sub("", content, count=1).strip()
+    if trusted_raw:
+        return query
+    if _MEMORY_CONTEXT_START.search(query):
+        # Persisted model-facing content cannot distinguish transport envelopes
+        # from user-authored signed literals. Exclude it rather than rewriting it.
         return ""
-    if without_trailing_space.endswith(_MEMORY_CONTEXT_CLOSE) and signed_starts:
-        query = without_trailing_space[: signed_starts[0].start("envelope")]
-    return query.strip()
+    return query
 
 
 def _normalized_query(query: str) -> str:
@@ -206,7 +203,7 @@ def collect_historical_queries(
         connection.execute("PRAGMA query_only=ON")
         rows = connection.execute(
             f"""
-            SELECT m.session_id, m.content
+            SELECT m.session_id, m.content, m.api_content IS NOT NULL
             FROM messages AS m
             JOIN sessions AS s ON s.id = m.session_id
             WHERE m.role = 'user'
@@ -216,15 +213,16 @@ def collect_historical_queries(
               AND m.display_kind IS NULL
               AND m.display_metadata IS NULL
               AND typeof(m.content) = 'text'
-              AND length(m.content) <= ?
+              AND instr(m.content, char(0)) = 0
+              AND length(CAST(m.content AS BLOB)) <= ?
             ORDER BY m.timestamp DESC, m.rowid DESC
             LIMIT ?
             """,
             (cutoff, *sources, stored_char_limit, scan_limit),
         )
-        for session_id, content in rows:
+        for session_id, content, has_trusted_raw in rows:
             scanned += 1
-            query = clean_historical_query(content)
+            query = clean_historical_query(content, trusted_raw=bool(has_trusted_raw))
             reason = _exclusion_reason(query, max_chars=max_chars, max_lines=max_lines)
             if reason is not None:
                 excluded[reason] += 1

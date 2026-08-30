@@ -52,6 +52,7 @@ def _state_db(path: Path) -> None:
             session_id TEXT NOT NULL,
             role TEXT NOT NULL,
             content TEXT,
+            api_content TEXT,
             timestamp REAL NOT NULL,
             display_kind TEXT,
             display_metadata TEXT,
@@ -100,6 +101,13 @@ def _state_db(path: Path) -> None:
         ],
     )
     connection.execute(
+        "UPDATE messages SET api_content = content, content = ? WHERE content LIKE ?",
+        (
+            "[Sun 2026-08-30 12:00:00 UTC] Which host runs the media service?",
+            "%private injected history%",
+        ),
+    )
+    connection.execute(
         """
         INSERT INTO messages(
             session_id, role, content, timestamp, display_kind, display_metadata,
@@ -121,7 +129,7 @@ def test_clean_historical_query_removes_transport_wrappers() -> None:
             "[Sun 2026-08-30 12:00:00 UTC] Remember this query\n\n"
             f"<memory-context>\n{header}\nnot part of the query</memory-context>"
         )
-        == "Remember this query"
+        == ""
     )
     assert clean_historical_query("Keep a literal <memory-context> marker") == (
         "Keep a literal <memory-context> marker"
@@ -131,14 +139,14 @@ def test_clean_historical_query_removes_transport_wrappers() -> None:
             "Keep <memory-context>literal</memory-context> query text\n\n"
             f"<memory-context>\n{header}\ninjected</memory-context>"
         )
-        == "Keep <memory-context>literal</memory-context> query text"
+        == ""
     )
     assert (
         clean_historical_query(
             f"Real query\n\n<memory-context>\n{header}\n"
             "evidence mentions <memory-context> literally</memory-context>"
         )
-        == "Real query"
+        == ""
     )
     assert (
         clean_historical_query(
@@ -146,7 +154,7 @@ def test_clean_historical_query_removes_transport_wrappers() -> None:
             "evidence mentions </memory-context> literally then continues"
             "</memory-context>"
         )
-        == "Real query"
+        == ""
     )
     assert (
         clean_historical_query(
@@ -154,7 +162,7 @@ def test_clean_historical_query_removes_transport_wrappers() -> None:
             "evidence quotes <memory-context>literal</memory-context> then continues"
             "</memory-context>"
         )
-        == "Real query"
+        == ""
     )
     assert (
         clean_historical_query(
@@ -174,6 +182,8 @@ def test_clean_historical_query_removes_transport_wrappers() -> None:
         == ""
     )
     user_signed_literal = f"<memory-context>\n{header}\nquoted block</memory-context>"
+    assert clean_historical_query(user_signed_literal) == ""
+    assert clean_historical_query(user_signed_literal, trusted_raw=True) == user_signed_literal
     assert (
         clean_historical_query(
             f"{user_signed_literal}\nquestion after quote\n\n"
@@ -299,6 +309,33 @@ def test_collector_reads_active_wal_without_changing_rows(tmp_path: Path) -> Non
     writer.close()
     assert before == after
     assert "Which setting did we use?" in queries
+
+
+def test_collector_excludes_embedded_nul_before_materializing_text(tmp_path: Path) -> None:
+    database = tmp_path / "state.db"
+    _state_db(database)
+    connection = sqlite3.connect(database)
+    connection.execute(
+        "INSERT INTO messages(session_id, role, content, timestamp) VALUES (?, 'user', ?, ?)",
+        ("direct", "valid prefix\x00" + "x" * 100_000, 1_000_001),
+    )
+    connection.commit()
+    connection.close()
+
+    queries, stats = collect_historical_queries(
+        database.resolve(),
+        days=30_000,
+        limit=20,
+        max_per_session=20,
+        max_chars=1_200,
+        max_lines=12,
+        sources=("telegram", "cli", "tui"),
+        seed="seed",
+        now=1_000_100,
+    )
+
+    assert stats["scanned"] == 7
+    assert all("\x00" not in query for query in queries)
 
 
 def test_collector_rejects_limits_above_safe_reassignment_depth(tmp_path: Path) -> None:
@@ -554,6 +591,7 @@ def test_capture_payload_round_trips_private_responses_without_provenance(tmp_pa
     assert loaded_result.occurred_start == "2026-08-01T00:00:00+00:00"
     assert loaded_result.occurred_end == "2026-08-02T00:00:00+00:00"
     assert loaded_result.mentioned_at == "2026-08-03T00:00:00+00:00"
+    assert loaded_result.truncated is False
     assert loaded[0].labels_complete is False
     assert capture_summary((case,), responses) == {
         "result": "captured",

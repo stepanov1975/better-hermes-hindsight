@@ -30,6 +30,7 @@ from better_hermes_hindsight.private_output import (
     validate_private_output_path,
     write_private_json,
 )
+from better_hermes_hindsight.redaction import redact_sensitive_text
 
 _SCHEMA_VERSION = 1
 _VARIANTS = ("baseline", "prefer_observations")
@@ -51,6 +52,7 @@ _RESULT_KEYS = {
     "occurred_start",
     "occurred_end",
     "mentioned_at",
+    "truncated",
 }
 _RESULT_REQUIRED_KEYS = {"id", "text"}
 
@@ -67,6 +69,7 @@ class LabeledResult:
     occurred_start: str | None = None
     occurred_end: str | None = None
     mentioned_at: str | None = None
+    truncated: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +156,10 @@ def _parse_result(value: object, field: str) -> LabeledResult:
             return None
         return _unicode_string(result[key], f"{field}.{key}")
 
+    truncated = result.get("truncated", False)
+    if not isinstance(truncated, bool):
+        _fail(f"{field}.truncated must be a boolean")
+
     return LabeledResult(
         result_id=_nonempty_string(result["id"], f"{field}.id"),
         text=_nonempty_string(result["text"], f"{field}.text"),
@@ -160,6 +167,7 @@ def _parse_result(value: object, field: str) -> LabeledResult:
         occurred_start=optional_text("occurred_start"),
         occurred_end=optional_text("occurred_end"),
         mentioned_at=optional_text("mentioned_at"),
+        truncated=truncated,
     )
 
 
@@ -269,8 +277,14 @@ def _safe_ratio(numerator: int, denominator: int) -> float | None:
     return None if denominator == 0 else round(numerator / denominator, 6)
 
 
-def _has_substantive_memory_text(text: str) -> bool:
-    prefix = text[: -len(TEXT_TRUNCATION_MARKER)] if text.endswith(TEXT_TRUNCATION_MARKER) else text
+def _has_substantive_memory_text(result: LabeledResult) -> bool:
+    if not result.truncated:
+        return bool(result.text.strip())
+    prefix = (
+        result.text[: -len(TEXT_TRUNCATION_MARKER)]
+        if result.text.endswith(TEXT_TRUNCATION_MARKER)
+        else result.text
+    )
     return bool(prefix.strip())
 
 
@@ -299,14 +313,12 @@ def evaluate_variant(
             _fail(f"cases[{case_index}] has no response for this variant")
         result_ids = [result.result_id for result in response.results]
         usable_result_ids = {
-            result.result_id
-            for result in response.results
-            if _has_substantive_memory_text(result.text)
+            result.result_id for result in response.results if _has_substantive_memory_text(result)
         }
         expected_memory_hits += len(case.useful_result_ids & usable_result_ids)
         top_3 = response.results[:3]
         useful_at_3_hits += sum(
-            result.result_id in case.useful_result_ids and _has_substantive_memory_text(result.text)
+            result.result_id in case.useful_result_ids and _has_substantive_memory_text(result)
             for result in top_3
         )
         useful_at_3_slots += len(top_3)
@@ -323,7 +335,7 @@ def evaluate_variant(
         returned_records += len(response.results)
         returned_text_bytes += sum(len(result.text.encode("utf-8")) for result in response.results)
         fully_truncated_returns += sum(
-            not _has_substantive_memory_text(result.text) for result in response.results
+            not _has_substantive_memory_text(result) for result in response.results
         )
         if response.elapsed_ms is not None:
             elapsed_values.append(response.elapsed_ms)
@@ -412,8 +424,9 @@ def _response_for_evaluation(
     results: list[LabeledResult] = []
     seen_result_ids: set[str] = set()
     for index, (record, result) in enumerate(zip(records, selected_results, strict=True)):
+        selected_result = cast(RecallResult, result)
         result_id = _nonempty_string(
-            cast(RecallResult, result).id,
+            selected_result.id,
             f"live results[{index}].id",
         )
         text = _nonempty_string(record["memory"], f"live results[{index}].text")
@@ -428,6 +441,7 @@ def _response_for_evaluation(
                 occurred_start=_record_metadata(record, "occurred_start", index),
                 occurred_end=_record_metadata(record, "occurred_end", index),
                 mentioned_at=_record_metadata(record, "mentioned_at", index),
+                truncated=text != redact_sensitive_text(selected_result.text),
             )
         )
     return VariantResponse(
@@ -507,8 +521,12 @@ def evaluate(
     }
 
 
-def _result_payload(result: LabeledResult) -> dict[str, str]:
-    payload = {"id": result.result_id, "text": result.text}
+def _result_payload(result: LabeledResult) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "id": result.result_id,
+        "text": result.text,
+        "truncated": result.truncated,
+    }
     optional = {
         "type": result.memory_type,
         "occurred_start": result.occurred_start,

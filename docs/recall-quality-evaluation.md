@@ -36,19 +36,20 @@ mkdir -m 700 -p "$PWD/.hermes/recall-quality"
   --limit 60
 ```
 
-The collector opens the state database query-only, considers direct `telegram`, `cli`, and `tui`
-user sessions by default—including their compression, reset, and branch continuations—removes the
-transport timestamp and one unambiguous appended `<memory-context>...</memory-context>` envelope,
-deduplicates normalized queries, and rejects turns with multiple signed envelope openers, typed
-internal traffic, compaction-summary scaffolding, attachments, credential-pattern matches, very large
-turns, and non-user sources. It streams at most
-`100 * --limit` newest matching rows, caps `--limit` at 500 so recursive session reassignment remains
-within Python's call-depth bound, and filters stored turns larger than `--max-chars + 64 KiB` in SQLite
-before reading their content. As with normal SQLite WAL readers, opening an active read-only database
-may update its existing shared-memory coordination file; it does not change message or session rows.
-The corpus stores no session or message identifiers, and the command prints only aggregate counts. The
-selected query pool has `labels_complete=false`; review it privately and remove unsuitable cases before
-recall capture.
+The collector opens the state database query-only and considers direct `telegram`, `cli`, and `tui`
+user sessions by default—including their compression, reset, and branch continuations. It reads the
+persisted original `content`; a separate non-null `api_content` is used only as provenance that an
+API-facing enriched payload was recorded, never as the query source. When that provenance is
+unavailable, original text containing a signed memory-context wrapper is excluded rather than
+rewritten. It removes only the transport timestamp, deduplicates normalized queries, and rejects typed
+internal traffic, compaction-summary scaffolding, attachments, credential-pattern matches, embedded
+NULs, very large turns, and non-user sources. It streams at most `100 * --limit` newest matching rows,
+caps `--limit` at 500 so recursive session reassignment remains within Python's call-depth bound, and
+filters stored turns by underlying UTF-8 blob length before materializing their content. As with normal
+SQLite WAL readers, opening an active read-only database may update its existing shared-memory
+coordination file; it does not change message or session rows. The corpus stores no session or message
+identifiers, and the command prints only aggregate counts. The selected query pool has
+`labels_complete=false`; review it privately and remove unsuitable cases before recall capture.
 
 Capture production-processed responses from the configured real bank without mutating it:
 
@@ -138,7 +139,8 @@ classified.
               "id": "expected-result-id",
               "text": "Synthetic fixture text",
               "type": "world",
-              "occurred_start": "2026-08-01T00:00:00+00:00"
+              "occurred_start": "2026-08-01T00:00:00+00:00",
+              "truncated": false
             }
           ]
         },
@@ -149,7 +151,8 @@ classified.
               "id": "expected-result-id",
               "text": "Synthetic fixture text",
               "type": "world",
-              "occurred_start": "2026-08-01T00:00:00+00:00"
+              "occurred_start": "2026-08-01T00:00:00+00:00",
+              "truncated": false
             }
           ]
         }
@@ -162,8 +165,9 @@ classified.
 `labels_complete` is required. It must remain `false` during collection/capture and become `true` only
 after every case and returned ID has been reviewed. Each result requires `id` and `text`; captures also
 preserve the allowlisted model-facing `type`, `occurred_start`, `occurred_end`, and `mentioned_at`
-fields when present so identical text from distinct occurrences can be labeled correctly. `responses`
-is required for offline evaluation and omitted for live recall. Unknown fields, duplicate JSON keys,
+fields when present, plus an explicit `truncated` boolean, so distinct occurrences and real formatter
+truncation can be labeled and scored without inferring provenance from private text. `responses` is
+required for offline evaluation and omitted for live recall. Unknown fields, duplicate JSON keys,
 duplicate case/result IDs, overlapping label sets, malformed types, and useful labels on a negative
 case are rejected.
 

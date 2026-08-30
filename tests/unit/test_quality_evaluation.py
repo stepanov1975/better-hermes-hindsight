@@ -348,6 +348,22 @@ def test_live_capture_rejects_nonempty_response_that_cannot_fit_context() -> Non
         _response_for_evaluation(response, 1.0, max_bytes=1)
 
 
+def test_live_capture_records_explicit_truncation_provenance() -> None:
+    truncated = _response_for_evaluation(
+        RecallResponse(results=[RecallResult(id="long", text="x" * 10_000)]),
+        1.0,
+        max_bytes=1_024,
+    )
+    literal = _response_for_evaluation(
+        RecallResponse(results=[RecallResult(id="literal", text=TEXT_TRUNCATION_MARKER)]),
+        1.0,
+        max_bytes=8_192,
+    )
+
+    assert truncated.results[0].truncated is True
+    assert literal.results[0].truncated is False
+
+
 def test_comparison_rejects_a_baseline_that_already_prefers_observations(tmp_path: Path) -> None:
     config = load_config(
         tmp_path,
@@ -417,7 +433,13 @@ def test_fully_truncated_useful_result_is_not_counted_as_evidence() -> None:
     responses = {
         "baseline": {
             case.case_id: VariantResponse(
-                results=(LabeledResult("useful", " \n" + TEXT_TRUNCATION_MARKER),),
+                results=(
+                    LabeledResult(
+                        "useful",
+                        " \n" + TEXT_TRUNCATION_MARKER,
+                        truncated=True,
+                    ),
+                ),
                 elapsed_ms=1.0,
             )
         }
@@ -432,6 +454,34 @@ def test_fully_truncated_useful_result_is_not_counted_as_evidence() -> None:
     assert metrics["useful_at_3_hits"] == 0
     assert metrics["fully_truncated_returns"] == 1
     assert metrics["returned_records"] == 1
+
+
+def test_literal_truncation_marker_is_counted_as_evidence() -> None:
+    case = QualityCase(
+        case_id="literal-marker",
+        query="remember the literal marker",
+        expect_recall=True,
+        useful_result_ids=frozenset({"useful"}),
+        redundant_result_ids=frozenset(),
+        irrelevant_result_ids=frozenset(),
+        responses={},
+    )
+    responses = {
+        "baseline": {
+            case.case_id: VariantResponse(
+                results=(LabeledResult("useful", TEXT_TRUNCATION_MARKER),),
+                elapsed_ms=1.0,
+            )
+        }
+    }
+
+    report = evaluate((case,), responses)
+    variants = cast(dict[str, dict[str, int | float | None]], report["variants"])
+    metrics = variants["baseline"]
+
+    assert metrics["expected_memory_hits"] == 1
+    assert metrics["useful_at_3_hits"] == 1
+    assert metrics["fully_truncated_returns"] == 0
 
 
 def test_live_evaluation_skips_whitespace_only_projected_queries(
