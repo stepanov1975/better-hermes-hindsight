@@ -236,7 +236,7 @@ def test_comparison_rejects_a_baseline_that_already_prefers_observations(tmp_pat
         comparison_configs(config)
 
 
-@pytest.mark.parametrize("elapsed", ["NaN", "Infinity", "1e400"])
+@pytest.mark.parametrize("elapsed", ["NaN", "Infinity", "1e400", "9" * 310])
 def test_corpus_rejects_non_finite_elapsed_values(tmp_path: Path, elapsed: str) -> None:
     corpus = tmp_path / "non-finite.json"
     source = FIXTURE.read_text(encoding="utf-8").replace(

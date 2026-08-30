@@ -46,6 +46,8 @@ def _open_private_parent(parent: Path) -> int:
             raise PrivateOutputError(
                 "private output directory must not allow group or other access"
             )
+        if stat.S_IMODE(parent_stat.st_mode) & 0o300 != 0o300:
+            raise PrivateOutputError("private output directory must be owner-writable")
         return descriptor
     except PrivateOutputError:
         os.close(descriptor)
@@ -55,13 +57,34 @@ def _open_private_parent(parent: Path) -> int:
         raise PrivateOutputError("private output directory is unavailable") from error
 
 
-def write_private_json(path: Path, payload: object) -> None:
-    """Create one owner-only JSON file without overwriting an existing artifact."""
-
+def _validate_private_path_shape(path: Path) -> None:
     if not path.is_absolute():
         raise PrivateOutputError("private output path must be absolute")
     if path.name in {"", ".", ".."}:
         raise PrivateOutputError("private output path must name a file")
+
+
+def validate_private_output_path(path: Path) -> None:
+    """Preflight deterministic destination failures without creating the output file."""
+
+    _validate_private_path_shape(path)
+    parent_descriptor = _open_private_parent(path.parent)
+    try:
+        try:
+            os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        raise PrivateOutputError("private output file already exists")
+    except OSError as error:
+        raise PrivateOutputError("private output path could not be checked") from error
+    finally:
+        os.close(parent_descriptor)
+
+
+def write_private_json(path: Path, payload: object) -> None:
+    """Create one owner-only JSON file without overwriting an existing artifact."""
+
+    _validate_private_path_shape(path)
 
     data = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8") + b"\n"
     parent_descriptor = _open_private_parent(path.parent)
@@ -95,4 +118,4 @@ def write_private_json(path: Path, payload: object) -> None:
         os.close(parent_descriptor)
 
 
-__all__ = ["PrivateOutputError", "write_private_json"]
+__all__ = ["PrivateOutputError", "validate_private_output_path", "write_private_json"]

@@ -23,10 +23,8 @@ _TIMESTAMP_PREFIX = re.compile(
     r"^\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) "
     r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} UTC\]\s*"
 )
-_MEMORY_CONTEXT_SUFFIX = re.compile(
-    r"\s*<memory-context>.*</memory-context>\s*\Z",
-    flags=re.DOTALL,
-)
+_MEMORY_CONTEXT_OPEN = "<memory-context>"
+_MEMORY_CONTEXT_CLOSE = "</memory-context>"
 _INTERNAL_PREFIXES = (
     "[INTERNAL DELEGATION CLOSEOUT",
     "[OUT-OF-BAND USER MESSAGE",
@@ -53,12 +51,17 @@ def _fail(message: str) -> NoReturn:
 
 
 def clean_historical_query(content: object) -> str:
-    """Remove transport timestamp and appended memory context from a persisted user turn."""
+    """Remove transport timestamp and only the final appended memory envelope."""
 
     if not isinstance(content, str):
         return ""
     query = _TIMESTAMP_PREFIX.sub("", content, count=1)
-    query = _MEMORY_CONTEXT_SUFFIX.sub("", query, count=1)
+    without_trailing_space = query.rstrip()
+    if without_trailing_space.endswith(_MEMORY_CONTEXT_CLOSE):
+        close_start = len(without_trailing_space) - len(_MEMORY_CONTEXT_CLOSE)
+        open_start = without_trailing_space.rfind(_MEMORY_CONTEXT_OPEN, 0, close_start)
+        if open_start >= 0:
+            query = without_trailing_space[:open_start]
     return query.strip()
 
 

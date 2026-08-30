@@ -20,7 +20,11 @@ from better_hermes_hindsight.formatting import (
     format_recall_context_with_selected_results,
     project_query,
 )
-from better_hermes_hindsight.private_output import PrivateOutputError, write_private_json
+from better_hermes_hindsight.private_output import (
+    PrivateOutputError,
+    validate_private_output_path,
+    write_private_json,
+)
 
 _SCHEMA_VERSION = 1
 _VARIANTS = ("baseline", "prefer_observations")
@@ -140,17 +144,17 @@ def _parse_response(value: object, field: str) -> VariantResponse:
     if len(result_ids) != len(set(result_ids)):
         _fail(f"{field}.results must not contain duplicate IDs")
     elapsed = response.get("elapsed_ms")
-    if elapsed is not None and (
-        isinstance(elapsed, bool)
-        or not isinstance(elapsed, (int, float))
-        or not math.isfinite(elapsed)
-        or elapsed < 0
-    ):
-        _fail(f"{field}.elapsed_ms must be a finite non-negative number")
-    return VariantResponse(
-        results=results,
-        elapsed_ms=None if elapsed is None else float(elapsed),
-    )
+    elapsed_value: float | None = None
+    if elapsed is not None:
+        if isinstance(elapsed, bool) or not isinstance(elapsed, (int, float)):
+            _fail(f"{field}.elapsed_ms must be a finite non-negative number")
+        try:
+            elapsed_value = float(elapsed)
+        except OverflowError:
+            _fail(f"{field}.elapsed_ms must be a finite non-negative number")
+        if not math.isfinite(elapsed_value) or elapsed_value < 0:
+            _fail(f"{field}.elapsed_ms must be a finite non-negative number")
+    return VariantResponse(results=results, elapsed_ms=elapsed_value)
 
 
 def _parse_case(value: object, index: int) -> QualityCase:
@@ -502,12 +506,14 @@ def main() -> int:
             _fail("corpus contains incomplete labels")
         if args.capture_private is not None and args.hermes_home is None:
             _fail("--capture-private requires --hermes-home live recall")
+        if args.hermes_home is not None and not args.hermes_home.is_absolute():
+            _fail("--hermes-home must be an explicit absolute path")
+        if args.capture_private is not None:
+            validate_private_output_path(args.capture_private)
         if args.hermes_home is None:
             variants = _VARIANTS if args.compare_prefer_observations else (_VARIANTS[0],)
             responses = _offline_responses(cases, variants)
         else:
-            if not args.hermes_home.is_absolute():
-                _fail("--hermes-home must be an explicit absolute path")
             config = load_config(args.hermes_home)
             if not config.authorize_cli().recall_enabled:
                 _fail("configured CLI principal is not authorized for recall")

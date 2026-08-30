@@ -114,6 +114,13 @@ def test_clean_historical_query_removes_transport_wrappers() -> None:
     assert clean_historical_query("Keep a literal <memory-context> marker") == (
         "Keep a literal <memory-context> marker"
     )
+    assert (
+        clean_historical_query(
+            "Keep <memory-context>literal</memory-context> query text\n"
+            "<memory-context>injected</memory-context>"
+        )
+        == "Keep <memory-context>literal</memory-context> query text"
+    )
 
 
 def test_session_cap_uses_an_equivalent_query_from_an_uncapped_session() -> None:
@@ -332,6 +339,38 @@ def test_live_cli_rejects_incomplete_labels_before_loading_live_config(tmp_path:
 
     assert completed.returncode == 2
     assert "corpus contains incomplete labels" in completed.stderr
+    assert "configured CLI principal" not in completed.stderr
+
+
+def test_capture_cli_preflights_destination_before_loading_live_config(tmp_path: Path) -> None:
+    corpus = tmp_path / "unlabelled.json"
+    corpus.write_text(
+        json.dumps(corpus_payload(["Which host runs the service?"])),
+        encoding="utf-8",
+    )
+    private_dir = tmp_path / "private"
+    private_dir.mkdir(mode=0o700)
+    destination = private_dir / "capture.json"
+    destination.write_text("occupied", encoding="utf-8")
+    destination.chmod(0o600)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(EVALUATOR_SCRIPT),
+            str(corpus),
+            "--hermes-home",
+            str(tmp_path),
+            "--capture-private",
+            str(destination),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "private output file already exists" in completed.stderr
     assert "configured CLI principal" not in completed.stderr
 
 
