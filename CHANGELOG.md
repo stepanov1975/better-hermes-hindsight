@@ -10,8 +10,11 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
   contract and an isolated live retain, outbox restart recovery, recall, replay, and cleanup proof.
 - Added contract coverage confirming Better continues to omit the optional 0.9.2 retain
   `resolve_entities` field.
-- Added a strict privacy-preserving recall-quality evaluator with a synthetic labeled corpus and a
+- Added a strict privacy-preserving recall-quality evaluator with a synthetic regression fixture and a
   read-only comparison mode that changes only `prefer_observations`.
+- Added an owner-only historical-query collector and private live-response capture so real-bank
+  evaluations can be labeled and scored without committing or printing queries, recalled text, IDs,
+  or labels.
 
 ### Fixed
 

@@ -20,6 +20,7 @@ from better_hermes_hindsight.formatting import (
     format_recall_context_with_selected_results,
     project_query,
 )
+from better_hermes_hindsight.private_output import PrivateOutputError, write_private_json
 
 _SCHEMA_VERSION = 1
 _VARIANTS = ("baseline", "prefer_observations")
@@ -30,6 +31,7 @@ _CASE_KEYS = {
     "useful_result_ids",
     "redundant_result_ids",
     "irrelevant_result_ids",
+    "labels_complete",
     "responses",
 }
 _RESPONSE_KEYS = {"elapsed_ms", "results"}
@@ -61,6 +63,7 @@ class QualityCase:
     redundant_result_ids: frozenset[str]
     irrelevant_result_ids: frozenset[str]
     responses: Mapping[str, VariantResponse]
+    labels_complete: bool = True
 
 
 class _DuplicateJsonKey(ValueError):
@@ -161,6 +164,9 @@ def _parse_case(value: object, index: int) -> QualityCase:
     expect_recall = case["expect_recall"]
     if not isinstance(expect_recall, bool):
         _fail(f"{field}.expect_recall must be a boolean")
+    labels_complete = case["labels_complete"]
+    if not isinstance(labels_complete, bool):
+        _fail(f"{field}.labels_complete must be a boolean")
     useful = _id_set(case["useful_result_ids"], f"{field}.useful_result_ids")
     redundant = _id_set(case["redundant_result_ids"], f"{field}.redundant_result_ids")
     irrelevant = _id_set(case["irrelevant_result_ids"], f"{field}.irrelevant_result_ids")
@@ -185,6 +191,7 @@ def _parse_case(value: object, index: int) -> QualityCase:
         redundant_result_ids=redundant,
         irrelevant_result_ids=irrelevant,
         responses=responses,
+        labels_complete=labels_complete,
     )
 
 
@@ -390,10 +397,72 @@ def evaluate(
     cases: Sequence[QualityCase],
     responses: Mapping[str, Mapping[str, VariantResponse]],
 ) -> dict[str, object]:
+    if any(not case.labels_complete for case in cases):
+        _fail("corpus contains incomplete labels")
     return {
         "result": "ok",
         "schema_version": _SCHEMA_VERSION,
         "variants": {variant: evaluate_variant(cases, responses[variant]) for variant in responses},
+    }
+
+
+def capture_corpus_payload(
+    cases: Sequence[QualityCase],
+    responses: Mapping[str, Mapping[str, VariantResponse]],
+) -> dict[str, object]:
+    """Serialize one private, production-processed live capture for later labeling."""
+
+    return {
+        "schema_version": _SCHEMA_VERSION,
+        "cases": [
+            {
+                "id": case.case_id,
+                "query": case.query,
+                "expect_recall": case.expect_recall,
+                "useful_result_ids": sorted(case.useful_result_ids),
+                "redundant_result_ids": sorted(case.redundant_result_ids),
+                "irrelevant_result_ids": sorted(case.irrelevant_result_ids),
+                "labels_complete": False,
+                "responses": {
+                    variant: {
+                        "elapsed_ms": response.elapsed_ms,
+                        "results": [
+                            {"id": result.result_id, "text": result.text}
+                            for result in response.results
+                        ],
+                    }
+                    for variant, variant_responses in responses.items()
+                    for response in (variant_responses[case.case_id],)
+                },
+            }
+            for case in cases
+        ],
+    }
+
+
+def capture_summary(
+    cases: Sequence[QualityCase],
+    responses: Mapping[str, Mapping[str, VariantResponse]],
+) -> dict[str, object]:
+    """Return aggregate-only proof that a private live capture completed."""
+
+    return {
+        "result": "captured",
+        "schema_version": _SCHEMA_VERSION,
+        "case_count": len(cases),
+        "variants": {
+            variant: {
+                "returned_records": sum(
+                    len(response.results) for response in variant_responses.values()
+                ),
+                "returned_text_bytes": sum(
+                    len(result.text.encode("utf-8"))
+                    for response in variant_responses.values()
+                    for result in response.results
+                ),
+            }
+            for variant, variant_responses in responses.items()
+        },
     }
 
 
@@ -410,9 +479,16 @@ def main() -> int:
         action="store_true",
         help="Compare the configured baseline with only prefer_observations set true.",
     )
+    parser.add_argument(
+        "--capture-private",
+        type=Path,
+        help="Create an owner-only private live-response corpus for later labeling.",
+    )
     args = parser.parse_args()
     try:
         cases = load_corpus(args.corpus)
+        if args.capture_private is not None and args.hermes_home is None:
+            _fail("--capture-private requires --hermes-home live recall")
         if args.hermes_home is None:
             variants = _VARIANTS if args.compare_prefer_observations else (_VARIANTS[0],)
             responses = _offline_responses(cases, variants)
@@ -429,8 +505,13 @@ def main() -> int:
                     compare_prefer_observations=args.compare_prefer_observations,
                 )
             )
-        print(json.dumps(evaluate(cases, responses), sort_keys=True, separators=(",", ":")))
-    except EvaluationInputError as error:
+        if args.capture_private is None:
+            report = evaluate(cases, responses)
+        else:
+            write_private_json(args.capture_private, capture_corpus_payload(cases, responses))
+            report = capture_summary(cases, responses)
+        print(json.dumps(report, sort_keys=True, separators=(",", ":")))
+    except (EvaluationInputError, PrivateOutputError) as error:
         parser.error(str(error))
     return 0
 

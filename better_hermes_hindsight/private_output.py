@@ -1,0 +1,98 @@
+"""Private file output helpers for local recall-quality evaluation artifacts."""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import stat
+from pathlib import Path
+
+
+class PrivateOutputError(ValueError):
+    """Raised when a private evaluation artifact cannot be written safely."""
+
+
+def _open_private_parent(parent: Path) -> int:
+    """Create and bind an absolute directory without following symlink components."""
+
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        directory_flags |= os.O_CLOEXEC
+    try:
+        descriptor = os.open("/", directory_flags)
+    except OSError as error:
+        raise PrivateOutputError("private output directory is unavailable") from error
+
+    try:
+        for component in parent.parts[1:]:
+            if component in {"", ".", ".."}:
+                raise PrivateOutputError("private output path contains an unsafe component")
+            try:
+                next_descriptor = os.open(component, directory_flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                with contextlib.suppress(FileExistsError):
+                    os.mkdir(component, mode=0o700, dir_fd=descriptor)
+                next_descriptor = os.open(component, directory_flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+
+        parent_stat = os.fstat(descriptor)
+        if not stat.S_ISDIR(parent_stat.st_mode):
+            raise PrivateOutputError("private output parent must be a real directory")
+        if parent_stat.st_uid != os.getuid():
+            raise PrivateOutputError("private output directory must be owned by the current user")
+        if stat.S_IMODE(parent_stat.st_mode) & 0o077:
+            raise PrivateOutputError(
+                "private output directory must not allow group or other access"
+            )
+        return descriptor
+    except PrivateOutputError:
+        os.close(descriptor)
+        raise
+    except OSError as error:
+        os.close(descriptor)
+        raise PrivateOutputError("private output directory is unavailable") from error
+
+
+def write_private_json(path: Path, payload: object) -> None:
+    """Create one owner-only JSON file without overwriting an existing artifact."""
+
+    if not path.is_absolute():
+        raise PrivateOutputError("private output path must be absolute")
+    if path.name in {"", ".", ".."}:
+        raise PrivateOutputError("private output path must name a file")
+
+    data = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+    parent_descriptor = _open_private_parent(path.parent)
+    descriptor = -1
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    try:
+        descriptor = os.open(path.name, flags, 0o600, dir_fd=parent_descriptor)
+    except FileExistsError:
+        os.close(parent_descriptor)
+        raise PrivateOutputError("private output file already exists") from None
+    except OSError as error:
+        os.close(parent_descriptor)
+        raise PrivateOutputError("private output file could not be created") from error
+
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "wb", closefd=True) as output:
+            descriptor = -1
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+    except OSError as error:
+        with contextlib.suppress(OSError):
+            os.unlink(path.name, dir_fd=parent_descriptor)
+        raise PrivateOutputError("private output file could not be written") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent_descriptor)
+
+
+__all__ = ["PrivateOutputError", "write_private_json"]

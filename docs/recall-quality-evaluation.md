@@ -1,9 +1,10 @@
 # Recall-quality evaluation
 
 Use the source-checkout evaluator to compare labeled Better Hindsight results without printing queries
-or recalled memory text. The committed corpus is synthetic and only proves the schema and metrics.
-Keep private production-derived corpora outside the repository or under the ignored `.hermes/`
-directory.
+or recalled memory text. The committed synthetic file is a regression fixture: it proves the schema,
+metrics, and privacy contract, but it is not a retrieval-quality benchmark. A meaningful evaluation
+uses owner-only historical queries and responses from the configured real Hindsight bank. Keep every
+production-derived corpus under the ignored `.hermes/` directory or outside the repository.
 
 ## Offline synthetic evaluation
 
@@ -21,6 +22,52 @@ reported as `fully_truncated_returns` and are not counted as useful evidence.
 
 Without `--compare-prefer-observations`, only the `baseline` fixture response is evaluated.
 
+## Private historical-query workflow
+
+The reusable code is tracked; real queries, recalled text, result IDs, labels, and captured responses
+are not. Create an owner-only query pool from direct Hermes user turns:
+
+```bash
+mkdir -m 700 -p "$PWD/.hermes/recall-quality"
+.venv/bin/python scripts/prepare_recall_quality_corpus.py \
+  --state-db /absolute/hermes-home/state.db \
+  --output "$PWD/.hermes/recall-quality/query-pool.json" \
+  --days 120 \
+  --limit 60
+```
+
+The collector opens the state database query-only, considers direct `telegram`, `cli`, and `tui`
+user sessions by default—including their compression, reset, and branch continuations—removes the
+transport timestamp and appended `<memory-context>`, deduplicates normalized queries, and rejects typed
+internal traffic, compaction-summary scaffolding, attachments, credential-pattern matches, very large
+turns, and non-user sources. As
+with normal SQLite WAL readers, opening an active read-only database may update its existing
+shared-memory coordination file; it does not change message or session rows. The corpus stores no
+session or message identifiers, and the command prints only aggregate counts. The selected query pool
+has `labels_complete=false`; review it privately and remove unsuitable cases before recall capture.
+
+Capture production-processed responses from the configured real bank without mutating it:
+
+```bash
+HINDSIGHT_API_KEY=... .venv/bin/python scripts/evaluate_recall_quality.py \
+  "$PWD/.hermes/recall-quality/query-pool.json" \
+  --hermes-home /absolute/hermes-home \
+  --compare-prefer-observations \
+  --capture-private "$PWD/.hermes/recall-quality/capture.json"
+```
+
+The capture file is created once with mode `0600` inside a mode-`0700` directory. It contains the
+private queries and production-projected selected responses needed for labeling; stdout contains only
+case and returned-size counts. Live timeout/client failure aborts the all-or-nothing capture before the
+private file is created rather than misclassifying a failed recall as an empty result. Review the union
+of both variants and classify every returned result ID as useful, redundant, or irrelevant. Set
+`expect_recall` for every case, change `labels_complete` to `true`, then evaluate the labeled capture
+offline with the first command above. The evaluator refuses an incomplete corpus; also require
+`unlabeled_returns=0` before treating a run as a completed benchmark.
+
+A captured real run is the reproducible primary comparison. A later live rerun can detect current-bank
+changes, but new IDs remain unlabeled until reviewed. No synthetic bank is part of this workflow.
+
 ## Read-only live A/B evaluation
 
 Create a private corpus with the same case and label fields, but omit each case's `responses` object.
@@ -36,13 +83,15 @@ HINDSIGHT_API_KEY=... .venv/bin/python scripts/evaluate_recall_quality.py \
 The Hermes home must be explicit and absolute. The configured principal must authorize CLI recall.
 The evaluator performs two sequential read-only recall passes:
 
-1. the exact configured recall policy;
+1. the configured Hindsight request policy;
 2. the same immutable configuration with only `recall.prefer_observations` changed to `true`.
 
-Each pass applies the configured production input projection, recall deadline, redaction, normalized
-exact deduplication, and model-context byte bound before scoring labeled results. The script rejects
-the comparison when the configured baseline already prefers observations. The evaluator never writes
-configuration, retained memories, diagnostics, or local runtime state. It does not deploy the
+Each pass applies the configured production input projection, recall deadline, redaction, candidate
+normalized exact deduplication, and model-context byte bound before scoring labeled results. Both
+variants use the same candidate deduplication; the comparison therefore isolates observation
+preference rather than measuring deduplication against the currently deployed formatter. The script
+rejects the comparison when the configured baseline already prefers observations. The evaluator never
+writes configuration, retained memories, diagnostics, or local runtime state. It does not deploy the
 candidate plugin or restart Hermes.
 
 A live corpus may label known stable result IDs as:
@@ -64,6 +113,7 @@ classified.
       "id": "stable-private-case-id",
       "query": "One historical recall question",
       "expect_recall": true,
+      "labels_complete": true,
       "useful_result_ids": ["expected-result-id"],
       "redundant_result_ids": [],
       "irrelevant_result_ids": [],
@@ -82,9 +132,10 @@ classified.
 }
 ```
 
-`responses` is required for offline evaluation and omitted for live recall. Unknown fields, duplicate
-JSON keys, duplicate case/result IDs, overlapping label sets, malformed types, and useful labels on a
-negative case are rejected.
+`labels_complete` is required. It must remain `false` during collection/capture and become `true` only
+after every case and returned ID has been reviewed. `responses` is required for offline evaluation and
+omitted for live recall. Unknown fields, duplicate JSON keys, duplicate case/result IDs, overlapping
+label sets, malformed types, and useful labels on a negative case are rejected.
 
 ## Metrics
 
