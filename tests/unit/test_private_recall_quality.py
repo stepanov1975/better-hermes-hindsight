@@ -464,6 +464,46 @@ def test_private_json_does_not_publish_a_partial_destination(
     assert list(private.iterdir()) == []
 
 
+def test_private_json_treats_published_link_as_commit_when_directory_sync_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    destination = private / "artifact.json"
+    real_fsync = os.fsync
+    calls = 0
+
+    def fail_directory_sync(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("directory sync failed")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", fail_directory_sync)
+    write_private_json(destination, {"complete": True})
+
+    assert json.loads(destination.read_text(encoding="utf-8")) == {"complete": True}
+
+
+def test_private_json_treats_published_link_as_commit_when_temp_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    destination = private / "artifact.json"
+
+    def fail_unlink(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise OSError("temporary cleanup failed")
+
+    monkeypatch.setattr(os, "unlink", fail_unlink)
+    write_private_json(destination, {"complete": True})
+
+    assert json.loads(destination.read_text(encoding="utf-8")) == {"complete": True}
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in private.iterdir())
+
+
 def test_private_json_refuses_a_symlinked_ancestor(tmp_path: Path) -> None:
     real = tmp_path / "real"
     real.mkdir(mode=0o700)

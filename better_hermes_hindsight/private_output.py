@@ -132,9 +132,13 @@ def write_private_json(path: Path, payload: object) -> None:
             )
         except FileExistsError:
             raise PrivateOutputError("private output file already exists") from None
-        os.unlink(temporary_name, dir_fd=parent_descriptor)
-        temporary_exists = False
-        os.fsync(parent_descriptor)
+        try:
+            os.unlink(temporary_name, dir_fd=parent_descriptor)
+            temporary_exists = False
+        except OSError:
+            pass
+        with contextlib.suppress(OSError):
+            os.fsync(parent_descriptor)
     except PrivateOutputError:
         raise
     except OSError as error:

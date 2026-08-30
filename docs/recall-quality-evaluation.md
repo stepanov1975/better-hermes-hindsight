@@ -63,13 +63,14 @@ HINDSIGHT_API_KEY=... .venv/bin/python scripts/evaluate_recall_quality.py \
 
 The capture file is written and synced under a short, fixed-length owner-only temporary name, then
 atomically published without overwriting an existing mode-`0600` destination inside a mode-`0700`
-directory. Destination and temporary filename capacity are preflighted before recall. Interrupted
-writes never claim the final pathname. It contains the private queries and production-projected
-selected responses needed for labeling; stdout and validation errors contain only aggregate counts or
-array positions, never query text, recalled text, or private case/result IDs. The destination's absolute
-path, private parent, and non-existence are preflighted before live configuration or recall. Live
-timeout/client failure or malformed model-facing result data aborts the all-or-nothing capture before
-the private file is created rather than recording an unreadable artifact or misclassifying a failed
+directory. Destination and temporary filename capacity are preflighted before recall. The atomic link
+is the commit point; temporary-name cleanup and parent-directory syncing are best-effort after that
+complete file is visible, so post-publication housekeeping failures do not report a false failed
+capture. It contains the private queries and production-projected selected responses needed for
+labeling; stdout and validation errors contain only aggregate counts or array positions, never query
+text, recalled text, or private case/result IDs. The destination's absolute path, private parent, and
+non-existence are preflighted before live configuration or recall. Live timeout/client failure or
+malf...[truncated]the private file is created rather than recording an unreadable artifact or misclassifying a failed
 recall as an empty result. Review the union of both variants and classify every returned result ID as
 useful, redundant, or irrelevant. Set `expect_recall` for every case, change `labels_complete` to
 `true`, then evaluate the labeled capture offline with the first command above. The evaluator refuses
