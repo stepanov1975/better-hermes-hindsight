@@ -143,6 +143,14 @@ def test_clean_historical_query_removes_transport_wrappers() -> None:
         )
         == "Real query"
     )
+    assert (
+        clean_historical_query(
+            f"Real query\n\n<memory-context>\n{header}\nouter evidence\n\n"
+            f"<memory-context>\n{header}\nnested evidence</memory-context>\n"
+            "outer evidence continues</memory-context>"
+        )
+        == "Real query"
+    )
 
 
 def test_session_cap_uses_an_equivalent_query_from_an_uncapped_session() -> None:
@@ -423,7 +431,16 @@ def test_capture_payload_round_trips_private_responses_without_provenance(tmp_pa
     responses = {
         "baseline": {
             case.case_id: VariantResponse(
-                results=(LabeledResult("result-1", "The service runs on host one."),),
+                results=(
+                    LabeledResult(
+                        "result-1",
+                        "The service runs on host one.",
+                        memory_type="world",
+                        occurred_start="2026-08-01T00:00:00+00:00",
+                        occurred_end="2026-08-02T00:00:00+00:00",
+                        mentioned_at="2026-08-03T00:00:00+00:00",
+                    ),
+                ),
                 elapsed_ms=12.5,
             )
         },
@@ -437,7 +454,12 @@ def test_capture_payload_round_trips_private_responses_without_provenance(tmp_pa
     write_private_json(corpus, payload)
 
     loaded = load_corpus(corpus)
-    assert loaded[0].responses["baseline"].results[0].result_id == "result-1"
+    loaded_result = loaded[0].responses["baseline"].results[0]
+    assert loaded_result.result_id == "result-1"
+    assert loaded_result.memory_type == "world"
+    assert loaded_result.occurred_start == "2026-08-01T00:00:00+00:00"
+    assert loaded_result.occurred_end == "2026-08-02T00:00:00+00:00"
+    assert loaded_result.mentioned_at == "2026-08-03T00:00:00+00:00"
     assert loaded[0].labels_complete is False
     assert capture_summary((case,), responses) == {
         "result": "captured",

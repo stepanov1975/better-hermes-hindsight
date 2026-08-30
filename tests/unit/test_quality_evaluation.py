@@ -204,17 +204,22 @@ def test_live_comparison_pairs_cases_and_counterbalances_variant_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = load_config(tmp_path, environ={}, injected={"single_principal": True})
+    queries = (
+        "historical query 0",
+        "<memory-context>hidden</memory-context>",
+        "historical query 2",
+    )
     cases = tuple(
         QualityCase(
             case_id=f"case-{index}",
-            query=f"historical query {index}",
+            query=query,
             expect_recall=True,
             useful_result_ids=frozenset(),
             redundant_result_ids=frozenset(),
             irrelevant_result_ids=frozenset(),
             responses={},
         )
-        for index in range(2)
+        for index, query in enumerate(queries)
     )
     call_order: list[str] = []
 
@@ -233,9 +238,11 @@ def test_live_comparison_pairs_cases_and_counterbalances_variant_order(
 
     monkeypatch.setattr(evaluation_module, "create_hindsight_client", create_client)
 
-    asyncio.run(collect_live_responses(cases, config, compare_prefer_observations=True))
+    responses = asyncio.run(collect_live_responses(cases, config, compare_prefer_observations=True))
 
     assert call_order == ["baseline", "preferred", "preferred", "baseline"]
+    assert responses["baseline"]["case-1"].results == ()
+    assert responses["prefer_observations"]["case-1"].results == ()
 
 
 def test_live_elapsed_time_includes_production_formatting(

@@ -87,7 +87,7 @@ HINDSIGHT_API_KEY=... .venv/bin/python scripts/evaluate_recall_quality.py \
 
 The Hermes home must be explicit and absolute. The configured principal must authorize CLI recall.
 For each case, the evaluator performs the two read-only recalls adjacently and alternates which variant
-runs first across cases:
+runs first across cases that issue a recall; envelope-only/empty projections do not advance the order:
 
 1. the configured Hindsight request policy;
 2. the same immutable configuration with only `recall.prefer_observations` changed to `true`.
@@ -128,11 +128,25 @@ classified.
       "responses": {
         "baseline": {
           "elapsed_ms": 10.0,
-          "results": [{"id": "expected-result-id", "text": "Synthetic fixture text"}]
+          "results": [
+            {
+              "id": "expected-result-id",
+              "text": "Synthetic fixture text",
+              "type": "world",
+              "occurred_start": "2026-08-01T00:00:00+00:00"
+            }
+          ]
         },
         "prefer_observations": {
           "elapsed_ms": 9.0,
-          "results": [{"id": "expected-result-id", "text": "Synthetic fixture text"}]
+          "results": [
+            {
+              "id": "expected-result-id",
+              "text": "Synthetic fixture text",
+              "type": "world",
+              "occurred_start": "2026-08-01T00:00:00+00:00"
+            }
+          ]
         }
       }
     }
@@ -141,9 +155,12 @@ classified.
 ```
 
 `labels_complete` is required. It must remain `false` during collection/capture and become `true` only
-after every case and returned ID has been reviewed. `responses` is required for offline evaluation and
-omitted for live recall. Unknown fields, duplicate JSON keys, duplicate case/result IDs, overlapping
-label sets, malformed types, and useful labels on a negative case are rejected.
+after every case and returned ID has been reviewed. Each result requires `id` and `text`; captures also
+preserve the allowlisted model-facing `type`, `occurred_start`, `occurred_end`, and `mentioned_at`
+fields when present so identical text from distinct occurrences can be labeled correctly. `responses`
+is required for offline evaluation and omitted for live recall. Unknown fields, duplicate JSON keys,
+duplicate case/result IDs, overlapping label sets, malformed types, and useful labels on a negative
+case are rejected.
 
 ## Metrics
 

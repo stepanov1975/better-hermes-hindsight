@@ -44,7 +44,15 @@ _CASE_KEYS = {
     "responses",
 }
 _RESPONSE_KEYS = {"elapsed_ms", "results"}
-_RESULT_KEYS = {"id", "text"}
+_RESULT_KEYS = {
+    "id",
+    "text",
+    "type",
+    "occurred_start",
+    "occurred_end",
+    "mentioned_at",
+}
+_RESULT_REQUIRED_KEYS = {"id", "text"}
 
 
 class EvaluationInputError(ValueError):
@@ -55,6 +63,10 @@ class EvaluationInputError(ValueError):
 class LabeledResult:
     result_id: str
     text: str
+    memory_type: str | None = None
+    occurred_start: str | None = None
+    occurred_end: str | None = None
+    mentioned_at: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,11 +143,23 @@ def _id_set(value: object, field: str) -> frozenset[str]:
 
 def _parse_result(value: object, field: str) -> LabeledResult:
     result = _mapping(value, field)
-    if set(result) != _RESULT_KEYS:
-        _fail(f"{field} must contain exactly id and text")
+    _exact_keys(result, _RESULT_KEYS, field)
+    missing = sorted(_RESULT_REQUIRED_KEYS - set(result))
+    if missing:
+        _fail(f"{field} is missing key(s): {', '.join(missing)}")
+
+    def optional_text(key: str) -> str | None:
+        if key not in result:
+            return None
+        return _unicode_string(result[key], f"{field}.{key}")
+
     return LabeledResult(
         result_id=_nonempty_string(result["id"], f"{field}.id"),
         text=_nonempty_string(result["text"], f"{field}.text"),
+        memory_type=optional_text("type"),
+        occurred_start=optional_text("occurred_start"),
+        occurred_end=optional_text("occurred_end"),
+        mentioned_at=optional_text("mentioned_at"),
     )
 
 
@@ -363,6 +387,13 @@ def _validate_live_formatter_input(response: RecallResponse) -> None:
                 _unicode_string(value, f"{field}.{attribute}")
 
 
+def _record_metadata(record: Mapping[str, object], key: str, index: int) -> str | None:
+    value = record.get(key)
+    if value is None:
+        return None
+    return _unicode_string(value, f"live results[{index}].{key}")
+
+
 def _response_for_evaluation(
     response: RecallResponse,
     elapsed_ms: float,
@@ -385,7 +416,16 @@ def _response_for_evaluation(
         if result_id in seen_result_ids:
             _fail("live results must not contain duplicate IDs")
         seen_result_ids.add(result_id)
-        results.append(LabeledResult(result_id=result_id, text=text))
+        results.append(
+            LabeledResult(
+                result_id=result_id,
+                text=text,
+                memory_type=_record_metadata(record, "type", index),
+                occurred_start=_record_metadata(record, "occurred_start", index),
+                occurred_end=_record_metadata(record, "occurred_end", index),
+                mentioned_at=_record_metadata(record, "mentioned_at", index),
+            )
+        )
     return VariantResponse(
         results=tuple(results),
         elapsed_ms=round(elapsed_ms, 3),
@@ -406,19 +446,30 @@ async def collect_live_responses(
     try:
         for variant, variant_config in variant_configs:
             clients[variant] = create_hindsight_client(variant_config)
-        for case_index, case in enumerate(cases):
-            case_variants = (
-                variant_configs if case_index % 2 == 0 else tuple(reversed(variant_configs))
-            )
-            for variant, variant_config in case_variants:
-                projected = project_query(
+        recall_pair_index = 0
+        for case in cases:
+            projected_queries = {
+                variant: project_query(
                     case.query,
                     max_chars=variant_config.recall.input_max_chars,
                     max_tokens=variant_config.recall.input_max_tokens,
                 )
+                for variant, variant_config in variant_configs
+            }
+            if not any(projected.strip() for projected in projected_queries.values()):
+                for variant in variants:
+                    responses[variant][case.case_id] = VariantResponse(results=(), elapsed_ms=0.0)
+                continue
+            case_variants = (
+                variant_configs if recall_pair_index % 2 == 0 else tuple(reversed(variant_configs))
+            )
+            issued_recall = False
+            for variant, variant_config in case_variants:
+                projected = projected_queries[variant]
                 if not projected.strip():
                     responses[variant][case.case_id] = VariantResponse(results=(), elapsed_ms=0.0)
                     continue
+                issued_recall = True
                 started = time.perf_counter()
                 response = await asyncio.wait_for(
                     clients[variant].recall(projected),
@@ -431,6 +482,8 @@ async def collect_live_responses(
                 )
                 elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
                 responses[variant][case.case_id] = replace(processed, elapsed_ms=elapsed_ms)
+            if issued_recall:
+                recall_pair_index += 1
     finally:
         for client in clients.values():
             await client.close()
@@ -448,6 +501,18 @@ def evaluate(
         "schema_version": _SCHEMA_VERSION,
         "variants": {variant: evaluate_variant(cases, responses[variant]) for variant in responses},
     }
+
+
+def _result_payload(result: LabeledResult) -> dict[str, str]:
+    payload = {"id": result.result_id, "text": result.text}
+    optional = {
+        "type": result.memory_type,
+        "occurred_start": result.occurred_start,
+        "occurred_end": result.occurred_end,
+        "mentioned_at": result.mentioned_at,
+    }
+    payload.update({key: value for key, value in optional.items() if value is not None})
+    return payload
 
 
 def capture_corpus_payload(
@@ -470,10 +535,7 @@ def capture_corpus_payload(
                 "responses": {
                     variant: {
                         "elapsed_ms": response.elapsed_ms,
-                        "results": [
-                            {"id": result.result_id, "text": result.text}
-                            for result in response.results
-                        ],
+                        "results": [_result_payload(result) for result in response.results],
                     }
                     for variant, variant_responses in responses.items()
                     for response in (variant_responses[case.case_id],)
