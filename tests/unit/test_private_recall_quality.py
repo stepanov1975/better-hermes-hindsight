@@ -22,6 +22,8 @@ from scripts.evaluate_recall_quality import (
     load_corpus,
 )
 from scripts.prepare_recall_quality_corpus import (
+    _Candidate,
+    _select_candidates,
     clean_historical_query,
     collect_historical_queries,
     corpus_payload,
@@ -108,6 +110,20 @@ def test_clean_historical_query_removes_transport_wrappers() -> None:
         )
         == "Remember this query"
     )
+
+
+def test_session_cap_uses_an_equivalent_query_from_an_uncapped_session() -> None:
+    candidates = [
+        _Candidate("session-a", "Another query", "another query", b"\x00"),
+        _Candidate("session-a", "Repeated query", "repeated query", b"\x01"),
+        _Candidate("session-b", "Repeated query", "repeated query", b"\x01"),
+    ]
+
+    selected, rejected = _select_candidates(candidates, limit=2, max_per_session=1)
+
+    assert [candidate.query for candidate in selected] == ["Another query", "Repeated query"]
+    assert [candidate.session_id for candidate in selected] == ["session-a", "session-b"]
+    assert rejected == 1
 
 
 def test_collect_historical_queries_is_bounded_private_and_provenance_free(tmp_path: Path) -> None:

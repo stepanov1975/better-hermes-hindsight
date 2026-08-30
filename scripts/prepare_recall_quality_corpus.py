@@ -41,6 +41,7 @@ class CollectionError(ValueError):
 class _Candidate:
     session_id: str
     query: str
+    normalized: str
     rank: bytes
 
 
@@ -82,6 +83,34 @@ def _exclusion_reason(query: str, *, max_chars: int, max_lines: int) -> str | No
     except UnicodeEncodeError:
         return "invalid_unicode"
     return None
+
+
+def _select_candidates(
+    candidates: list[_Candidate],
+    *,
+    limit: int,
+    max_per_session: int,
+) -> tuple[list[_Candidate], int]:
+    selected: list[_Candidate] = []
+    selected_queries: set[str] = set()
+    per_session: Counter[str] = Counter()
+    session_cap_rejections = 0
+    ordered = sorted(
+        candidates,
+        key=lambda item: (item.rank, item.session_id, item.query),
+    )
+    for candidate in ordered:
+        if candidate.normalized in selected_queries:
+            continue
+        if per_session[candidate.session_id] >= max_per_session:
+            session_cap_rejections += 1
+            continue
+        selected.append(candidate)
+        selected_queries.add(candidate.normalized)
+        per_session[candidate.session_id] += 1
+        if len(selected) == limit:
+            break
+    return selected, session_cap_rejections
 
 
 def collect_historical_queries(
@@ -133,7 +162,6 @@ def collect_historical_queries(
 
     excluded: Counter[str] = Counter()
     candidates: list[_Candidate] = []
-    seen: set[str] = set()
     for session_id, content in rows:
         query = clean_historical_query(content)
         reason = _exclusion_reason(query, max_chars=max_chars, max_lines=max_lines)
@@ -141,26 +169,27 @@ def collect_historical_queries(
             excluded[reason] += 1
             continue
         normalized = _normalized_query(query)
-        if normalized in seen:
-            excluded["duplicate"] += 1
-            continue
-        seen.add(normalized)
         rank = hashlib.sha256(f"{seed}\0{normalized}".encode()).digest()
-        candidates.append(_Candidate(session_id=str(session_id), query=query, rank=rank))
+        candidates.append(
+            _Candidate(
+                session_id=str(session_id),
+                query=query,
+                normalized=normalized,
+                rank=rank,
+            )
+        )
 
-    selected: list[_Candidate] = []
-    per_session: Counter[str] = Counter()
-    for candidate in sorted(candidates, key=lambda item: item.rank):
-        if per_session[candidate.session_id] >= max_per_session:
-            excluded["session_cap"] += 1
-            continue
-        selected.append(candidate)
-        per_session[candidate.session_id] += 1
-        if len(selected) == limit:
-            break
+    unique_queries = {candidate.normalized for candidate in candidates}
+    excluded["duplicate"] += len(candidates) - len(unique_queries)
+    selected, session_cap_rejections = _select_candidates(
+        candidates,
+        limit=limit,
+        max_per_session=max_per_session,
+    )
+    excluded["session_cap"] += session_cap_rejections
 
     stats = {
-        "eligible": len(candidates),
+        "eligible": len(unique_queries),
         "scanned": len(rows),
         "selected": len(selected),
         **{f"excluded_{key}": value for key, value in sorted(excluded.items())},
