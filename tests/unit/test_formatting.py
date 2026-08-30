@@ -314,6 +314,28 @@ def test_model_context_deduplicates_equal_redacted_text_and_preserves_first_rank
     assert _json_records(context) == [{"memory": "api_key=[REDACTED]", "type": "world"}]
 
 
+def test_model_context_preserves_same_text_for_distinct_occurrences() -> None:
+    response = _response(
+        _result(result_id="first", text="Deployment completed", occurred_start="2026-08-01"),
+        _result(result_id="second", text="Deployment completed", occurred_start="2026-08-02"),
+    )
+
+    context = format_recall_context(response, max_bytes=16_384)
+
+    assert _json_records(context) == [
+        {
+            "memory": "Deployment completed",
+            "occurred_start": "2026-08-01",
+            "type": "observation",
+        },
+        {
+            "memory": "Deployment completed",
+            "occurred_start": "2026-08-02",
+            "type": "observation",
+        },
+    ]
+
+
 def test_duplicate_does_not_consume_byte_budget_before_next_distinct_record() -> None:
     first = _result(result_id="rank-1", text="stable memory")
     duplicate = _result(result_id="rank-2", text="stable   memory")

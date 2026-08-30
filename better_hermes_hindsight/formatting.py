@@ -7,7 +7,7 @@ import hashlib
 import json
 import re
 import unicodedata
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from importlib.resources import files
 from typing import Protocol, cast
@@ -234,13 +234,13 @@ def format_recall_context_with_selected_results(
         lines: list[str] = []
         records: list[dict[str, object]] = []
         selected_results: list[object] = []
-        seen_memories: set[str] = set()
+        seen_memories: set[tuple[str, str | None, str | None, str | None]] = set()
         for result in results:
             record = _project_record(result)
             memory = record["memory"]
             if not isinstance(memory, str):
                 raise TypeError("recall result text is malformed")
-            fingerprint = _memory_fingerprint(memory)
+            fingerprint = _memory_fingerprint(record)
             if fingerprint in seen_memories:
                 continue
             seen_memories.add(fingerprint)
@@ -286,10 +286,22 @@ def _project_record(result: object) -> dict[str, object]:
     return record
 
 
-def _memory_fingerprint(text: str) -> str:
-    """Normalize model-facing text only for exact duplicate comparison."""
+def _memory_fingerprint(
+    record: Mapping[str, object],
+) -> tuple[str, str | None, str | None, str | None]:
+    """Normalize text while preserving distinct model-facing occurrence metadata."""
 
-    return " ".join(unicodedata.normalize("NFKC", text).split())
+    text = record["memory"]
+    if not isinstance(text, str):
+        raise TypeError("recall result text is malformed")
+    normalized = " ".join(unicodedata.normalize("NFKC", text).split())
+    temporal: list[str | None] = []
+    for field_name in ("occurred_start", "occurred_end", "mentioned_at"):
+        value = record.get(field_name)
+        if value is not None and not isinstance(value, str):
+            raise TypeError(f"recall result {field_name} is malformed")
+        temporal.append(value)
+    return normalized, temporal[0], temporal[1], temporal[2]
 
 
 def _serialize_record(record: dict[str, object]) -> str:

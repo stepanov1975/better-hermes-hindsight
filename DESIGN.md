@@ -42,8 +42,8 @@ operation, model-facing reflection, dynamic routing, or minimum maintenance is m
    rule, preserving bounded head-and-tail context.
 4. The async client performs one deadline-bounded Hindsight recall.
 5. The formatter projects allowlisted fields, redacts likely credentials, removes later exact
-   duplicates using normalized model-facing text, frames records as untrusted evidence, and enforces
-   the output-byte limit.
+   duplicates using normalized model-facing text plus identical occurrence metadata, frames records
+   as untrusted evidence, and enforces the output-byte limit.
 6. Errors and timeouts return no external context rather than failing Hermes.
 
 The model-facing `better_hindsight_recall` tool reuses this configured path and returns structured

@@ -95,6 +95,10 @@ def _exact_keys(value: Mapping[str, object], allowed: set[str], field: str) -> N
 def _nonempty_string(value: object, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         _fail(f"{field} must be a non-empty string")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        _fail(f"{field} must contain valid Unicode text")
     return value
 
 
@@ -202,8 +206,9 @@ def load_corpus(path: Path) -> tuple[QualityCase, ...]:
     root = _mapping(payload, "corpus")
     if set(root) != {"schema_version", "cases"}:
         _fail("corpus must contain exactly schema_version and cases")
-    if root["schema_version"] != _SCHEMA_VERSION:
-        _fail(f"corpus.schema_version must equal {_SCHEMA_VERSION}")
+    schema_version = root["schema_version"]
+    if type(schema_version) is not int or schema_version != _SCHEMA_VERSION:
+        _fail(f"corpus.schema_version must be the integer {_SCHEMA_VERSION}")
     raw_cases = root["cases"]
     if not isinstance(raw_cases, list) or not raw_cases:
         _fail("corpus.cases must be a non-empty JSON array")
@@ -216,6 +221,11 @@ def load_corpus(path: Path) -> tuple[QualityCase, ...]:
 
 def _safe_ratio(numerator: int, denominator: int) -> float | None:
     return None if denominator == 0 else round(numerator / denominator, 6)
+
+
+def _has_substantive_memory_text(text: str) -> bool:
+    prefix = text[: -len(TEXT_TRUNCATION_MARKER)] if text.endswith(TEXT_TRUNCATION_MARKER) else text
+    return bool(prefix.strip())
 
 
 def evaluate_variant(
@@ -241,12 +251,14 @@ def evaluate_variant(
         response = responses[case.case_id]
         result_ids = [result.result_id for result in response.results]
         usable_result_ids = {
-            result.result_id for result in response.results if result.text != TEXT_TRUNCATION_MARKER
+            result.result_id
+            for result in response.results
+            if _has_substantive_memory_text(result.text)
         }
         expected_memory_hits += len(case.useful_result_ids & usable_result_ids)
         top_3 = response.results[:3]
         useful_at_3_hits += sum(
-            result.result_id in case.useful_result_ids and result.text != TEXT_TRUNCATION_MARKER
+            result.result_id in case.useful_result_ids and _has_substantive_memory_text(result.text)
             for result in top_3
         )
         useful_at_3_slots += len(top_3)
@@ -263,7 +275,7 @@ def evaluate_variant(
         returned_records += len(response.results)
         returned_text_bytes += sum(len(result.text.encode("utf-8")) for result in response.results)
         fully_truncated_returns += sum(
-            result.text == TEXT_TRUNCATION_MARKER for result in response.results
+            not _has_substantive_memory_text(result.text) for result in response.results
         )
         if response.elapsed_ms is not None:
             elapsed_values.append(response.elapsed_ms)

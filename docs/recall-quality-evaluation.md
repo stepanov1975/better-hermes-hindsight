@@ -16,7 +16,7 @@ directory.
 The command validates the complete JSON corpus and emits one compact JSON report. It reports only
 case counts, labeled-result metrics, returned text byte counts, and aggregate elapsed milliseconds.
 It does not print case queries, result IDs, or memory text. `elapsed_ms_total` is `null` unless every
-case in the variant has a finite timing. Marker-only records created by the context-byte bound are
+case in the variant has a finite timing. Truncated records with no non-whitespace memory prefix are
 reported as `fully_truncated_returns` and are not counted as useful evidence.
 
 Without `--compare-prefer-observations`, only the `baseline` fixture response is evaluated.

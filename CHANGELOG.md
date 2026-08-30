@@ -24,7 +24,8 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
   available, while retaining the provider-block fallback for older or generic host contexts. This
   keeps automatic recall evidence governed when model-facing memory tools are disabled.
 - Remove later exact duplicates from automatic and explicit model-facing recall after redaction,
-  Unicode compatibility normalization, and whitespace collapsing while preserving first rank.
+  Unicode compatibility normalization, and whitespace collapsing while preserving first rank and
+  distinct occurrence metadata.
 
 ## 0.4.0 - 2026-08-22
 

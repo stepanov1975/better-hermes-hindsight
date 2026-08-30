@@ -253,7 +253,7 @@ def test_fully_truncated_useful_result_is_not_counted_as_evidence() -> None:
     responses = {
         "baseline": {
             case.case_id: VariantResponse(
-                results=(LabeledResult("useful", TEXT_TRUNCATION_MARKER),),
+                results=(LabeledResult("useful", " \n" + TEXT_TRUNCATION_MARKER),),
                 elapsed_ms=1.0,
             )
         }
@@ -305,6 +305,34 @@ def test_live_evaluation_skips_whitespace_only_projected_queries(
     assert clients[0].calls == []
     assert clients[0].closed is True
     assert responses["baseline"][case.case_id].results == ()
+
+
+@pytest.mark.parametrize("schema_version", [True, 1.0])
+def test_corpus_requires_integer_schema_version(
+    tmp_path: Path,
+    schema_version: bool | float,
+) -> None:
+    corpus = tmp_path / "schema-version.json"
+    corpus.write_text(
+        json.dumps({"schema_version": schema_version, "cases": [{}]}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(EvaluationInputError, match="must be the integer 1"):
+        load_corpus(corpus)
+
+
+def test_corpus_rejects_unpaired_unicode_surrogates(tmp_path: Path) -> None:
+    corpus = tmp_path / "surrogate.json"
+    source = FIXTURE.read_text(encoding="utf-8").replace(
+        '"text": "The user prefers concise responses unless complexity requires depth."',
+        r'"text": "\ud800"',
+        1,
+    )
+    corpus.write_text(source, encoding="utf-8")
+
+    with pytest.raises(EvaluationInputError, match="valid Unicode text"):
+        load_corpus(corpus)
 
 
 def test_corpus_rejects_unknown_fields_and_duplicate_json_keys(tmp_path: Path) -> None:
