@@ -156,7 +156,21 @@ def test_session_cap_uses_an_equivalent_query_from_an_uncapped_session() -> None
 
     assert [candidate.query for candidate in selected] == ["Another query", "Repeated query"]
     assert [candidate.session_id for candidate in selected] == ["session-a", "session-b"]
-    assert rejected == 1
+    assert rejected == 0
+
+
+def test_session_cap_reassigns_shared_query_to_avoid_underfill() -> None:
+    candidates = [
+        _Candidate("session-a", "Shared query", "shared query", b"\x00"),
+        _Candidate("session-b", "Shared query", "shared query", b"\x00"),
+        _Candidate("session-a", "A-only query", "a-only query", b"\x01"),
+    ]
+
+    selected, rejected = _select_candidates(candidates, limit=2, max_per_session=1)
+
+    assert [candidate.query for candidate in selected] == ["Shared query", "A-only query"]
+    assert [candidate.session_id for candidate in selected] == ["session-b", "session-a"]
+    assert rejected == 0
 
 
 def test_collect_historical_queries_is_bounded_private_and_provenance_free(tmp_path: Path) -> None:

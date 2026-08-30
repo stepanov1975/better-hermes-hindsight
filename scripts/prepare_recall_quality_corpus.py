@@ -102,25 +102,67 @@ def _select_candidates(
     limit: int,
     max_per_session: int,
 ) -> tuple[list[_Candidate], int]:
-    selected: list[_Candidate] = []
-    selected_queries: set[str] = set()
-    per_session: Counter[str] = Counter()
-    session_cap_rejections = 0
-    ordered = sorted(
-        candidates,
-        key=lambda item: (item.rank, item.session_id, item.query),
+    by_query: dict[str, dict[str, _Candidate]] = {}
+    for candidate in sorted(candidates, key=lambda item: (item.rank, item.session_id, item.query)):
+        by_query.setdefault(candidate.normalized, {}).setdefault(candidate.session_id, candidate)
+    ordered_queries = sorted(
+        by_query,
+        key=lambda normalized: (
+            min(candidate.rank for candidate in by_query[normalized].values()),
+            normalized,
+        ),
     )
-    for candidate in ordered:
-        if candidate.normalized in selected_queries:
-            continue
-        if per_session[candidate.session_id] >= max_per_session:
+    assignments: dict[str, str] = {}
+    session_queries: dict[str, list[str]] = {}
+    selected_queries: list[str] = []
+    session_cap_rejections = 0
+
+    def find_destination(
+        normalized: str,
+        *,
+        seen_queries: set[str],
+        seen_sessions: set[str],
+    ) -> str | None:
+        if normalized in seen_queries:
+            return None
+        seen_queries.add(normalized)
+        for session_id in sorted(by_query[normalized]):
+            if session_id in seen_sessions:
+                continue
+            seen_sessions.add(session_id)
+            occupants = session_queries.setdefault(session_id, [])
+            if len(occupants) < max_per_session:
+                return session_id
+            for occupant in reversed(tuple(occupants)):
+                destination = find_destination(
+                    occupant,
+                    seen_queries=seen_queries,
+                    seen_sessions=seen_sessions,
+                )
+                if destination is None:
+                    continue
+                occupants.remove(occupant)
+                session_queries.setdefault(destination, []).append(occupant)
+                assignments[occupant] = destination
+                return session_id
+        return None
+
+    for normalized in ordered_queries:
+        destination = find_destination(
+            normalized,
+            seen_queries=set(),
+            seen_sessions=set(),
+        )
+        if destination is None:
             session_cap_rejections += 1
             continue
-        selected.append(candidate)
-        selected_queries.add(candidate.normalized)
-        per_session[candidate.session_id] += 1
-        if len(selected) == limit:
+        assignments[normalized] = destination
+        session_queries.setdefault(destination, []).append(normalized)
+        selected_queries.append(normalized)
+        if len(selected_queries) == limit:
             break
+
+    selected = [by_query[normalized][assignments[normalized]] for normalized in selected_queries]
     return selected, session_cap_rejections
 
 
