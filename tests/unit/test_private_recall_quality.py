@@ -66,7 +66,7 @@ def _state_db(path: Path) -> None:
         """
         INSERT INTO messages(
             session_id, role, content, timestamp, display_kind, display_metadata
-        ) VALUES (?, 'user', ?, 1_000_000, ?, ?)
+        ) VALUES (?, 'user', ?, 1000000, ?, ?)
         """,
         [
             (
