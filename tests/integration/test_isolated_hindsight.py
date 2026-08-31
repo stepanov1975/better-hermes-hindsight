@@ -1,8 +1,8 @@
 """Opt-in smoke test against an exact supported Hindsight environment.
 
 The test intentionally proves only the deployment's useful path: current Hermes
-discovers the provider, pending rows survive a provider restart, delivery reaches
-a disposable bank, replay keeps stable document identities, and current-query
+discovers the provider, pending rows preserve their identities across a provider restart,
+delivery reaches a disposable bank, repeated turns get distinct identities, and current-query
 recall is useful. Unit and fake-service tests cover adversarial failure detail.
 """
 
@@ -33,7 +33,7 @@ from tests.integration.helpers import materialize_standard_plugin, write_host_se
 
 ROOT = Path(__file__).resolve().parents[2]
 _RETAIN_TAGS = ("better-hindsight-live",)
-_SEGMENT_MAX_BYTES = 384
+_SEGMENT_MAX_BYTES = 1024
 _DRAIN_TIMEOUT_SECONDS = 45.0
 _CHILD_TIMEOUT_SECONDS = 150.0
 
@@ -58,8 +58,13 @@ _SHORT_TURN = (
 )
 _LONG_TURN = (
     "better-hindsight-live-long",
-    "Synthetic segmented source: " + ("northstar-界-" * 160),
-    "Synthetic segmented acknowledgement: " + ("lantern-界-" * 100),
+    "\n\n".join(
+        f"Synthetic source paragraph {index}: " + ("northstar-界-" * 24) for index in range(8)
+    ),
+    "\n\n".join(
+        f"Synthetic acknowledgement paragraph {index}: " + ("lantern-界-" * 24)
+        for index in range(5)
+    ),
 )
 
 
@@ -349,25 +354,41 @@ def _acquire_sender_barrier(config: BetterHindsightConfig) -> ProfileLockOwner:
         outbox.close()
 
 
-def _expected_segments(turns: Sequence[tuple[str, str, str]]) -> tuple[RetainedSegment, ...]:
-    return tuple(
-        segment
-        for session_id, user_content, assistant_content in turns
-        for segment in build_retained_segments(
-            session_id=session_id,
-            user_content=user_content,
-            assistant_content=assistant_content,
-            tags=_RETAIN_TAGS,
-            segment_max_bytes=_SEGMENT_MAX_BYTES,
+def _expected_segment_count(turns: Sequence[tuple[str, str, str]]) -> int:
+    return sum(
+        len(
+            build_retained_segments(
+                session_id=session_id,
+                user_content=user_content,
+                assistant_content=assistant_content,
+                tags=_RETAIN_TAGS,
+                segment_max_bytes=_SEGMENT_MAX_BYTES,
+            )
         )
+        for session_id, user_content, assistant_content in turns
+    )
+
+
+def _segments_from_rows(rows: Sequence[OutboxRow]) -> tuple[RetainedSegment, ...]:
+    return tuple(
+        RetainedSegment(
+            document_id=row.document_id,
+            payload_hash=row.payload_hash,
+            payload_schema=row.payload_schema,
+            source_sha256=row.source_sha256,
+            segment_index=row.segment_index,
+            segment_count=row.segment_count,
+            content=row.content,
+        )
+        for row in rows
     )
 
 
 def _remote_documents(
     inputs: DevelopmentInputs,
-    expected: Sequence[RetainedSegment],
+    expected: Sequence[RetainedSegment] | None,
 ) -> dict[str, dict[str, Any]]:
-    expected_ids = {segment.document_id for segment in expected}
+    expected_ids = None if expected is None else {segment.document_id for segment in expected}
 
     async def read() -> dict[str, dict[str, Any]]:
         async with _live_session(inputs) as session:
@@ -381,15 +402,14 @@ def _remote_documents(
             items = listed.get("items")
             if not isinstance(items, list):
                 raise AssertionError("Hindsight did not return a document list")
-            listed_ids = {
-                item.get("id")
-                for item in items
-                if isinstance(item, dict) and isinstance(item.get("id"), str)
-            }
-            if listed_ids != expected_ids:
+            listed_ids: set[str] = set()
+            for item in items:
+                if isinstance(item, dict) and isinstance(item.get("id"), str):
+                    listed_ids.add(cast(str, item["id"]))
+            if expected_ids is not None and listed_ids != expected_ids:
                 raise AssertionError("remote document identities did not converge")
             documents: dict[str, dict[str, Any]] = {}
-            for document_id in sorted(expected_ids):
+            for document_id in sorted(listed_ids if expected_ids is None else expected_ids):
                 _status, document = await _raw_json(
                     session,
                     "GET",
@@ -407,10 +427,13 @@ def _assert_long_source_reconstructs(
     expected: Sequence[RetainedSegment],
     documents: Mapping[str, Mapping[str, Any]],
 ) -> None:
-    long_source = _expected_segments((_LONG_TURN,))[0].source_sha256
-    long_segments = [segment for segment in expected if segment.source_sha256 == long_source]
-    if len(long_segments) < 2:
+    groups: dict[str, list[RetainedSegment]] = {}
+    for segment in expected:
+        groups.setdefault(segment.source_sha256, []).append(segment)
+    segmented_groups = [segments for segments in groups.values() if len(segments) > 1]
+    if len(segmented_groups) != 1:
         raise AssertionError("long synthetic turn was not segmented")
+    long_segments = segmented_groups[0]
     long_segments.sort(key=lambda segment: segment.segment_index)
     reconstructed = "".join(
         cast(str, documents[segment.document_id].get("original_text")) for segment in long_segments
@@ -448,15 +471,17 @@ def _run_live_child() -> int:
     barrier: ProfileLockOwner | None = None
     try:
         home, config = _prepare_home(inputs)
-        expected = _expected_segments((_SHORT_TURN, _LONG_TURN))
+        expected_count = _expected_segment_count((_SHORT_TURN, _LONG_TURN))
+        repeated_short_count = _expected_segment_count((_SHORT_TURN,))
 
         barrier = _acquire_sender_barrier(config)
         manager, provider = _start_manager(home)
         _sync_turn(manager, _SHORT_TURN)
         _sync_turn(manager, _LONG_TURN)
-        pending = _wait_for_rows(config, lambda rows: len(rows) == len(expected))
+        pending = _wait_for_rows(config, lambda rows: len(rows) == expected_count)
         if any(row.state != "pending" for row in pending):
             raise AssertionError("retained rows were not durably pending")
+        expected = _segments_from_rows(pending)
         _stop_manager(manager, provider)
         manager = None
         provider = None
@@ -471,9 +496,11 @@ def _run_live_child() -> int:
 
         _sync_turn(manager, _SHORT_TURN)
         _wait_for_rows(config, lambda rows: not rows)
-        replayed = _remote_documents(inputs, expected)
-        if set(replayed) != set(documents):
-            raise AssertionError("stable replay changed remote document identities")
+        replayed = _remote_documents(inputs, None)
+        if not set(documents) < set(replayed):
+            raise AssertionError("repeated completed turn did not create distinct documents")
+        if len(replayed) != len(documents) + repeated_short_count:
+            raise AssertionError("repeated completed turn created an unexpected document count")
 
         result = {
             "documents": len(documents),

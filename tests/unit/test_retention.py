@@ -385,6 +385,29 @@ def test_segmented_turn_keeps_a_complete_role_when_its_wrapper_fits() -> None:
     assert tuple(segment.content for segment in segments) == (whole_user, assistant_only)
 
 
+@pytest.mark.parametrize("separator", ["\r\n\r\n", "\n \t\n", "\r\r"])
+def test_semantic_segmentation_recognizes_common_blank_line_separators(
+    separator: str,
+) -> None:
+    first = "Mira visited Tokyo."
+    second = "She starts work Monday."
+    assistant = "The schedule is recorded."
+    expected = (
+        _expected_content(roles=[{"role": "user", "content": first}]),
+        _expected_content(roles=[{"role": "user", "content": second}]),
+        _expected_content(roles=[{"role": "assistant", "content": assistant}]),
+    )
+    exact_limit = max(len(content.encode("utf-8")) for content in expected)
+
+    segments = _build(
+        user_content=f"{first}{separator}{second}",
+        assistant_content=assistant,
+        segment_max_bytes=exact_limit,
+    )
+
+    assert tuple(segment.content for segment in segments) == expected
+
+
 def test_semantic_unit_that_cannot_fit_with_wrapper_rejects_before_hashing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

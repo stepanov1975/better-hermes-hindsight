@@ -32,7 +32,8 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 - Preserve retained-event occurrence time and repeated-event identity across delayed delivery and
   restart retries while continuing to deliver legacy pending v1 rows safely.
 - Replace arbitrary UTF-8 byte slicing with independently decodable role/paragraph-bounded retained
-  records, rejecting the whole admission when a semantic unit cannot fit the configured byte limit.
+  records, including common blank-line conventions; reject unusable enabled segment limits at
+  configuration and reject admissions when a semantic unit still cannot fit.
 
 ## 0.4.0 - 2026-08-22
 

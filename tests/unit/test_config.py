@@ -539,6 +539,30 @@ def test_invalid_values_fail_with_sanitized_actionable_errors(
     assert "token=value" not in message
 
 
+def test_enabled_retention_rejects_a_segment_limit_smaller_than_its_event_envelope(
+    tmp_path: Path,
+) -> None:
+    disabled = load_config(
+        hermes_home=tmp_path / "disabled",
+        environ={},
+        injected={"retain": {"enabled": False, "segment_max_bytes": 1}},
+    )
+    assert disabled.retain.segment_max_bytes == 1
+
+    with pytest.raises(ConfigError, match="segment_max_bytes.*retained event envelope"):
+        load_config(
+            hermes_home=tmp_path / "enabled",
+            environ={},
+            injected={
+                "retain": {
+                    "enabled": True,
+                    "segment_max_bytes": 1,
+                    "tags": ["project:sample"],
+                }
+            },
+        )
+
+
 def test_cross_field_queue_bounds_are_enforced(tmp_path: Path) -> None:
     assert OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES == 1024
 

@@ -11,13 +11,18 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import NoReturn
 
-from .config import PAYLOAD_SCHEMA_VERSION, canonicalize_retain_tags
+from .config import (
+    PAYLOAD_SCHEMA_VERSION,
+    RETAINED_EVENT_RECORD_SCHEMA,
+    canonicalize_retain_tags,
+)
 from .redaction import redact_sensitive_text
 
 DOCUMENT_ID_PREFIX = "better-hindsight-turn-v1:"
 RETENTION_REJECTED_MESSAGE = "Better Hindsight retention input was rejected."
-RETAINED_EVENT_RECORD_SCHEMA = "better-hindsight-retained-event-v2"
+
 _EVENT_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
+_PARAGRAPH_SEPARATOR_PATTERN = re.compile(r"(?:\r\n|[\r\n])(?:[ \t]*(?:\r\n|[\r\n]))+")
 
 
 class RetentionConstructionError(ValueError):
@@ -239,7 +244,7 @@ def _semantic_contents(
 
 
 def _semantic_paragraphs(text: str) -> tuple[str, ...]:
-    paragraphs = tuple(part for part in text.split("\n\n") if part.strip())
+    paragraphs = tuple(part for part in _PARAGRAPH_SEPARATOR_PATTERN.split(text) if part.strip())
     if not paragraphs:
         _reject()
     return paragraphs

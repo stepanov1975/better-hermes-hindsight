@@ -60,7 +60,7 @@ Compared with bundled Hindsight, this plugin deliberately focuses on:
 - bounded recall for the **current** user query;
 - three bounded model tools for recall, durable retention admission, and compact passive queue status;
 - opt-in automatic retention through a durable SQLite outbox;
-- semantic, independently decodab...[truncated]
+- semantic, independently decodable retention segments with per-occurrence event identity and timestamps;
 - stable replace-mode retries after timeout or restart;
 - explicit principal and destination policy;
 - operator status and mission management; and

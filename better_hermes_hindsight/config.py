@@ -23,6 +23,7 @@ from .redaction import redact_sensitive_text
 DEFAULT_API_URL = "http://localhost:8888"
 DEFAULT_BANK_ID = "hermes"
 PAYLOAD_SCHEMA_VERSION = "better-hindsight-turn-v1"
+RETAINED_EVENT_RECORD_SCHEMA = "better-hindsight-retained-event-v2"
 DEFAULT_RECALL_TIMEOUT_SECONDS = 3.5
 DEFAULT_RECALL_INPUT_MAX_CHARS = 4096
 DEFAULT_RECALL_INPUT_MAX_TOKENS = 500
@@ -372,6 +373,12 @@ def load_config(
 
     if retain.observation_scopes == ((),) and not single_principal:
         raise _error("retain.observation_scopes='shared' requires explicit single_principal=true")
+    minimum_segment_bytes = _minimum_retained_segment_bytes(retain.tags)
+    if retain.enabled and retain.segment_max_bytes < minimum_segment_bytes:
+        raise _error(
+            "retain.segment_max_bytes must be at least "
+            f"{minimum_segment_bytes} bytes for the retained event envelope with configured tags"
+        )
     if retain.segment_max_bytes + OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES > outbox.max_pending_bytes:
         raise _error(
             "retain.segment_max_bytes plus the code-owned row allowance must not exceed "
@@ -1055,6 +1062,24 @@ def _parse_principals(value: object) -> tuple[AllowedPrincipal, ...]:
     return tuple(principals)
 
 
+def _minimum_retained_segment_bytes(tags: Sequence[str]) -> int:
+    content = json.dumps(
+        {
+            "event_id": "0" * 32,
+            "occurred_at": "2000-01-01T00:00:00.000000+00:00",
+            "payload_schema": PAYLOAD_SCHEMA_VERSION,
+            "record_schema": RETAINED_EVENT_RECORD_SCHEMA,
+            "roles": [{"content": "x", "role": "assistant"}],
+            "session_sha256": "0" * 64,
+            "tags": list(tags),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return len(content.encode("utf-8"))
+
+
 __all__ = [
     "AllowedPrincipal",
     "BetterHindsightConfig",
@@ -1074,6 +1099,7 @@ __all__ = [
     "DEFAULT_OUTBOX_RETRY_MAX_SECONDS",
     "OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES",
     "PAYLOAD_SCHEMA_VERSION",
+    "RETAINED_EVENT_RECORD_SCHEMA",
     "DEFAULT_RECALL_CONTEXT_MAX_BYTES",
     "DEFAULT_RECALL_INPUT_MAX_CHARS",
     "DEFAULT_RECALL_TIMEOUT_SECONDS",
