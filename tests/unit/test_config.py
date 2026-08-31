@@ -539,6 +539,120 @@ def test_invalid_values_fail_with_sanitized_actionable_errors(
     assert "token=value" not in message
 
 
+def test_enabled_retention_rejects_a_segment_limit_smaller_than_its_event_envelope(
+    tmp_path: Path,
+) -> None:
+    disabled = load_config(
+        hermes_home=tmp_path / "disabled",
+        environ={},
+        injected={"retain": {"enabled": False, "segment_max_bytes": 1}},
+    )
+    assert disabled.retain.segment_max_bytes == 1
+
+    with pytest.raises(ConfigError, match="segment_max_bytes.*retained event envelope"):
+        load_config(
+            hermes_home=tmp_path / "enabled",
+            environ={},
+            injected={
+                "retain": {
+                    "enabled": True,
+                    "segment_max_bytes": 1,
+                    "tags": ["project:sample"],
+                }
+            },
+        )
+
+
+def test_one_row_outbox_requires_a_complete_two_role_event_envelope(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="segment_max_bytes.*retained event envelope"):
+        load_config(
+            hermes_home=tmp_path / "one-row-too-small",
+            environ={},
+            injected={
+                "retain": {
+                    "enabled": True,
+                    "segment_max_bytes": 348,
+                    "tags": ["project:sample"],
+                },
+                "outbox": {"max_pending_rows": 1},
+            },
+        )
+
+    one_row = load_config(
+        hermes_home=tmp_path / "one-row-exact",
+        environ={},
+        injected={
+            "retain": {
+                "enabled": True,
+                "segment_max_bytes": 378,
+                "tags": ["project:sample"],
+            },
+            "outbox": {"max_pending_rows": 1},
+        },
+    )
+    two_rows = load_config(
+        hermes_home=tmp_path / "two-rows-exact",
+        environ={},
+        injected={
+            "retain": {
+                "enabled": True,
+                "segment_max_bytes": 348,
+                "tags": ["project:sample"],
+            },
+            "outbox": {"max_pending_rows": 2},
+        },
+    )
+
+    assert one_row.retain.segment_max_bytes == 378
+    assert two_rows.retain.segment_max_bytes == 348
+
+
+def test_retention_capacity_counts_all_rows_needed_by_the_smallest_event(
+    tmp_path: Path,
+) -> None:
+    profile = {
+        "retain": {
+            "enabled": True,
+            "segment_max_bytes": 348,
+            "tags": ["project:sample"],
+        },
+        "outbox": {"max_pending_rows": 2, "max_pending_bytes": 1_372},
+    }
+
+    with pytest.raises(ConfigError, match="complete smallest retained event admission"):
+        load_config(
+            hermes_home=tmp_path / "aggregate-too-small",
+            environ={},
+            injected=profile,
+        )
+
+    profile["outbox"] = {"max_pending_rows": 2, "max_pending_bytes": 2_739}
+    config = load_config(
+        hermes_home=tmp_path / "aggregate-exact",
+        environ={},
+        injected=profile,
+    )
+
+    assert config.outbox.max_pending_bytes == 2_739
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_retain_tags_reject_non_scalar_unicode_with_a_sanitized_config_error(
+    tmp_path: Path,
+    enabled: bool,
+) -> None:
+    with pytest.raises(ConfigError) as caught:
+        load_config(
+            hermes_home=tmp_path,
+            environ={},
+            injected={"retain": {"enabled": enabled, "tags": ["\ud800"]}},
+        )
+
+    message = str(caught.value)
+    assert "retain.tags entry must contain only Unicode scalar values" in message
+    assert "\ud800" not in message
+
+
 def test_cross_field_queue_bounds_are_enforced(tmp_path: Path) -> None:
     assert OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES == 1024
 

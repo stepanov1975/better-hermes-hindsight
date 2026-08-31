@@ -115,6 +115,19 @@ def test_required_operator_documentation_exists() -> None:
     assert all(path.is_file() for path in required)
 
 
+def test_retention_documentation_describes_occurrence_records() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    configuration = (ROOT / "docs" / "configuration.md").read_text(encoding="utf-8")
+
+    assert "independently decodable event records" in readme
+    assert "per-admission event ID and occurrence time" in readme
+    assert "better-hindsight-retained-event-v2" in configuration
+    assert "separately admitted identical callback receives a new event ID" in configuration
+    assert "stable content-derived identity while queued" in configuration
+    assert "concatenate exactly to that canonical source" not in configuration
+    assert "Identical rows\nare admission no-ops" not in configuration
+
+
 def test_vendored_tokenizer_attribution_is_packaged() -> None:
     project = _project()
     assert project["license-files"] == ["LICENSE", "THIRD_PARTY_NOTICES.md"]

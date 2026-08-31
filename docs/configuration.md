@@ -114,9 +114,9 @@ response budget; it does not limit query input.
 | `recall.context_max_bytes` | `8192` | 1 through 1,048,576 bytes |
 | `retain.enabled` | `false` | Boolean; explicit opt-in only |
 | `retain.timeout_seconds` | `60.0` | Greater than zero, at most 300 seconds |
-| `retain.segment_max_bytes` | `65536` | 1 through 16,777,216 bytes; plus the code-owned 1,024-byte row allowance it must not exceed `outbox.max_pending_bytes` |
+| `retain.segment_max_bytes` | `65536` | 1 through 16,777,216 bytes; when retention is enabled it must fit the event wrapper required by the configured tags and row limit, and with the code-owned 1,024-byte row allowance it must not exceed `outbox.max_pending_bytes` |
 | `retain.observation_scopes` | `null` | `null`, `combined`, `shared`, or `[[]]` |
-| `retain.tags` | `[]` | At most 64 unique non-empty tags, each at most 256 characters |
+| `retain.tags` | `[]` | At most 64 unique non-empty Unicode-scalar tags, each at most 256 characters |
 | mission texts | `null` | Distinct optional non-empty `retain_mission` and `observations_mission` fields |
 | `outbox.path` | `better_hindsight/outbox.sqlite3` | Must resolve inside `hermes_home` |
 | `outbox.max_pending_rows` | `2000` | Integer from 1 through 100,000 |
@@ -190,12 +190,14 @@ stay private.
 `better_hindsight_retain` accepts required `content` of at most 8,192 characters plus an optional
 `context` category of at most 256 characters. It is available only to an authorized primary handle
 when `retain.enabled=true`. Construction also stops before hashing if the canonical record would
-exceed the model tool's 2,000-segment cap. The tool marks its source
-as agent-selected rather than a direct user quote, then uses the same redaction, deterministic
-segmentation, configured tags/scopes, capacity limits, and durable outbox as automatic retention. It
-does not accept bank, tag, scope, timeout, or retry overrides. `queued_locally` confirms durable local
-admission, while `already_queued` reports an existing identical admission; remote delivery remains
-asynchronous.
+exceed the model tool's 2,000-segment cap. The tool marks its source as agent-selected rather than a
+direct user quote, then uses the same redaction, semantic segmentation, configured tags/scopes,
+capacity limits, and durable outbox as automatic retention. Exact reconstructed calls use one stable
+model-memory identity, so an identical call already present in the outbox returns `already_queued`;
+separately admitted automatic callbacks remain distinct occurrences. When paragraph segmentation is
+needed, the optional context label is repeated on every content record rather than emitted as a
+standalone record. The tool does not accept bank, tag, scope, timeout, or retry overrides.
+`queued_locally` confirms durable local admission; remote delivery remains asynchronous.
 
 `better_hindsight_status` takes no arguments and returns a compact passive outbox projection. Healthy
 output contains only result, queue state, and total queued work. Degraded output additionally includes
@@ -266,21 +268,31 @@ is lost before its SQLite transaction commits remains outside the durability gua
 The callback ignores the raw `messages` transcript and uses only its direct non-empty user and
 assistant text arguments. Before hashing, segmentation, or SQLite admission, both role texts and the
 configured low-cardinality tags pass through the same deliberately narrow deterministic redactor
-described above. The canonical source is compact deterministic UTF-8 JSON with payload schema
-`better-hindsight-turn-v1`, SHA-256 of the raw session identifier, explicit `user` and `assistant`
-role records, and sorted configured tags. The raw session identifier is not stored. Segments preserve
-Unicode code-point boundaries and concatenate exactly to that canonical source.
+described above. Each callback captures one random event ID and one fixed-width UTC occurrence time.
+The encoder first tries one complete event record, then complete role records, then paragraph records
+split only at common blank-line boundaries. Every emitted `better-hindsight-retained-event-v2`
+content value is complete compact UTF-8 JSON containing the payload schema, event identity,
+occurrence time, SHA-256 of the raw session identifier, sorted tags, and its retained role content.
+The raw session identifier is not stored. If any semantic unit plus its wrapper cannot fit, or the
+segment-count limit would be exceeded, the complete admission is rejected.
 
-Each segment ID starts with `better-hindsight-turn-v1:` followed by lowercase SHA-256 of its final
-canonical redacted segment record. That record includes the payload schema, digest of the complete
-canonical source, zero-based segment index and total count, and exact segment content. Identical rows
-are admission no-ops; an ID collision or immutable-row mismatch rejects the complete turn.
+For outbox integrity, `source_sha256` covers the ordered concatenation of those exact canonical record
+strings; that sequence represents retained semantic units and provenance, not the original turn byte
+stream or one canonical turn object. Each new document ID starts with `better-hindsight-turn-v2:`
+followed by lowercase SHA-256 of its final segment record, which includes that source digest,
+zero-based index, total count, and exact content. Retries of one admitted automatic occurrence are row
+no-ops, while a separately admitted identical callback receives a new event ID, timestamp, and
+document IDs. Model-selected memories instead use a stable content-derived identity while queued. An
+ID collision or immutable-row mismatch rejects the complete admission.
 
-Admission uses one `BEGIN IMMEDIATE` transaction. Capacity is checked against all existing
-unconfirmed rows plus every new nonduplicate segment before any insertion, so a completed turn is
-inserted in full or not at all. Local durability begins only after that transaction commits. Queue
-saturation, bounded SQLite contention, construction failure, runtime finalization, or another local
-failure fails open for the conversation and emits only the fixed warning
+Automatic callback construction stops at `outbox.max_pending_rows` semantic records before hashing
+or queue admission. Enabled configuration also proves that `outbox.max_pending_bytes` can hold every
+row required by the smallest retained event after segmentation and fixed per-row accounting. Admission
+then uses one `BEGIN IMMEDIATE` transaction. Capacity is checked against all existing unconfirmed rows
+plus every new nonduplicate segment before any insertion, so a completed turn is inserted in full or
+not at all. Local durability begins only after that
+transaction commits. Queue saturation, bounded SQLite contention, construction failure, runtime
+finalization, or another local failure fails open for the conversation and emits only the fixed warning
 `Better Hindsight local retention admission was rejected.` The warning contains no turn payload,
 session identifier, endpoint, bank, credential, or path.
 
@@ -306,8 +318,10 @@ concurrent pathname/topology replacement is outside that operational model.
 Sender delivery is implemented after local admission. A retain-enabled process starts one daemon
 sender, and a Hermes-home-wide POSIX advisory lock elects the sole process allowed to recover, claim,
 complete, or reschedule rows. Bounded cross-process polling lets that owner discover rows admitted by
-another process. Only rows matching the current destination fingerprint and payload schema are
-claimed; mismatched rows remain durable and unconfirmed.
+another process. New timestamp-bearing records use payload schema `better-hindsight-turn-v2` and its
+distinct destination fingerprint, so a still-running pre-v2 sender cannot claim them. The upgraded
+sender also recognizes the exact compatible v1 schema/fingerprint pair and delivers those legacy rows
+with a null occurrence timestamp. Other mismatched rows remain durable and unconfirmed.
 
 The sender deletes a row only after strict typed confirmation of synchronous replace-mode retention.
 Timeouts, fixed remote failures, and well-formed non-confirming responses remain retryable as

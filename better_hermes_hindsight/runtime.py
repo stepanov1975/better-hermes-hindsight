@@ -35,7 +35,12 @@ from .outbox import (
     ProfileLockStatus,
     SQLiteOutbox,
 )
-from .retention import RetainedSegment, RetentionCapacityError, build_retained_segments
+from .retention import (
+    RetainedSegment,
+    RetentionCapacityError,
+    build_retained_segments,
+    retained_event_timestamp,
+)
 from .telemetry import elapsed_milliseconds, emit_event
 
 ASYNC_CANCELLATION_DRAIN_SECONDS = 0.05
@@ -531,6 +536,7 @@ class OutboxSender:
             source_sha256=row.source_sha256,
             segment_index=row.segment_index,
             segment_count=row.segment_count,
+            timestamp=retained_event_timestamp(row.content),
         )
         started = time.monotonic()
         category: OutboxFailureCategory | None = None
@@ -736,6 +742,8 @@ class ProcessRuntime:
         user_content: str,
         assistant_content: str,
         segment_count_limit: int | None = None,
+        assistant_context: str | None = None,
+        model_selected: bool = False,
     ) -> AdmissionResult:
         """Construct and atomically admit one turn without client or network work."""
 
@@ -752,6 +760,8 @@ class ProcessRuntime:
                     tags=self._retain_tags,
                     segment_max_bytes=self._retain_segment_max_bytes,
                     segment_count_limit=segment_count_limit,
+                    assistant_context=assistant_context,
+                    model_selected=model_selected,
                 )
             except RetentionCapacityError:
                 return AdmissionResult(AdmissionStatus.CAPACITY_EXCEEDED)
@@ -909,6 +919,8 @@ class ProcessRuntimeHandle:
         user_content: str,
         assistant_content: str,
         segment_count_limit: int | None = None,
+        assistant_context: str | None = None,
+        model_selected: bool = False,
     ) -> AdmissionResult:
         """Request one local admission through the shared process runtime."""
 
@@ -917,6 +929,8 @@ class ProcessRuntimeHandle:
             user_content=user_content,
             assistant_content=assistant_content,
             segment_count_limit=segment_count_limit,
+            assistant_context=assistant_context,
+            model_selected=model_selected,
         )
 
     def recall(self, query: str, *, timeout: float) -> object:

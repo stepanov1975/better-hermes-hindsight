@@ -31,7 +31,7 @@ class _Handle:
     ) -> None:
         self.result = result or AdmissionResult(AdmissionStatus.ADMITTED, inserted_count=1)
         self.failure = failure
-        self.admissions: list[tuple[str, str, str, int | None]] = []
+        self.admissions: list[tuple[str, str, str, int | None, str | None, bool]] = []
         self.close_calls = 0
 
     def admit_turn(
@@ -41,8 +41,19 @@ class _Handle:
         user_content: str,
         assistant_content: str,
         segment_count_limit: int | None = None,
+        assistant_context: str | None = None,
+        model_selected: bool = False,
     ) -> AdmissionResult:
-        self.admissions.append((session_id, user_content, assistant_content, segment_count_limit))
+        self.admissions.append(
+            (
+                session_id,
+                user_content,
+                assistant_content,
+                segment_count_limit,
+                assistant_context,
+                model_selected,
+            )
+        )
         if self.failure is not None:
             raise self.failure
         return self.result
@@ -81,7 +92,7 @@ def _write_profile(
         "recall": {"enabled": recall_enabled, "timeout_seconds": 0.125},
         "retain": {
             "enabled": retain_enabled,
-            "segment_max_bytes": 256,
+            "segment_max_bytes": 4096,
             "tags": ["project:synthetic"],
         },
         "outbox": {"max_pending_bytes": 1_000_000},
@@ -136,8 +147,10 @@ def test_retain_tool_queues_agent_selected_content_with_structured_acknowledgeme
         (
             "better-hindsight-model-retain-v1",
             "This is an agent-selected durable memory record, not a direct user quotation.",
-            "Context: user preference\n\nAlex prefers durable, verified operational changes.",
+            "Alex prefers durable, verified operational changes.",
             2000,
+            "user preference",
+            True,
         )
     ]
     assert "Alex prefers" not in raw
@@ -207,7 +220,7 @@ def test_retain_tool_reports_safe_admission_outcomes(
     raw = provider.handle_tool_call("better_hindsight_retain", {"content": "durable fact"})
 
     assert json.loads(raw) == expected
-    assert handle.admissions[0][2:] == ("durable fact", 2000)
+    assert handle.admissions[0][2:] == ("durable fact", 2000, None, True)
 
 
 def test_retain_tool_failure_and_nonprimary_handle_are_sanitized(

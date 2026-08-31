@@ -16,6 +16,7 @@ from typing import Any, TypeVar
 import pytest
 from agent.memory_manager import MemoryManager
 
+import better_hermes_hindsight.retention as retention_module
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.outbox import OutboxOpenError, OutboxRow, SQLiteOutbox
 from better_hermes_hindsight.provider import BetterHindsightMemoryProvider
@@ -33,6 +34,16 @@ FIXTURE_ERROR_SENTINEL = "synthetic-released-retention-error"
 FIXTURE_TAGS = ("kind:released-proof", "source:fixture")
 
 _T = TypeVar("_T")
+
+
+@pytest.fixture(autouse=True)
+def _fixed_retained_event_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(retention_module, "_new_event_id", lambda: "9" * 32)
+    monkeypatch.setattr(
+        retention_module,
+        "_capture_occurrence_time",
+        lambda: "2026-08-31T04:00:00+00:00",
+    )
 
 
 class _DedicatedLoop:
@@ -310,6 +321,8 @@ def _expected_segment(
     session_id: str,
     user_content: str,
     assistant_content: str,
+    assistant_context: str | None = None,
+    model_selected: bool = False,
 ) -> tuple[str, str]:
     segments = build_retained_segments(
         session_id=session_id,
@@ -317,6 +330,8 @@ def _expected_segment(
         assistant_content=assistant_content,
         tags=FIXTURE_TAGS,
         segment_max_bytes=4096,
+        assistant_context=assistant_context,
+        model_selected=model_selected,
     )
     assert len(segments) == 1
     return segments[0].document_id, segments[0].content
@@ -339,7 +354,9 @@ def test_released_model_retain_and_status_tools_route_through_durable_runtime(
             user_content=(
                 "This is an agent-selected durable memory record, not a direct user quotation."
             ),
-            assistant_content=f"Context: {context}\n\n{content}",
+            assistant_content=content,
+            assistant_context=context,
+            model_selected=True,
         )
 
         harness.loop.run(_arm_retain_delay(harness.server))

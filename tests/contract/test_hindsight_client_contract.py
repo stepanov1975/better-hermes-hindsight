@@ -123,7 +123,7 @@ def _config(
     )
 
 
-def _segment() -> RetainSegment:
+def _segment(*, timestamp: str | None = "2026-08-31T12:34:56.123456+00:00") -> RetainSegment:
     return RetainSegment(
         content="immutable segment",
         document_id="stable-document-id",
@@ -131,6 +131,7 @@ def _segment() -> RetainSegment:
         source_sha256="a" * 64,
         segment_index=0,
         segment_count=1,
+        timestamp=timestamp,
     )
 
 
@@ -440,7 +441,7 @@ def test_retain_uses_exact_replace_batch_and_typed_confirmation(
                 "items": [
                     {
                         "content": "immutable segment",
-                        "timestamp": None,
+                        "timestamp": "2026-08-31T12:34:56.123456+00:00",
                         "context": None,
                         "metadata": {
                             "better_hindsight_payload_schema": "better-hindsight-turn-v1",

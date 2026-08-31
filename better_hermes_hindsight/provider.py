@@ -284,6 +284,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                 session_id=session_id,
                 user_content=user_content,
                 assistant_content=assistant_content,
+                segment_count_limit=config.outbox.max_pending_rows,
             )
             emit_event(
                 logger,
@@ -396,15 +397,14 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         runtime = self._runtime
         if not self._retain_enabled or config is None or runtime is None:
             return _tool_json(error=_RETAIN_TOOL_UNAVAILABLE)
-        assistant_content = content
-        if context is not None:
-            assistant_content = f"Context: {context}\n\n{content}"
         try:
             admission = runtime.admit_turn(
                 session_id=_RETAIN_TOOL_SESSION_ID,
                 user_content=_RETAIN_TOOL_SOURCE_MARKER,
-                assistant_content=assistant_content,
+                assistant_content=content,
                 segment_count_limit=_RETAIN_TOOL_MAX_SEGMENTS,
+                assistant_context=context,
+                model_selected=True,
             )
             emit_event(
                 logger,

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Literal, cast
 
 from .config import (
+    LEGACY_PAYLOAD_SCHEMA_VERSION,
     OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES,
     PAYLOAD_SCHEMA_VERSION,
     BetterHindsightConfig,
@@ -295,6 +296,7 @@ class SQLiteOutbox:
         "_connection",
         "_destination_fingerprint",
         "_hermes_home",
+        "_legacy_destination_fingerprint",
         "_lock_token",
         "_max_pending_bytes",
         "_max_pending_rows",
@@ -319,6 +321,7 @@ class SQLiteOutbox:
         self._profile_lock_identity = profile_lock_identity
         self._lock_token = object()
         self._destination_fingerprint = config.destination_fingerprint
+        self._legacy_destination_fingerprint = config.legacy_destination_fingerprint
         self._payload_schema = config.outbox.payload_schema
         self._max_pending_rows = config.outbox.max_pending_rows
         self._max_pending_bytes = config.outbox.max_pending_bytes
@@ -518,8 +521,10 @@ class SQLiteOutbox:
                     FROM outbox
                     WHERE state='pending'
                       AND next_attempt_at <= ?
-                      AND destination_fingerprint = ?
-                      AND payload_schema = ?
+                      AND (
+                            (destination_fingerprint = ? AND payload_schema = ?)
+                         OR (destination_fingerprint = ? AND payload_schema = ?)
+                      )
                     ORDER BY
                         next_attempt_at,
                         created_at,
@@ -528,7 +533,13 @@ class SQLiteOutbox:
                         document_id
                     LIMIT 1
                     """,
-                    (normalized_now, self._destination_fingerprint, self._payload_schema),
+                    (
+                        normalized_now,
+                        self._destination_fingerprint,
+                        self._payload_schema,
+                        self._legacy_destination_fingerprint,
+                        LEGACY_PAYLOAD_SCHEMA_VERSION,
+                    ),
                 ).fetchone()
                 if record is None:
                     self._connection.rollback()
@@ -551,8 +562,8 @@ class SQLiteOutbox:
                         str(record[0]),
                         prior_attempt_count,
                         normalized_now,
-                        self._destination_fingerprint,
-                        self._payload_schema,
+                        str(record[7]),
+                        str(record[2]),
                     ),
                 )
                 if cursor.rowcount != 1 or self._owner_descriptor(owner) is None:
@@ -677,10 +688,17 @@ class SQLiteOutbox:
                     SELECT MIN(next_attempt_at)
                     FROM outbox
                     WHERE state='pending'
-                      AND destination_fingerprint=?
-                      AND payload_schema=?
+                      AND (
+                            (destination_fingerprint = ? AND payload_schema = ?)
+                         OR (destination_fingerprint = ? AND payload_schema = ?)
+                      )
                     """,
-                    (self._destination_fingerprint, self._payload_schema),
+                    (
+                        self._destination_fingerprint,
+                        self._payload_schema,
+                        self._legacy_destination_fingerprint,
+                        LEGACY_PAYLOAD_SCHEMA_VERSION,
+                    ),
                 ).fetchone()
                 if record is None or record[0] is None:
                     return None
@@ -1055,19 +1073,35 @@ def _read_status_snapshot(
             SELECT
                 COUNT(*),
                 COALESCE(SUM(CASE
-                    WHEN destination_fingerprint <> :destination
-                      OR payload_schema <> :payload_schema THEN 1 ELSE 0 END), 0),
+                    WHEN NOT (
+                           (destination_fingerprint = :destination
+                            AND payload_schema = :payload_schema)
+                        OR (destination_fingerprint = :legacy_destination
+                            AND payload_schema = :legacy_payload_schema)
+                    ) THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(CASE
-                    WHEN destination_fingerprint = :destination
-                     AND payload_schema = :payload_schema
+                    WHEN (
+                           (destination_fingerprint = :destination
+                            AND payload_schema = :payload_schema)
+                        OR (destination_fingerprint = :legacy_destination
+                            AND payload_schema = :legacy_payload_schema)
+                    )
                      AND state = 'sending' THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(CASE
-                    WHEN destination_fingerprint = :destination
-                     AND payload_schema = :payload_schema
+                    WHEN (
+                           (destination_fingerprint = :destination
+                            AND payload_schema = :payload_schema)
+                        OR (destination_fingerprint = :legacy_destination
+                            AND payload_schema = :legacy_payload_schema)
+                    )
                      AND state = 'pending' AND attempt_count > 0 THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(CASE
-                    WHEN destination_fingerprint = :destination
-                     AND payload_schema = :payload_schema
+                    WHEN (
+                           (destination_fingerprint = :destination
+                            AND payload_schema = :payload_schema)
+                        OR (destination_fingerprint = :legacy_destination
+                            AND payload_schema = :legacy_payload_schema)
+                    )
                      AND state = 'pending' AND attempt_count = 0 THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(LENGTH(CAST(content AS BLOB)) + :allowance), 0),
                 MIN(created_at),
@@ -1105,8 +1139,12 @@ def _read_status_snapshot(
                 MAX(ABS(next_attempt_at)),
                 COALESCE(MAX(attempt_count), 0),
                 MIN(CASE
-                    WHEN destination_fingerprint = :destination
-                     AND payload_schema = :payload_schema
+                    WHEN (
+                           (destination_fingerprint = :destination
+                            AND payload_schema = :payload_schema)
+                        OR (destination_fingerprint = :legacy_destination
+                            AND payload_schema = :legacy_payload_schema)
+                    )
                      AND state = 'pending' AND attempt_count > 0
                     THEN next_attempt_at END),
                 COALESCE(SUM(CASE
@@ -1120,6 +1158,8 @@ def _read_status_snapshot(
             {
                 "allowance": OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES,
                 "destination": config.destination_fingerprint,
+                "legacy_destination": config.legacy_destination_fingerprint,
+                "legacy_payload_schema": LEGACY_PAYLOAD_SCHEMA_VERSION,
                 "payload_schema": config.outbox.payload_schema,
             },
         ).fetchone()

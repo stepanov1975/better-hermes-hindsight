@@ -32,6 +32,18 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 - Make recall formatting linear in emitted JSONL bytes and apply one deadline across query
   projection, network/decode, redaction, and formatting. Bound recall response bytes, result and
   nested-collection counts, and per-record input before synchronous processing.
+- Preserve retained-event occurrence time and repeated-event identity across delayed delivery and
+  restart retries while continuing to deliver legacy pending v1 rows safely.
+- Replace arbitrary UTF-8 byte slicing with independently decodable role/paragraph-bounded retained
+  records, including common blank-line conventions; reject unusable enabled segment limits at
+  configuration and reject admissions when a semantic unit still cannot fit.
+- Bound automatic segment construction by the configured queue row limit, validate one-row envelope
+  feasibility and aggregate byte capacity for the complete smallest segmented event, and reject
+  surrogate tags through the sanitized configuration boundary.
+- Bind timestamp-bearing retained records to a distinct v2 payload/fingerprint so pre-v2 senders cannot
+  claim them while upgraded senders continue to drain exact legacy v1 rows.
+- Preserve model-retain retry idempotency with a stable model-memory identity and repeat optional context
+  on every split content record instead of retaining a standalone context-only document.
 
 ## 0.4.0 - 2026-08-22
 

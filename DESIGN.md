@@ -54,17 +54,29 @@ destination, principal, or retention policy.
 
 1. Hermes invokes `sync_turn()` after a completed turn.
 2. The provider verifies retention, context, and principal policy.
-3. It redacts and deterministically segments the source.
-4. One SQLite transaction admits every segment or none, subject to configured limits.
-5. A background sender claims due rows for the current destination fingerprint.
-6. Each row is sent with a stable document ID, synchronous Hindsight retention, and `update_mode="replace"`.
+3. It captures one local event ID and fixed-width UTC occurrence time for the automatic admission,
+   redacts the turn, and builds either one complete turn record or role/paragraph-bounded records that
+   are each independently decodable. A semantic unit that cannot fit the configured exact UTF-8 byte
+   limit rejects the whole admission instead of being split arbitrarily.
+4. One SQLite transaction admits every segment or none, subject to configured limits. Configuration
+   proves the complete smallest segmented event fits the aggregate byte capacity. The event time is
+   persisted inside each record, so sender retries and process restarts retain the original occurrence.
+5. A background sender claims due rows for the current destination fingerprint or the exact compatible
+   legacy v1 schema/fingerprint pair.
+6. Each new row uses the distinct `better-hindsight-turn-v2` payload/fingerprint identity, a stable
+   document ID, synchronous Hindsight retention, and `update_mode="replace"`; a pre-v2 sender cannot
+   claim timestamp-bearing v2 rows. The upgraded sender still delivers legacy pending v1 fragments with
+   a null timestamp.
 7. Confirmed rows are removed; unconfirmed rows are rescheduled with bounded backoff.
 
 The model-facing `better_hindsight_retain` tool accepts one self-contained durable memory plus an
 optional short context label. It marks the source as agent-selected rather than a direct user quote,
-applies the same redaction/segmentation path, and returns one canonical local admission outcome. It cannot
-override the configured bank, tags, scopes, limits, or retry policy. Acceptance means the outbox
-transaction committed; remote delivery remains asynchronous.
+applies the same redaction and semantic segmentation path, repeats the context on every split content
+record, and returns one canonical local admission outcome. A stable content-derived model-memory
+identity makes an exact reconstructed call idempotent while it remains queued; automatic callback
+occurrences remain random and distinct. The tool cannot override the configured bank, tags, scopes,
+limits, or retry policy. Acceptance means the outbox transaction committed; remote delivery remains
+asynchronous.
 
 The model-facing `better_hindsight_status` tool projects the operator outbox snapshot into compact
 healthy state or conditionally detailed degraded state. It performs no remote call; deployment and

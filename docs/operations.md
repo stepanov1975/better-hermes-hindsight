@@ -48,7 +48,11 @@ A destination mismatch normally means the endpoint, bank, payload schema, tags, 
 
 The Hermes `sync_turn()` callback performs redaction, deterministic segmentation, and one bounded SQLite admission. It makes no Hindsight request. Local durability starts when that transaction commits.
 
-A process-shared sender claims only rows matching its destination fingerprint. It sends each persisted segment with its stable document ID, `update_mode="replace"`, and synchronous confirmation. Failed, timed-out, or unconfirmed attempts remain durable and are rescheduled with capped exponential backoff.
+A process-shared sender claims current v2 destination rows plus the exact compatible legacy v1
+schema/fingerprint pair. A pre-v2 sender cannot claim timestamp-bearing v2 rows. The upgraded sender
+sends each persisted segment with its stable document ID, `update_mode="replace"`, and synchronous
+confirmation; legacy v1 rows retain their null occurrence timestamp. Failed, timed-out, or unconfirmed
+attempts remain durable and are rescheduled with capped exponential backoff.
 
 A timeout may mean the server committed after the caller deadline. Stable replace-mode identity makes replay safe for the source document, but delivery is not exactly once.
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 
 import pytest
 
@@ -19,6 +20,37 @@ from better_hermes_hindsight.retention import (
     build_retained_segments,
 )
 
+EVENT_ID = "0123456789abcdef0123456789abcdef"
+OCCURRED_AT = "2026-08-31T12:34:56.123456+00:00"
+RECORD_SCHEMA = "better-hindsight-retained-event-v2"
+_CAPTURE_OCCURRENCE_TIME = retention_module._capture_occurrence_time
+
+
+@pytest.fixture(autouse=True)
+def _fixed_event_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(retention_module, "_new_event_id", lambda: EVENT_ID, raising=False)
+    monkeypatch.setattr(
+        retention_module,
+        "_capture_occurrence_time",
+        lambda: OCCURRED_AT,
+        raising=False,
+    )
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="POSIX timezone control is unavailable")
+def test_occurrence_time_is_fixed_width_utc_under_second_precision_local_timezone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    try:
+        with monkeypatch.context() as timezone_environment:
+            timezone_environment.setenv("TZ", "XST-0:00:30")
+            time.tzset()
+            occurred_at = _CAPTURE_OCCURRENCE_TIME()
+    finally:
+        time.tzset()
+
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}\+00:00", occurred_at)
+
 
 def _build(
     *,
@@ -28,6 +60,8 @@ def _build(
     tags: object = ("project:sample",),
     segment_max_bytes: object = 4096,
     segment_count_limit: object = None,
+    assistant_context: object = None,
+    model_selected: object = False,
 ) -> tuple[RetainedSegment, ...]:
     return build_retained_segments(
         session_id=session_id,
@@ -36,11 +70,35 @@ def _build(
         tags=tags,
         segment_max_bytes=segment_max_bytes,
         segment_count_limit=segment_count_limit,
+        assistant_context=assistant_context,
+        model_selected=model_selected,
     )
 
 
 def _source(segments: tuple[RetainedSegment, ...]) -> str:
     return "".join(segment.content for segment in segments)
+
+
+def _expected_content(
+    *,
+    roles: list[dict[str, str]],
+    session_id: str = "synthetic-session",
+    tags: list[str] | None = None,
+) -> str:
+    return json.dumps(
+        {
+            "event_id": EVENT_ID,
+            "occurred_at": OCCURRED_AT,
+            "payload_schema": PAYLOAD_SCHEMA_VERSION,
+            "record_schema": RECORD_SCHEMA,
+            "roles": roles,
+            "session_sha256": hashlib.sha256(session_id.encode("utf-8")).hexdigest(),
+            "tags": ["project:sample"] if tags is None else tags,
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
 
 
 def _segment_digest(segment: RetainedSegment) -> str:
@@ -60,19 +118,22 @@ def _segment_digest(segment: RetainedSegment) -> str:
 
 
 def test_literal_golden_document_identity_vector() -> None:
-    """Freeze v1 identity without deriving the expected values through production code."""
+    """Freeze v2 identity without deriving expected values through production code."""
 
     expected_source = (
-        '{"payload_schema":"better-hindsight-turn-v1","roles":['
+        '{"event_id":"0123456789abcdef0123456789abcdef",'
+        '"occurred_at":"2026-08-31T12:34:56.123456+00:00",'
+        '"payload_schema":"better-hindsight-turn-v2",'
+        '"record_schema":"better-hindsight-retained-event-v2","roles":['
         '{"content":"Hello, 世界","role":"user"},'
         '{"content":"Acknowledged.","role":"assistant"}],'
         '"session_sha256":"0c36857851849f43582b86eaf6b2185d3538b471e3364dc3651feeca5df4a5c1",'
         '"tags":["project:sample","source:golden"]}'
     )
-    expected_source_sha256 = "f0e8471dba822cf02c9781d78c03bc5837e791bc7194fbe1a59e8693d3794349"
-    expected_payload_hash = "b3cd7d7f889a7413ce954507ee5fee9e5a073e11ab656c9a063c9618be2c551d"
+    expected_source_sha256 = "de211c30b94a7e6b2f100211504db26bd184b56d13aca61093bd3f27f9f059c1"
+    expected_payload_hash = "cb7a6a9bff4ff28a71918c842ef9093a48c0f0c1ce31362582dd7a631f0dac69"
     expected_document_id = (
-        "better-hindsight-turn-v1:b3cd7d7f889a7413ce954507ee5fee9e5a073e11ab656c9a063c9618be2c551d"
+        "better-hindsight-turn-v2:cb7a6a9bff4ff28a71918c842ef9093a48c0f0c1ce31362582dd7a631f0dac69"
     )
 
     segments = _build(
@@ -89,7 +150,7 @@ def test_literal_golden_document_identity_vector() -> None:
     assert segment.source_sha256 == expected_source_sha256
     assert segment.payload_hash == expected_payload_hash
     assert segment.document_id == expected_document_id
-    assert segment.payload_schema == "better-hindsight-turn-v1"
+    assert segment.payload_schema == "better-hindsight-turn-v2"
     assert segment.segment_index == 0
     assert segment.segment_count == 1
 
@@ -114,7 +175,10 @@ def test_canonical_source_has_explicit_roles_hashed_session_and_sorted_tags() ->
     source = _source(first)
     decoded = json.loads(source)
     assert decoded == {
+        "event_id": EVENT_ID,
+        "occurred_at": OCCURRED_AT,
         "payload_schema": PAYLOAD_SCHEMA_VERSION,
+        "record_schema": RECORD_SCHEMA,
         "roles": [
             {"content": "User role text", "role": "user"},
             {"content": "Assistant role text", "role": "assistant"},
@@ -124,6 +188,22 @@ def test_canonical_source_has_explicit_roles_hashed_session_and_sorted_tags() ->
     }
     assert raw_session not in source
     assert raw_session not in repr(first)
+
+
+def test_identical_completed_turns_get_distinct_per_admission_event_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event_ids = iter(("1" * 32, "2" * 32))
+    monkeypatch.setattr(retention_module, "_new_event_id", lambda: next(event_ids))
+
+    first = _build()
+    second = _build()
+
+    assert first[0].document_id != second[0].document_id
+    assert json.loads(first[0].content)["event_id"] == "1" * 32
+    assert json.loads(second[0].content)["event_id"] == "2" * 32
+    assert json.loads(first[0].content)["occurred_at"] == OCCURRED_AT
+    assert json.loads(second[0].content)["occurred_at"] == OCCURRED_AT
 
 
 @pytest.mark.parametrize(
@@ -270,31 +350,105 @@ def test_input_bearing_retention_error_is_recanonicalized_at_the_public_boundary
     assert caught.value.__cause__ is None
 
 
-def test_utf8_segmentation_round_trips_at_code_point_boundaries() -> None:
+def test_unicode_segments_are_self_contained_and_split_only_at_semantic_boundaries() -> None:
+    entity_paragraph = "Mira visited 東京. She bought tea 🙂."
+    second_paragraph = "Résumé notes: café 漢字."
+    assistant = "Recorded for Mira."
+    expected_contents = (
+        _expected_content(roles=[{"role": "user", "content": entity_paragraph}]),
+        _expected_content(roles=[{"role": "user", "content": second_paragraph}]),
+        _expected_content(roles=[{"role": "assistant", "content": assistant}]),
+    )
+    exact_limit = max(len(content.encode("utf-8")) for content in expected_contents)
+
     segments = _build(
-        user_content="🙂漢字é" * 80,
-        assistant_content="終わり🌍" * 60,
-        tags=("unicode",),
-        segment_max_bytes=37,
+        user_content=f"{entity_paragraph}\n\n{second_paragraph}",
+        assistant_content=assistant,
+        segment_max_bytes=exact_limit,
     )
 
-    source = _source(segments)
-    decoded = json.loads(source)
-    assert decoded["roles"][0]["content"] == "🙂漢字é" * 80
-    assert decoded["roles"][1]["content"] == "終わり🌍" * 60
-    assert all(len(segment.content.encode("utf-8")) <= 37 for segment in segments)
+    assert tuple(segment.content for segment in segments) == expected_contents
+    decoded = [json.loads(segment.content) for segment in segments]
+    assert all(item["event_id"] == EVENT_ID for item in decoded)
+    assert all(item["occurred_at"] == OCCURRED_AT for item in decoded)
+    assert all(item["session_sha256"] == decoded[0]["session_sha256"] for item in decoded)
+    assert decoded[0]["roles"] == [{"content": entity_paragraph, "role": "user"}]
+    assert all(len(segment.content.encode("utf-8")) <= exact_limit for segment in segments)
+    assert any(len(segment.content.encode("utf-8")) == exact_limit for segment in segments)
     assert [segment.segment_index for segment in segments] == list(range(len(segments)))
     assert {segment.segment_count for segment in segments} == {len(segments)}
     assert {segment.source_sha256 for segment in segments} == {
-        hashlib.sha256(source.encode("utf-8")).hexdigest()
+        hashlib.sha256(_source(segments).encode("utf-8")).hexdigest()
     }
 
 
-def test_a_single_code_point_that_cannot_fit_rejects_the_whole_turn() -> None:
-    with pytest.raises(RetentionConstructionError) as caught:
-        _build(user_content="🙂", segment_max_bytes=3)
+def test_segmented_turn_keeps_a_complete_role_when_its_wrapper_fits() -> None:
+    user = "Alice moved to Berlin.\n\nShe starts work Monday."
+    assistant = "That schedule is confirmed."
+    complete = _expected_content(
+        roles=[
+            {"role": "user", "content": user},
+            {"role": "assistant", "content": assistant},
+        ]
+    )
+    whole_user = _expected_content(roles=[{"role": "user", "content": user}])
+    assistant_only = _expected_content(roles=[{"role": "assistant", "content": assistant}])
+    exact_role_limit = len(whole_user.encode("utf-8"))
+    assert len(complete.encode("utf-8")) > exact_role_limit
+    assert len(assistant_only.encode("utf-8")) <= exact_role_limit
+
+    segments = _build(
+        user_content=user,
+        assistant_content=assistant,
+        segment_max_bytes=exact_role_limit,
+    )
+
+    assert tuple(segment.content for segment in segments) == (whole_user, assistant_only)
+
+
+@pytest.mark.parametrize("separator", ["\r\n\r\n", "\n \t\n", "\r\r"])
+def test_semantic_segmentation_recognizes_common_blank_line_separators(
+    separator: str,
+) -> None:
+    first = "Mira visited Tokyo."
+    second = "She starts work Monday."
+    assistant = "The schedule is recorded."
+    expected = (
+        _expected_content(roles=[{"role": "user", "content": first}]),
+        _expected_content(roles=[{"role": "user", "content": second}]),
+        _expected_content(roles=[{"role": "assistant", "content": assistant}]),
+    )
+    exact_limit = max(len(content.encode("utf-8")) for content in expected)
+
+    segments = _build(
+        user_content=f"{first}{separator}{second}",
+        assistant_content=assistant,
+        segment_max_bytes=exact_limit,
+    )
+
+    assert tuple(segment.content for segment in segments) == expected
+
+
+def test_semantic_unit_that_cannot_fit_with_wrapper_rejects_before_hashing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entity_paragraph = "Mira visited 東京. She bought tea 🙂."
+    wrapped = _expected_content(roles=[{"role": "user", "content": entity_paragraph}])
+
+    def forbidden_hash(**_kwargs: object) -> str:
+        raise AssertionError("segment hashing ran after semantic construction failed")
+
+    monkeypatch.setattr(retention_module, "derive_segment_payload_hash", forbidden_hash)
+
+    with pytest.raises(retention_module.RetentionCapacityError) as caught:
+        _build(
+            user_content=entity_paragraph,
+            assistant_content="ok",
+            segment_max_bytes=len(wrapped.encode("utf-8")) - 1,
+        )
 
     assert str(caught.value) == RETENTION_REJECTED_MESSAGE
+    assert caught.value.__cause__ is None
 
 
 def test_segment_count_limit_rejects_before_segment_hash_construction(
@@ -307,9 +461,10 @@ def test_segment_count_limit_rejects_before_segment_hash_construction(
 
     with pytest.raises(retention_module.RetentionCapacityError) as caught:
         _build(
-            assistant_content="x" * 500,
-            segment_max_bytes=1,
-            segment_count_limit=10,
+            user_content="first\n\nsecond",
+            assistant_content="third\n\nfourth",
+            segment_max_bytes=380,
+            segment_count_limit=1,
         )
 
     assert str(caught.value) == RETENTION_REJECTED_MESSAGE
@@ -317,10 +472,16 @@ def test_segment_count_limit_rejects_before_segment_hash_construction(
 
 
 def test_segment_count_limit_allows_an_exact_fit() -> None:
-    expected = _build(segment_max_bytes=64)
+    expected = _build(
+        user_content="u" * 100,
+        assistant_content="a" * 100,
+        segment_max_bytes=460,
+    )
 
     limited = _build(
-        segment_max_bytes=64,
+        user_content="u" * 100,
+        assistant_content="a" * 100,
+        segment_max_bytes=460,
         segment_count_limit=len(expected),
     )
 
@@ -329,9 +490,9 @@ def test_segment_count_limit_allows_an_exact_fit() -> None:
 
 def test_each_segment_hash_and_document_id_derive_from_the_exact_canonical_record() -> None:
     segments = _build(
-        user_content="u" * 500,
-        assistant_content="a" * 500,
-        segment_max_bytes=73,
+        user_content="u" * 100,
+        assistant_content="a" * 100,
+        segment_max_bytes=460,
     )
 
     assert len(segments) > 1
@@ -339,7 +500,52 @@ def test_each_segment_hash_and_document_id_derive_from_the_exact_canonical_recor
         expected_hash = _segment_digest(segment)
         assert segment.payload_hash == expected_hash
         assert segment.document_id == DOCUMENT_ID_PREFIX + expected_hash
-        assert re.fullmatch(r"better-hindsight-turn-v1:[0-9a-f]{64}", segment.document_id)
+        assert re.fullmatch(r"better-hindsight-turn-v2:[0-9a-f]{64}", segment.document_id)
+
+
+def test_model_selected_retention_has_stable_identity_across_reconstructed_calls() -> None:
+    def build() -> tuple[RetainedSegment, ...]:
+        return _build(
+            session_id="model-selected-retention",
+            user_content=(
+                "This memory was selected by the assistant; it is not a direct user quote."
+            ),
+            assistant_content="Alex prefers verified changes.",
+            assistant_context="user preference",
+            model_selected=True,
+            segment_max_bytes=4096,
+        )
+
+    first = build()
+    second = build()
+
+    assert first == second
+    decoded = json.loads(first[0].content)
+    assert decoded["record_schema"] == "better-hindsight-retained-memory-v1"
+    assert re.fullmatch(r"[0-9a-f]{32}", decoded["memory_id"])
+    assert "occurred_at" not in decoded
+    assert "event_id" not in decoded
+
+
+def test_model_selected_context_is_repeated_on_every_split_content_record() -> None:
+    segments = _build(
+        session_id="model-selected-retention",
+        user_content="This memory was selected by the assistant; it is not a direct user quote.",
+        assistant_content="First durable statement.\n\nSecond durable statement.",
+        assistant_context="user preference",
+        model_selected=True,
+        segment_max_bytes=370,
+    )
+
+    assistant_records = [
+        json.loads(segment.content)["roles"][0]["content"]
+        for segment in segments
+        if json.loads(segment.content)["roles"][0]["role"] == "assistant"
+    ]
+    assert assistant_records == [
+        "Context: user preference\n\nFirst durable statement.",
+        "Context: user preference\n\nSecond durable statement.",
+    ]
 
 
 def test_segment_dataclass_repr_never_exposes_content() -> None:
@@ -359,7 +565,7 @@ def test_construction_is_deterministic_across_repeated_calls() -> None:
             user_content="stable user",
             assistant_content="stable assistant",
             tags=("beta", "alpha"),
-            segment_max_bytes=41,
+            segment_max_bytes=4096,
         )
 
     assert build() == build()

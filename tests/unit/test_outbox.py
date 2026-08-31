@@ -29,7 +29,7 @@ def _config(
     home: Path,
     *,
     path: str = "better_hindsight/outbox.sqlite3",
-    segment_max_bytes: int = 64,
+    segment_max_bytes: int = 460,
     max_pending_rows: int = 2_000,
     max_pending_bytes: int = 1_000_000,
     busy_timeout_seconds: float = 0.2,
@@ -52,11 +52,15 @@ def _config(
     )
 
 
-def _turn(seed: str, *, segment_max_bytes: int = 64) -> tuple[RetainedSegment, ...]:
+def _turn(seed: str, *, segment_max_bytes: int = 460) -> tuple[RetainedSegment, ...]:
     return build_retained_segments(
         session_id=f"session-{seed}",
-        user_content=f"user-{seed}-" + seed * 40,
-        assistant_content=f"assistant-{seed}-" + seed * 40,
+        user_content=(f"user-{seed}: " + "first semantic context " * 3)
+        + "\n\n"
+        + (f"user-{seed}: " + "second semantic context " * 3),
+        assistant_content=(f"assistant-{seed}: " + "first semantic response " * 3)
+        + "\n\n"
+        + (f"assistant-{seed}: " + "second semantic response " * 3),
         tags=("project:sample",),
         segment_max_bytes=segment_max_bytes,
     )
@@ -413,6 +417,35 @@ def test_exact_duplicate_is_a_noop_and_preserves_mutable_row_state(tmp_path: Pat
     assert {row.state for row in rows} == {"sending"}
     assert {row.attempt_count for row in rows} == {3}
     assert {row.next_attempt_at for row in rows} == {99.0}
+
+
+def test_reconstructed_model_retain_call_is_reported_as_already_queued(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+
+    def construct() -> tuple[RetainedSegment, ...]:
+        return build_retained_segments(
+            session_id="model-selected-retention",
+            user_content=(
+                "This memory was selected by the assistant; it is not a direct user quote."
+            ),
+            assistant_content="Alex prefers verified changes.",
+            assistant_context="user preference",
+            model_selected=True,
+            tags=("project:sample",),
+            segment_max_bytes=4_096,
+        )
+
+    outbox = SQLiteOutbox.open(config)
+    try:
+        first = outbox.admit(construct())
+        repeated = outbox.admit(construct())
+    finally:
+        outbox.close()
+
+    assert first.status is AdmissionStatus.ADMITTED
+    assert repeated.status is AdmissionStatus.DUPLICATE
+    assert repeated.inserted_count == 0
+    assert repeated.duplicate_count == first.inserted_count
 
 
 def test_exact_duplicate_remains_accepted_after_configured_caps_are_lowered(
@@ -807,7 +840,7 @@ def test_content_is_omitted_from_outbox_and_row_reprs(tmp_path: Path) -> None:
         user_content=canary,
         assistant_content="safe response",
         tags=(),
-        segment_max_bytes=64,
+        segment_max_bytes=4096,
     )
     config = _config(tmp_path)
     outbox = SQLiteOutbox.open(config)
