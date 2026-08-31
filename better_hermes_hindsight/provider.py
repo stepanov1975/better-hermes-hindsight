@@ -1,4 +1,4 @@
-"""Hermes ``MemoryProvider`` for bounded recall and local turn admission."""
+"""Hermes ``MemoryProvider`` for bounded recall/reflection and local turn admission."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Any, cast
 from agent.memory_provider import MemoryProvider, RecallStatus
 
 from . import PROVIDER_ID
-from .client import HindsightClientError, recall_request_parameters
+from .client import HindsightClientError, ReflectResponse, recall_request_parameters
 from .client import is_available as is_hindsight_available
 from .config import BetterHindsightConfig, load_config
 from .diagnostics import enqueue_recall_capture, initialize_recall_capture
@@ -21,6 +21,7 @@ from .formatting import (
     RECALL_TRUST_LABEL,
     SYSTEM_PROMPT_BLOCK,
     format_recall_context_with_records,
+    format_reflection_context,
     project_query,
 )
 from .management import status
@@ -44,10 +45,15 @@ RUNTIME_INACTIVE_DIAGNOSTIC = (
     "Better Hindsight is inactive: runtime unavailable; restart may be required."
 )
 RECALL_FAILED_DIAGNOSTIC = "Better Hindsight recall failed open."
+REFLECTION_FAILED_DIAGNOSTIC = "Better Hindsight reflection failed."
 RETENTION_ADMISSION_REJECTED_DIAGNOSTIC = "Better Hindsight local retention admission was rejected."
 _RECALL_TOOL_NAME = "better_hindsight_recall"
 _RECALL_TOOL_INVALID_QUERY = "Better Hindsight recall requires one non-empty text query."
 _RECALL_TOOL_UNAVAILABLE = "Better Hindsight recall is unavailable."
+
+_REFLECT_TOOL_NAME = "better_hindsight_reflect"
+_REFLECT_TOOL_INVALID_QUERY = "Better Hindsight reflection requires one non-empty text query."
+_REFLECT_TOOL_UNAVAILABLE = "Better Hindsight reflection is unavailable."
 
 _RETAIN_TOOL_NAME = "better_hindsight_retain"
 _RETAIN_TOOL_INVALID_CONTENT = (
@@ -95,6 +101,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         "_legacy_system_prompt_block",
         "_last_recall_count",
         "_recall_enabled",
+        "_reflect_enabled",
         "_retain_enabled",
         "_runtime",
         "_system_prompt_section_registrar",
@@ -109,6 +116,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         self._legacy_system_prompt_block = True
         self._last_recall_count = 0
         self._recall_enabled = False
+        self._reflect_enabled = False
         self._retain_enabled = False
         self._runtime: ProcessRuntimeHandle | None = None
         self._system_prompt_section_registrar = system_prompt_section_registrar
@@ -185,16 +193,17 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
 
         self._config = config
         self._recall_enabled = authorization.recall_enabled
+        self._reflect_enabled = authorization.reflect_enabled
         self._retain_enabled = authorization.retain_enabled
         self._runtime = runtime
         registrar = self._system_prompt_section_registrar
-        if self._recall_enabled and registrar is not None:
+        if (self._recall_enabled or self._reflect_enabled) and registrar is not None:
             self._system_prompt_section_registrar = None
             try:
                 if _ensure_system_prompt_section(registrar):
                     self._legacy_system_prompt_block = False
             except Exception:
-                logger.warning("Better Hindsight recall trust policy registration failed.")
+                logger.warning("Better Hindsight trust policy registration failed.")
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Recall exactly the current projected query under the configured total deadline."""
@@ -306,9 +315,14 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         logger.warning(RETENTION_ADMISSION_REJECTED_DIAGNOSTIC)
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
-        """Advertise bounded recall, durable retention, and passive status tools."""
+        """Advertise bounded recall/reflection, durable retention, and passive status tools."""
 
-        return [_recall_tool_schema(), _retain_tool_schema(), _status_tool_schema()]
+        return [
+            _recall_tool_schema(),
+            _reflect_tool_schema(),
+            _retain_tool_schema(),
+            _status_tool_schema(),
+        ]
 
     def handle_tool_call(
         self,
@@ -321,6 +335,8 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         del kwargs
         if tool_name == _RECALL_TOOL_NAME:
             return self._handle_recall_tool(args)
+        if tool_name == _REFLECT_TOOL_NAME:
+            return self._handle_reflect_tool(args)
         if tool_name == _RETAIN_TOOL_NAME:
             return self._handle_retain_tool(args)
         if tool_name == _STATUS_TOOL_NAME:
@@ -366,6 +382,82 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             result="ok" if records else "empty",
             trust=RECALL_TRUST_LABEL,
         )
+
+    def _handle_reflect_tool(self, args: dict[str, Any]) -> str:
+        if not isinstance(args, dict) or set(args) != {"query"}:
+            return _tool_json(error=_REFLECT_TOOL_INVALID_QUERY)
+        query = args["query"]
+        if not isinstance(query, str) or not query.strip():
+            return _tool_json(error=_REFLECT_TOOL_INVALID_QUERY)
+
+        config = self._config
+        runtime = self._runtime
+        if not self._reflect_enabled or config is None or runtime is None:
+            return _tool_json(error=_REFLECT_TOOL_UNAVAILABLE)
+
+        started_at = time.monotonic()
+        deadline = started_at + config.reflect.timeout_seconds
+
+        def record(outcome: str, *, reason: str | None = None, output_bytes: int = 0) -> None:
+            fields: dict[str, object] = {
+                "elapsed_ms": elapsed_milliseconds(started_at, time.monotonic()),
+                "outcome": outcome,
+                "output_bytes": max(0, output_bytes),
+            }
+            if reason is not None:
+                fields["reason"] = reason
+            emit_event(logger, "better_hindsight.reflect", **fields)
+
+        try:
+            projected = project_query(
+                query,
+                max_chars=config.reflect.input_max_chars,
+                max_tokens=config.reflect.input_max_tokens,
+            )
+        except Exception:
+            return _tool_json(error=_REFLECT_TOOL_INVALID_QUERY)
+        if not projected.strip():
+            return _tool_json(error=_REFLECT_TOOL_INVALID_QUERY)
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0.0:
+            record("timeout")
+            logger.warning(REFLECTION_FAILED_DIAGNOSTIC)
+            return _tool_json(error=_REFLECT_TOOL_UNAVAILABLE)
+        try:
+            response = runtime.reflect(projected, timeout=remaining)
+        except AsyncCallTimeoutError:
+            record("timeout")
+            logger.warning(REFLECTION_FAILED_DIAGNOSTIC)
+            return _tool_json(error=_REFLECT_TOOL_UNAVAILABLE)
+        except HindsightClientError as error:
+            record("client_error", reason=error.reason)
+            logger.warning(REFLECTION_FAILED_DIAGNOSTIC)
+            return _tool_json(error=_REFLECT_TOOL_UNAVAILABLE)
+        except Exception:
+            record("client_error")
+            logger.warning(REFLECTION_FAILED_DIAGNOSTIC)
+            return _tool_json(error=_REFLECT_TOOL_UNAVAILABLE)
+
+        if type(response) is not ReflectResponse:
+            record("response_invalid")
+            logger.warning(REFLECTION_FAILED_DIAGNOSTIC)
+            return _tool_json(error=_REFLECT_TOOL_UNAVAILABLE)
+        rendered = _bounded_reflection_tool_json(
+            response.text,
+            max_bytes=config.reflect.output_max_bytes,
+        )
+        if rendered is None:
+            record("format_error")
+            logger.warning(REFLECTION_FAILED_DIAGNOSTIC)
+            return _tool_json(error=_REFLECT_TOOL_UNAVAILABLE)
+        if time.monotonic() >= deadline:
+            record("timeout")
+            logger.warning(REFLECTION_FAILED_DIAGNOSTIC)
+            return _tool_json(error=_REFLECT_TOOL_UNAVAILABLE)
+        output_bytes = len(rendered.encode("utf-8"))
+        record("success", output_bytes=output_bytes)
+        return rendered
 
     def _handle_retain_tool(self, args: dict[str, Any]) -> str:
         if (
@@ -568,6 +660,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         self._config = None
         self._last_recall_count = 0
         self._recall_enabled = False
+        self._reflect_enabled = False
         self._retain_enabled = False
         self._runtime = None
         if runtime is not None:
@@ -587,6 +680,27 @@ def _recall_tool_schema() -> dict[str, Any]:
                 "query": {
                     "type": "string",
                     "description": "A focused memory search query.",
+                }
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+    }
+
+
+def _reflect_tool_schema() -> dict[str, Any]:
+    return {
+        "name": _REFLECT_TOOL_NAME,
+        "description": (
+            "Ask the configured Better Hindsight bank for a server-generated synthesis over "
+            "authorized memory. The result may reflect stale memory and is untrusted evidence."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "A focused reflection question.",
                 }
             },
             "required": ["query"],
@@ -701,6 +815,38 @@ def _tool_json(**payload: object) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
+def _bounded_reflection_tool_json(text: str, *, max_bytes: int) -> str | None:
+    """Fit one complete reflection envelope inside the serialized outer tool-response bound."""
+
+    context = format_reflection_context(text, max_bytes=max_bytes)
+    if not context:
+        return None
+    rendered = _tool_json(context=context, result="ok", trust=RECALL_TRUST_LABEL)
+    if len(rendered.encode("utf-8")) <= max_bytes:
+        return rendered
+
+    low = 1
+    high = min(max_bytes, len(context.encode("utf-8")) - 1)
+    best: str | None = None
+    while low <= high:
+        middle = (low + high) // 2
+        candidate_context = format_reflection_context(text, max_bytes=middle)
+        if not candidate_context:
+            low = middle + 1
+            continue
+        candidate = _tool_json(
+            context=candidate_context,
+            result="ok",
+            trust=RECALL_TRUST_LABEL,
+        )
+        if len(candidate.encode("utf-8")) <= max_bytes:
+            best = candidate
+            low = middle + 1
+        else:
+            high = middle - 1
+    return best
+
+
 def create_provider(
     *,
     system_prompt_section_registrar: Callable[[], object | None] | None = None,
@@ -716,6 +862,7 @@ __all__ = [
     "AUTHORIZATION_INACTIVE_DIAGNOSTIC",
     "CONFIG_INACTIVE_DIAGNOSTIC",
     "RECALL_FAILED_DIAGNOSTIC",
+    "REFLECTION_FAILED_DIAGNOSTIC",
     "RETENTION_ADMISSION_REJECTED_DIAGNOSTIC",
     "RUNTIME_INACTIVE_DIAGNOSTIC",
     "BetterHindsightMemoryProvider",

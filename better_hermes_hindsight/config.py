@@ -30,6 +30,12 @@ DEFAULT_RECALL_TIMEOUT_SECONDS = 3.5
 DEFAULT_RECALL_INPUT_MAX_CHARS = 4096
 DEFAULT_RECALL_INPUT_MAX_TOKENS = 500
 DEFAULT_RECALL_CONTEXT_MAX_BYTES = 8192
+DEFAULT_REFLECT_TIMEOUT_SECONDS = 60.0
+DEFAULT_REFLECT_INPUT_MAX_CHARS = 4096
+DEFAULT_REFLECT_INPUT_MAX_TOKENS = 500
+DEFAULT_REFLECT_OUTPUT_MAX_BYTES = 16_384
+DEFAULT_REFLECT_BUDGET = "low"
+DEFAULT_REFLECT_MAX_TOKENS = 1024
 DEFAULT_RETAIN_TIMEOUT_SECONDS = 60.0
 DEFAULT_RETAIN_SEGMENT_MAX_BYTES = 65536
 DEFAULT_OUTBOX_MAX_PENDING_ROWS = 2_000
@@ -48,6 +54,11 @@ MAX_RECALL_INPUT_CHARS = 65536
 MAX_RECALL_INPUT_TOKENS = 1_048_576
 MAX_RECALL_CONTEXT_BYTES = 1_048_576
 MAX_RECALL_TOKENS = 1_048_576
+MAX_REFLECT_TIMEOUT_SECONDS = 300.0
+MAX_REFLECT_INPUT_CHARS = 65_536
+MAX_REFLECT_INPUT_TOKENS = 1_048_576
+MAX_REFLECT_OUTPUT_BYTES = 1_048_576
+MAX_REFLECT_MAX_TOKENS = 16_384
 MAX_RETAIN_TIMEOUT_SECONDS = 300.0
 MAX_RETAIN_SEGMENT_BYTES = 16_777_216
 MAX_OUTBOX_PENDING_ROWS = 100_000
@@ -65,6 +76,8 @@ IdentifierKind: TypeAlias = Literal["user_id", "user_id_alt"]
 RecallBudget: TypeAlias = Literal["low", "mid", "high"]
 RecallType: TypeAlias = Literal["world", "experience", "observation"]
 RecallTagMode: TypeAlias = Literal["any", "all", "any_strict", "all_strict", "exact"]
+ReflectBudget: TypeAlias = Literal["low", "mid", "high"]
+ReflectTagMode: TypeAlias = Literal["any", "all", "any_strict", "all_strict", "exact"]
 ObservationScopes: TypeAlias = Literal["combined"] | tuple[tuple[str, ...], ...] | None
 
 
@@ -79,6 +92,7 @@ _ROOT_KEYS = {
     "single_principal",
     "allowed_principals",
     "recall",
+    "reflect",
     "retain",
     "missions",
     "outbox",
@@ -99,6 +113,17 @@ _RECALL_KEYS = {
     "min_scores",
     "include_source_facts",
     "max_source_facts_tokens",
+}
+_REFLECT_KEYS = {
+    "enabled",
+    "timeout_seconds",
+    "input_max_chars",
+    "input_max_tokens",
+    "output_max_bytes",
+    "budget",
+    "max_tokens",
+    "tags",
+    "tag_mode",
 }
 _RETAIN_KEYS = {
     "enabled",
@@ -205,6 +230,21 @@ class RecallConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ReflectConfig:
+    """Bounded, fixed policy for explicit server-side reflection."""
+
+    enabled: bool = False
+    timeout_seconds: float = DEFAULT_REFLECT_TIMEOUT_SECONDS
+    input_max_chars: int = DEFAULT_REFLECT_INPUT_MAX_CHARS
+    input_max_tokens: int = DEFAULT_REFLECT_INPUT_MAX_TOKENS
+    output_max_bytes: int = DEFAULT_REFLECT_OUTPUT_MAX_BYTES
+    budget: ReflectBudget = cast(ReflectBudget, DEFAULT_REFLECT_BUDGET)
+    max_tokens: int = DEFAULT_REFLECT_MAX_TOKENS
+    tags: tuple[str, ...] | None = None
+    tag_mode: ReflectTagMode | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class RetainConfig:
     """Typed retain inputs; this module performs no retention work."""
 
@@ -264,12 +304,13 @@ class MemoryAuthorization:
 
     identity_authorized: bool
     recall_enabled: bool
+    reflect_enabled: bool
     retain_enabled: bool
 
     @property
     def memory_enabled(self) -> bool:
         """Whether this handle may perform any memory operation."""
-        return self.recall_enabled or self.retain_enabled
+        return self.recall_enabled or self.reflect_enabled or self.retain_enabled
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,6 +324,7 @@ class BetterHindsightConfig:
     single_principal: bool = False
     allowed_principals: tuple[AllowedPrincipal, ...] = field(default=(), repr=False)
     recall: RecallConfig = field(default_factory=RecallConfig)
+    reflect: ReflectConfig = field(default_factory=ReflectConfig)
     retain: RetainConfig = field(default_factory=RetainConfig)
     missions: MissionConfig = field(default_factory=MissionConfig)
     outbox: OutboxConfig = field(
@@ -341,6 +383,7 @@ class BetterHindsightConfig:
         return MemoryAuthorization(
             identity_authorized=identity_authorized,
             recall_enabled=identity_authorized and self.recall.enabled,
+            reflect_enabled=identity_authorized and self.reflect.enabled,
             retain_enabled=(
                 identity_authorized and self.retain.enabled and agent_context == "primary"
             ),
@@ -379,6 +422,7 @@ def load_config(
     single_principal = _parse_bool(merged.get("single_principal", False), "single_principal")
     principals = _parse_principals(merged.get("allowed_principals", ()))
     recall = _parse_recall(merged.get("recall", {}))
+    reflect = _parse_reflect(merged.get("reflect", {}))
     retain = _parse_retain(merged.get("retain", {}))
     missions = _parse_missions(merged.get("missions", {}))
     outbox = _parse_outbox(home, merged.get("outbox", {}))
@@ -421,6 +465,7 @@ def load_config(
         single_principal=single_principal,
         allowed_principals=principals,
         recall=recall,
+        reflect=reflect,
         retain=retain,
         missions=missions,
         outbox=outbox,
@@ -809,6 +854,63 @@ def _parse_recall(value: object) -> RecallConfig:
     )
 
 
+def _parse_reflect(value: object) -> ReflectConfig:
+    values = _expect_mapping(value, "reflect")
+    _check_unknown_keys(values, _REFLECT_KEYS, "reflect")
+
+    budget = cast(
+        ReflectBudget,
+        _parse_literal(
+            values.get("budget", DEFAULT_REFLECT_BUDGET),
+            "reflect.budget",
+            ("low", "mid", "high"),
+        ),
+    )
+    tag_mode_value = values.get("tag_mode")
+    tag_mode = cast(
+        ReflectTagMode | None,
+        None
+        if tag_mode_value is None
+        else _parse_literal(
+            tag_mode_value,
+            "reflect.tag_mode",
+            ("any", "all", "any_strict", "all_strict", "exact"),
+        ),
+    )
+    return ReflectConfig(
+        enabled=_parse_bool(values.get("enabled", False), "reflect.enabled"),
+        timeout_seconds=_parse_bounded_float(
+            values.get("timeout_seconds", DEFAULT_REFLECT_TIMEOUT_SECONDS),
+            "reflect.timeout_seconds",
+            minimum=0.0,
+            maximum=MAX_REFLECT_TIMEOUT_SECONDS,
+        ),
+        input_max_chars=_parse_positive_int(
+            values.get("input_max_chars", DEFAULT_REFLECT_INPUT_MAX_CHARS),
+            "reflect.input_max_chars",
+            maximum=MAX_REFLECT_INPUT_CHARS,
+        ),
+        input_max_tokens=_parse_positive_int(
+            values.get("input_max_tokens", DEFAULT_REFLECT_INPUT_MAX_TOKENS),
+            "reflect.input_max_tokens",
+            maximum=MAX_REFLECT_INPUT_TOKENS,
+        ),
+        output_max_bytes=_parse_positive_int(
+            values.get("output_max_bytes", DEFAULT_REFLECT_OUTPUT_MAX_BYTES),
+            "reflect.output_max_bytes",
+            maximum=MAX_REFLECT_OUTPUT_BYTES,
+        ),
+        budget=budget,
+        max_tokens=_parse_positive_int(
+            values.get("max_tokens", DEFAULT_REFLECT_MAX_TOKENS),
+            "reflect.max_tokens",
+            maximum=MAX_REFLECT_MAX_TOKENS,
+        ),
+        tags=_parse_optional_tags(values.get("tags"), "reflect.tags"),
+        tag_mode=tag_mode,
+    )
+
+
 def _parse_recall_types(value: object) -> tuple[RecallType, ...] | None:
     if value is None:
         return None
@@ -1176,8 +1278,19 @@ __all__ = [
     "DEFAULT_RECALL_CONTEXT_MAX_BYTES",
     "DEFAULT_RECALL_INPUT_MAX_CHARS",
     "DEFAULT_RECALL_TIMEOUT_SECONDS",
+    "DEFAULT_REFLECT_BUDGET",
+    "DEFAULT_REFLECT_INPUT_MAX_CHARS",
+    "DEFAULT_REFLECT_INPUT_MAX_TOKENS",
+    "DEFAULT_REFLECT_MAX_TOKENS",
+    "DEFAULT_REFLECT_OUTPUT_MAX_BYTES",
+    "DEFAULT_REFLECT_TIMEOUT_SECONDS",
     "DEFAULT_RETAIN_SEGMENT_MAX_BYTES",
     "DEFAULT_RETAIN_TIMEOUT_SECONDS",
+    "MAX_REFLECT_INPUT_CHARS",
+    "MAX_REFLECT_INPUT_TOKENS",
+    "MAX_REFLECT_MAX_TOKENS",
+    "MAX_REFLECT_OUTPUT_BYTES",
+    "MAX_REFLECT_TIMEOUT_SECONDS",
     "MemoryAuthorization",
     "MissionConfig",
     "ObservationScopes",
@@ -1187,6 +1300,9 @@ __all__ = [
     "RecallMinScores",
     "RecallTagMode",
     "RecallType",
+    "ReflectBudget",
+    "ReflectConfig",
+    "ReflectTagMode",
     "RetainConfig",
     "canonicalize_retain_tags",
     "derive_destination_fingerprint",

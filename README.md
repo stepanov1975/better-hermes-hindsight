@@ -32,6 +32,9 @@ example, replace the placeholder principal with the platform and user ID used by
       "identifier": "YOUR_USER_ID"
     }
   ],
+  "reflect": {
+    "enabled": false
+  },
   "retain": {
     "enabled": false
   }
@@ -58,7 +61,8 @@ remaining policy and verification options.
 Compared with bundled Hindsight, this plugin deliberately focuses on:
 
 - bounded recall for the **current** user query;
-- three bounded model tools for recall, durable retention admission, and compact passive queue status;
+- four bounded model tools for recall, opt-in read-only reflection, durable retention admission, and
+  compact passive queue status;
 - opt-in automatic retention through a durable SQLite outbox;
 - semantic, independently decodable retention segments with per-occurrence event identity and timestamps;
 - stable replace-mode retries after timeout or restart;
@@ -66,8 +70,9 @@ Compared with bundled Hindsight, this plugin deliberately focuses on:
 - operator status and mission management; and
 - privacy-safe structured diagnostics plus opt-in synthetic canary and alert-evaluator commands.
 
-It is narrower than bundled Hindsight. It does not provide embedded/cloud service management,
-model-facing reflection or policy changes, multi-user bank routing, previous-query background recall,
+It is narrower than bundled Hindsight. Its optional reflection tool is fixed to the configured bank,
+principal, tags, budget, and bounds; it does not provide caller-selected reflection policy,
+embedded/cloud service management, multi-user bank routing, previous-query background recall,
 migrations, or automatic deletion.
 
 ## Hermes profile compatibility
@@ -106,15 +111,16 @@ or retrieval quality.
 | Crash behavior before remote delivery | Committed outbox rows survive process restart and are retried | Locally queued writer jobs are not persistent; shutdown drains them only within a bounded wait |
 | Retry/document strategy | Stable IDs for every admitted occurrence segment, `update_mode="replace"`, destination binding, and bounded retry backoff | Session-scoped `update_mode="append"` where supported, with a process-unique document fallback for older APIs |
 | Read-after-write freshness | Eventual: an immediately following recall can race the outbox sender | Background prefetch can wait for the local writer and server-side async retain operations before recalling |
-| Model-facing tools | Bounded structured recall, durable local retain admission, and compact passive queue status; no reflection or policy overrides | Recall, retain, and reflect tools in tools or hybrid mode |
+| Model-facing tools | Bounded structured recall, default-off read-only reflection, durable local retain admission, and compact passive queue status; no caller-selected bank or policy overrides | Recall, retain, and reflect tools in tools or hybrid mode |
 | Routing and authorization | One static bank with an exact single-principal allowlist | Static or templated banks across profile, workspace, platform, user, or session contexts |
 | Bank policy operations | Explicit operator check/apply for retain and observations missions | No equivalent mission drift check/apply/readback operator command |
 | Operations | Automatic recall status indicator, passive outbox status, structured diagnostics, replay, synthetic canary, watchdog evaluator, and mission drift checks | Interactive setup, recall/retain status indicators, embedded-service lifecycle, and normal provider logs |
 
 Choose Better Hindsight when a narrow self-hosted deployment prioritizes current-query alignment,
 crash-durable delivery, explicit trust framing, and operator diagnostics. Choose the bundled provider
-when setup breadth, cloud or embedded operation, dynamic bank routing, reflection, or lower
-independent maintenance matters more. Better Hindsight is deliberately not a drop-in superset.
+when setup breadth, cloud or embedded operation, dynamic bank routing, broader caller-controlled
+reflection, or lower independent maintenance matters more. Better Hindsight is deliberately not a
+drop-in superset.
 
 This comparison follows the current intended rolling Hermes checkout. Review the
 [bundled provider source](https://github.com/NousResearch/hermes-agent/tree/main/plugins/memory/hindsight)
@@ -123,6 +129,17 @@ when upgrading either project because its behavior continues to evolve.
 ## Reliability boundary
 
 Recall fails open: timeout, service failure, invalid data, or unavailable runtime yields no external context rather than stopping Hermes. Queries are bounded by both characters and the exact `cl100k_base` token rule used by supported Hindsight servers. Recalled records are bounded, redacted, and framed as potentially stale historical evidence.
+
+Reflection is disabled by default and is never automatic. When enabled, `better_hindsight_reflect`
+accepts one nonblank bounded query for the configured bank under the authorized principal and returns
+only a redacted synthesis inside the same untrusted historical-evidence envelope, explicitly framed
+as stale, untrusted generated evidence. Its configured output cap counts the complete serialized UTF-8
+tool response. It does not
+return Hindsight traces, source payloads, usage details, or policy controls. Better's timeout and byte
+limits bound the local Hermes call and returned context; Hindsight's agentic LLM work and provider cost
+also require appropriate server-side iteration, context, wall-time, and completion-token limits. A
+local timeout does not guarantee that backend model work is cancelled or that incurred cost is
+refunded.
 
 Retention is disabled by default. When enabled, the Hermes callback performs only bounded local redaction, segmentation, and one SQLite admission. Remote delivery runs in the background. Durability begins after admission commits; callbacks Hermes never executes are outside the guarantee.
 
@@ -138,8 +155,8 @@ Retries use a stable document ID and `update_mode="replace"`. A timed-out write 
 - `aiohttp>=3.14.1,<4` and `tiktoken>=0.12,<0.14`, which the plugin declares through Hermes's
   standard memory-plugin dependency mechanism.
 
-The plugin packages the official hash-verified `cl100k_base` encoding table, so query counting does
-not make a first-use network request outside the configured recall deadline.
+The plugin packages the official hash-verified `cl100k_base` encoding table, so recall and reflection
+query counting does not make a first-use network request outside the configured operation deadline.
 
 Compatibility is behavioral rather than release-matrix based. Required CI uses one reviewed Hermes
 commit for reproducibility across Python 3.11–3.13, while a weekly/manual Python 3.13 canary follows
@@ -160,7 +177,7 @@ custom gateway startup procedure. Its internal HTTP adapter does not import the 
 SDK, so the bundled provider and its client remain untouched.
 
 See [installation](docs/installation.md), then configure the endpoint, bank, principal, and
-credential. Leave retention disabled until recall and status work. See
+credential. Leave reflection and retention disabled until recall and status work. See
 [configuration](docs/configuration.md).
 
 ## Operator commands
@@ -178,8 +195,9 @@ hermes better_hindsight watchdog --help
 `status` reads the existing outbox without initializing or draining it. Opt-in slow-recall
 diagnostics keep exact projected queries only in bounded private local files; list output is query-free,
 and replay is an operator-only read against the configured bank. Mission changes are never automatic
-and require explicit confirmation. There is no retry-now, row-deletion, arbitrary-bank, model-facing
-reflection, or model-facing policy-change command.
+and require explicit confirmation. There is no retry-now, row-deletion, arbitrary-bank, or
+model-facing policy-change command. Reflection is available only through the default-off bounded
+memory tool; there is no operator command or caller-selected reflection policy.
 
 The included `hermes better_hindsight canary` and `hermes better_hindsight watchdog` commands
 provide an adapter-backed synthetic E2E check and transition-only alert evaluation over

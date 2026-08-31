@@ -10,7 +10,8 @@ The provider currently includes:
 
 - external Hindsight 0.8.5, 0.9.1, and 0.9.2 connectivity;
 - bounded, fail-open current-query recall;
-- model tools for bounded recall, durable retention admission, and compact passive queue status;
+- model tools for bounded recall, default-off read-only reflection, durable retention admission, and
+  compact passive queue status;
 - optional redacted automatic retention;
 - semantic, independently decodable segmentation with persisted event identity, occurrence time, and
   reconstructable source metadata;
@@ -50,8 +51,11 @@ A development commit is usable when:
 3. the complete Git plugin installs and imports through the intended Hermes checkout without an
    external Better package;
 4. the current Hermes checkout discovers and initializes the provider;
-5. the isolated Hindsight smoke test proves bounded recall, retained delivery, restart recovery, and cleanup or clear manual-cleanup reporting; and
-6. rollback to the untouched bundled-provider environment remains available.
+5. the isolated Hindsight smoke test proves bounded recall, retained delivery, restart recovery, and
+   cleanup or clear manual-cleanup reporting;
+6. a deployment that will enable reflection separately proves one synthetic query against its
+   isolated Hindsight LLM configuration; and
+7. rollback to the untouched bundled-provider environment remains available.
 
 Historical Hermes versions, PyPI publication, exact source/artifact equality, checksum manifests, prose contracts, and repeated review checkpoints are not release prerequisites.
 
@@ -59,6 +63,6 @@ Historical Hermes versions, PyPI publication, exact source/artifact equality, ch
 
 The first usable version remains Linux/POSIX, external-service-only, single-principal, single-bank, and
 normal-Hermes-loop-only. It does not promise exactly-once delivery, typed direct-turn provenance for
-agent-selected writes, automatic migration, multi-user routing, model-facing reflection or policy
-changes, hot reload, or automatic remote deletion. These are accepted scope limits rather than
+provenance, automatic migration, multi-user routing, caller-selected reflection or policy changes,
+hot reload, or automatic remote deletion. These are accepted scope limits rather than
 incomplete release tasks.

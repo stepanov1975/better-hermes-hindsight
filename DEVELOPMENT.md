@@ -25,12 +25,14 @@ Keep the provider narrow:
 - multiple Hermes profiles only when each Better-enabled profile runs in its own process;
 - normal Hermes memory-provider lifecycle;
 - bounded current-query recall;
+- default-off bounded read-only model-facing reflection under the static principal/bank policy;
 - optional durable automatic retention;
-- bounded model tools for recall, durable retention admission, and compact passive queue status;
+- bounded model tools for recall, read-only reflection, durable retention admission, and compact
+  passive queue status;
 - operator-only mission changes, diagnostic replay, canary, and watchdog commands.
 
 Do not add embedded service management, cloud routing, multi-user bank templates, multiplexed
-multi-profile runtime routing, model-facing reflection or policy overrides, migration frameworks,
+multi-profile runtime routing, caller-selected reflection or policy overrides, migration frameworks,
 automatic deletion, Windows support, previous-query background recall, or Hermes-core patches without
 a concrete use case.
 

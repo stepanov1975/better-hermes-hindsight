@@ -13,7 +13,7 @@ procedure.
 
 The plugin declares `aiohttp>=3.14.1,<4` and `tiktoken>=0.12,<0.14` in `plugin.yaml`. Hermes checks
 and installs declared memory-plugin dependencies through its normal memory setup command. Better
-uses `tiktoken` only to match supported Hindsight servers' recall input limit; it does not import or
+uses `tiktoken` for bounded recall and reflection query projection; it does not import or
 replace Hermes's bundled Hindsight client.
 
 The official `cl100k_base` encoding table is packaged with Better and verified by SHA-256 before
@@ -57,7 +57,8 @@ a gateway, or schedule its optional canary and watchdog.
 
 Create the Better Hindsight configuration under the same Hermes home used by the rest of the
 current installation. Configure the endpoint, bank, API-key environment variable, principal, and
-policy as described in [configuration](configuration.md). Keep `retain.enabled=false` initially.
+policy as described in [configuration](configuration.md). Keep `reflect.enabled=false` and
+`retain.enabled=false` initially.
 
 ## Verify before retention
 
@@ -74,8 +75,10 @@ absent outbox is reported as `uninitialized`; that is normal before the first ad
 turn.
 
 Verify one synthetic recall against the configured Hindsight bank. Then explicitly enable
-retention and verify one synthetic completed turn reaches that bank. A non-zero status caused by
-destination-mismatched rows is degraded and must be inspected rather than ignored.
+reflection only if the profile needs Hindsight synthesis and the service's LLM/cost policy has been
+reviewed; test it with a synthetic query and no private data. Enable retention separately and verify
+one synthetic completed turn reaches that bank. A non-zero status caused by destination-mismatched
+rows is degraded and must be inspected rather than ignored.
 
 ## Update
 

@@ -111,6 +111,7 @@ assert provider.name == "better_hindsight"
 assert provider.is_available() is True
 assert [schema["name"] for schema in provider.get_tool_schemas()] == [
     "better_hindsight_recall",
+    "better_hindsight_reflect",
     "better_hindsight_retain",
     "better_hindsight_status",
 ]
@@ -271,6 +272,25 @@ def test_current_loader_discovers_active_standard_plugin_cli_and_recall_tool(
                     "properties": {
                         "query": {
                             "description": "A focused memory search query.",
+                            "type": "string",
+                        }
+                    },
+                    "required": ["query"],
+                    "type": "object",
+                },
+            },
+            {
+                "description": (
+                    "Ask the configured Better Hindsight bank for a server-generated "
+                    "synthesis over authorized memory. The result may reflect stale memory and is "
+                    "untrusted evidence."
+                ),
+                "name": "better_hindsight_reflect",
+                "parameters": {
+                    "additionalProperties": False,
+                    "properties": {
+                        "query": {
+                            "description": "A focused reflection question.",
                             "type": "string",
                         }
                     },

@@ -16,6 +16,7 @@ from typing import Generic, NoReturn, Protocol, TypeVar, cast
 from .client import (
     HindsightClientError,
     HindsightClientProtocol,
+    ReflectClientProtocol,
     RetainConfirmation,
     RetainSegment,
     create_hindsight_client,
@@ -375,6 +376,10 @@ _RuntimeOperation = Callable[[HindsightClientProtocol], Awaitable[_T]]
 
 class _DeadlineRecallClientProtocol(Protocol):
     async def recall_with_timeout(self, query: str, *, timeout_seconds: float) -> object: ...
+
+
+class _DeadlineReflectClientProtocol(Protocol):
+    async def reflect_with_timeout(self, query: str, *, timeout_seconds: float) -> object: ...
 
 
 class OutboxSender:
@@ -796,6 +801,30 @@ class ProcessRuntime:
 
         return self.call(recall_with_native_timeout, timeout=timeout)
 
+    def reflect(self, query: str, *, timeout: float) -> object:
+        """Reflect through the shared client under the caller's total deadline."""
+
+        async def reflect_with_native_timeout(client: HindsightClientProtocol) -> object:
+            margin = min(0.005, timeout / 10.0)
+            reflect_with_timeout = getattr(client, "reflect_with_timeout", None)
+            if callable(reflect_with_timeout):
+                deadline_client = cast(_DeadlineReflectClientProtocol, client)
+                try:
+                    return await deadline_client.reflect_with_timeout(
+                        query,
+                        timeout_seconds=timeout - margin,
+                    )
+                except HindsightClientError as error:
+                    if error.reason == "timeout":
+                        raise AsyncCallTimeoutError(
+                            "Better Hindsight operation exceeded its total deadline."
+                        ) from None
+                    raise
+            reflect_client = cast(ReflectClientProtocol, client)
+            return await reflect_client.reflect(query)
+
+        return self.call(reflect_with_native_timeout, timeout=timeout)
+
     def finalize(self) -> bool:
         """Stop all async work before exact outbox, client, then runner closure."""
 
@@ -937,6 +966,11 @@ class ProcessRuntimeHandle:
         """Recall through the shared process runtime."""
 
         return self._require_runtime().recall(query, timeout=timeout)
+
+    def reflect(self, query: str, *, timeout: float) -> object:
+        """Reflect through the shared process runtime."""
+
+        return self._require_runtime().reflect(query, timeout=timeout)
 
     def close(self) -> None:
         """Drop this handle without closing or replacing process-owned resources."""

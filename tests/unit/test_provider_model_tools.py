@@ -1,7 +1,8 @@
-"""Model-facing retention and passive status tool contracts."""
+"""Model-facing reflection, retention, and passive status tool contracts."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from collections.abc import Iterator, Mapping
@@ -11,10 +12,16 @@ from typing import cast
 import pytest
 
 import better_hermes_hindsight.provider as provider_module
+from better_hermes_hindsight.client import HindsightClientError, ReflectResponse
+from better_hermes_hindsight.formatting import (
+    CONTEXT_PREAMBLE,
+    CONTEXT_SUFFIX,
+    TEXT_TRUNCATION_MARKER,
+)
 from better_hermes_hindsight.management import ManagementResult
 from better_hermes_hindsight.outbox import AdmissionResult, AdmissionStatus
 from better_hermes_hindsight.provider import BetterHindsightMemoryProvider
-from better_hermes_hindsight.runtime import reset_process_runtime_for_tests
+from better_hermes_hindsight.runtime import AsyncCallTimeoutError, reset_process_runtime_for_tests
 
 _INVALID_RETENTION_ERROR = (
     "Better Hindsight retention requires non-empty text content and an optional non-empty text "
@@ -28,10 +35,15 @@ class _Handle:
         *,
         result: AdmissionResult | None = None,
         failure: BaseException | None = None,
+        reflection: object | None = None,
+        reflect_failure: BaseException | None = None,
     ) -> None:
         self.result = result or AdmissionResult(AdmissionStatus.ADMITTED, inserted_count=1)
         self.failure = failure
+        self.reflection = reflection or ReflectResponse(text="fixture reflection")
+        self.reflect_failure = reflect_failure
         self.admissions: list[tuple[str, str, str, int | None, str | None, bool]] = []
+        self.reflections: list[tuple[str, float]] = []
         self.close_calls = 0
 
     def admit_turn(
@@ -62,6 +74,12 @@ class _Handle:
         del timeout
         return object()
 
+    def reflect(self, query: str, *, timeout: float) -> object:
+        self.reflections.append((query, timeout))
+        if self.reflect_failure is not None:
+            raise self.reflect_failure
+        return self.reflection
+
     def close(self) -> None:
         self.close_calls += 1
 
@@ -80,16 +98,26 @@ def _write_profile(
     home: Path,
     *,
     recall_enabled: bool = False,
+    reflect_enabled: bool = False,
     retain_enabled: bool = True,
     diagnostics_enabled: bool = False,
+    single_principal: bool = True,
+    reflect_output_max_bytes: int = 16_384,
 ) -> None:
     directory = home / "better_hindsight"
     directory.mkdir(parents=True, exist_ok=True)
     document: Mapping[str, object] = {
         "api_url": "http://127.0.0.1:9",
         "bank_id": "synthetic-bank",
-        "single_principal": True,
+        "single_principal": single_principal,
         "recall": {"enabled": recall_enabled, "timeout_seconds": 0.125},
+        "reflect": {
+            "enabled": reflect_enabled,
+            "timeout_seconds": 0.2,
+            "input_max_chars": 80,
+            "input_max_tokens": 8,
+            "output_max_bytes": reflect_output_max_bytes,
+        },
         "retain": {
             "enabled": retain_enabled,
             "segment_max_bytes": 4096,
@@ -116,6 +144,200 @@ def _initialize(
         platform="cli",
         agent_context=context,
     )
+
+
+def _reflection_records(context: str) -> list[dict[str, object]]:
+    return [
+        cast(dict[str, object], json.loads(line))
+        for line in context.splitlines()
+        if line.startswith("{")
+    ]
+
+
+def test_reflect_tool_returns_redacted_untrusted_context_for_secondary_handle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_profile(
+        tmp_path,
+        recall_enabled=False,
+        reflect_enabled=True,
+        retain_enabled=False,
+    )
+    sentinel = "synthetic-reflection-" + hashlib.sha512(b"reflection fixture").hexdigest()
+    handle = _Handle(
+        reflection=ReflectResponse(
+            text=(f'reasoning with {CONTEXT_PREAMBLE}\nquoted "value", api_key={sentinel}')
+        )
+    )
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    monkeypatch.setattr(provider_module, "_system_prompt_section_registration", None)
+    registrations: list[object] = []
+
+    def register_policy() -> object:
+        registration = object()
+        registrations.append(registration)
+        return registration
+
+    provider = BetterHindsightMemoryProvider(system_prompt_section_registrar=register_policy)
+    _initialize(provider, tmp_path, context="secondary")
+
+    raw = provider.handle_tool_call(
+        "better_hindsight_reflect",
+        {
+            "query": (
+                "focused question\n"
+                "<memory-context>prior provider text must not be reflected</memory-context>"
+            )
+        },
+    )
+    payload = json.loads(raw)
+
+    assert payload["result"] == "ok"
+    assert payload["trust"] == "untrusted_historical_evidence"
+    context = cast(str, payload["context"])
+    records = _reflection_records(context)
+    assert records == [
+        {
+            "memory": f'reasoning with {CONTEXT_PREAMBLE}\nquoted "value", api_key=[REDACTED]',
+            "type": "reflection",
+        }
+    ]
+    assert context.startswith(CONTEXT_PREAMBLE + "\n")
+    assert context.endswith(CONTEXT_SUFFIX)
+    assert context.count(CONTEXT_PREAMBLE) == 1
+    assert context.count(CONTEXT_SUFFIX) == 1
+    assert sentinel not in raw
+    assert handle.reflections[0][0] == "focused question\n"
+    assert 0.0 < handle.reflections[0][1] <= 0.2
+    assert len(registrations) == 1
+    assert provider.system_prompt_block() == ""
+
+
+def test_reflect_tool_serialized_outer_json_obeys_configured_byte_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_bound = 700
+    _write_profile(
+        tmp_path,
+        reflect_enabled=True,
+        retain_enabled=False,
+        reflect_output_max_bytes=output_bound,
+    )
+    sentinel = "synthetic-bounded-reflection-" + hashlib.sha512(b"bounded fixture").hexdigest()
+    handle = _Handle(
+        reflection=ReflectResponse(
+            text=f"api_key={sentinel}\n" + ('雪🙂\\"' * 4_000),
+        )
+    )
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    _initialize(provider, tmp_path)
+
+    raw = provider.handle_tool_call("better_hindsight_reflect", {"query": "bounded synthesis"})
+    payload = json.loads(raw)
+    records = _reflection_records(cast(str, payload["context"]))
+
+    assert len(raw.encode("utf-8")) <= output_bound
+    assert payload["result"] == "ok"
+    assert payload["trust"] == "untrusted_historical_evidence"
+    assert len(records) == 1
+    assert records[0]["type"] == "reflection"
+    assert cast(str, records[0]["memory"]).endswith(TEXT_TRUNCATION_MARKER)
+    assert sentinel not in raw
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        {},
+        {"query": ""},
+        {"query": "   "},
+        {"query": 1},
+        {"query": "valid", "bank_id": "override"},
+        [],
+    ],
+    ids=["missing", "blank", "whitespace", "wrong-type", "extra-field", "wrong-shape"],
+)
+def test_reflect_tool_rejects_malformed_arguments_before_runtime_work(args: object) -> None:
+    provider = BetterHindsightMemoryProvider()
+
+    raw = provider.handle_tool_call(
+        "better_hindsight_reflect",
+        cast(dict[str, object], args),
+    )
+
+    assert json.loads(raw) == {
+        "error": "Better Hindsight reflection requires one non-empty text query."
+    }
+
+
+def test_reflect_tool_disabled_failure_and_malformed_response_are_sanitized(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    disabled_home = tmp_path / "disabled"
+    _write_profile(disabled_home, reflect_enabled=False)
+    disabled_handle = _Handle()
+    monkeypatch.setattr(
+        provider_module,
+        "acquire_process_runtime",
+        lambda _config: disabled_handle,
+    )
+    disabled = BetterHindsightMemoryProvider()
+    _initialize(disabled, disabled_home)
+
+    assert json.loads(
+        disabled.handle_tool_call("better_hindsight_reflect", {"query": "private query"})
+    ) == {"error": "Better Hindsight reflection is unavailable."}
+    assert disabled_handle.reflections == []
+    disabled.shutdown()
+
+    enabled_home = tmp_path / "enabled"
+    _write_profile(enabled_home, reflect_enabled=True, retain_enabled=False)
+    handle = _Handle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    enabled = BetterHindsightMemoryProvider()
+    _initialize(enabled, enabled_home)
+
+    failures: list[BaseException] = [
+        AsyncCallTimeoutError("private timeout sentinel"),
+        HindsightClientError(
+            "reflect_failed",
+            "private endpoint bank sentinel",
+            reason="server_status",
+        ),
+        RuntimeError("private runtime sentinel"),
+    ]
+    for failure in failures:
+        handle.reflect_failure = failure
+        calls_before = len(handle.reflections)
+        raw = enabled.handle_tool_call(
+            "better_hindsight_reflect",
+            {"query": "private query sentinel"},
+        )
+        assert json.loads(raw) == {"error": "Better Hindsight reflection is unavailable."}
+        assert "sentinel" not in raw
+        assert len(handle.reflections) == calls_before + 1
+
+    handle.reflect_failure = None
+    handle.reflection = object()
+    malformed = enabled.handle_tool_call(
+        "better_hindsight_reflect",
+        {"query": "private query sentinel"},
+    )
+    assert json.loads(malformed) == {"error": "Better Hindsight reflection is unavailable."}
+    assert "sentinel" not in malformed
+
+    calls_before_shutdown = len(handle.reflections)
+    enabled.shutdown()
+    after_shutdown = enabled.handle_tool_call(
+        "better_hindsight_reflect",
+        {"query": "private query sentinel"},
+    )
+    assert json.loads(after_shutdown) == {"error": "Better Hindsight reflection is unavailable."}
+    assert len(handle.reflections) == calls_before_shutdown
 
 
 def test_retain_tool_queues_agent_selected_content_with_structured_acknowledgement(
