@@ -38,7 +38,12 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
   records, including common blank-line conventions; reject unusable enabled segment limits at
   configuration and reject admissions when a semantic unit still cannot fit.
 - Bound automatic segment construction by the configured queue row limit, validate one-row envelope
-  feasibility, and reject surrogate tags through the sanitized configuration boundary.
+  feasibility and aggregate byte capacity for the complete smallest segmented event, and reject
+  surrogate tags through the sanitized configuration boundary.
+- Bind timestamp-bearing retained records to a distinct v2 payload/fingerprint so pre-v2 senders cannot
+  claim them while upgraded senders continue to drain exact legacy v1 rows.
+- Preserve model-retain retry idempotency with a stable model-memory identity and repeat optional context
+  on every split content record instead of retaining a standalone context-only document.
 
 ## 0.4.0 - 2026-08-22
 

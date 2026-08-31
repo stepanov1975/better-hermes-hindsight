@@ -742,6 +742,8 @@ class ProcessRuntime:
         user_content: str,
         assistant_content: str,
         segment_count_limit: int | None = None,
+        assistant_context: str | None = None,
+        model_selected: bool = False,
     ) -> AdmissionResult:
         """Construct and atomically admit one turn without client or network work."""
 
@@ -758,6 +760,8 @@ class ProcessRuntime:
                     tags=self._retain_tags,
                     segment_max_bytes=self._retain_segment_max_bytes,
                     segment_count_limit=segment_count_limit,
+                    assistant_context=assistant_context,
+                    model_selected=model_selected,
                 )
             except RetentionCapacityError:
                 return AdmissionResult(AdmissionStatus.CAPACITY_EXCEEDED)
@@ -915,6 +919,8 @@ class ProcessRuntimeHandle:
         user_content: str,
         assistant_content: str,
         segment_count_limit: int | None = None,
+        assistant_context: str | None = None,
+        model_selected: bool = False,
     ) -> AdmissionResult:
         """Request one local admission through the shared process runtime."""
 
@@ -923,6 +929,8 @@ class ProcessRuntimeHandle:
             user_content=user_content,
             assistant_content=assistant_content,
             segment_count_limit=segment_count_limit,
+            assistant_context=assistant_context,
+            model_selected=model_selected,
         )
 
     def recall(self, query: str, *, timeout: float) -> object:

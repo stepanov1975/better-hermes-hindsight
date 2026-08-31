@@ -419,6 +419,35 @@ def test_exact_duplicate_is_a_noop_and_preserves_mutable_row_state(tmp_path: Pat
     assert {row.next_attempt_at for row in rows} == {99.0}
 
 
+def test_reconstructed_model_retain_call_is_reported_as_already_queued(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+
+    def construct() -> tuple[RetainedSegment, ...]:
+        return build_retained_segments(
+            session_id="model-selected-retention",
+            user_content=(
+                "This memory was selected by the assistant; it is not a direct user quote."
+            ),
+            assistant_content="Alex prefers verified changes.",
+            assistant_context="user preference",
+            model_selected=True,
+            tags=("project:sample",),
+            segment_max_bytes=4_096,
+        )
+
+    outbox = SQLiteOutbox.open(config)
+    try:
+        first = outbox.admit(construct())
+        repeated = outbox.admit(construct())
+    finally:
+        outbox.close()
+
+    assert first.status is AdmissionStatus.ADMITTED
+    assert repeated.status is AdmissionStatus.DUPLICATE
+    assert repeated.inserted_count == 0
+    assert repeated.duplicate_count == first.inserted_count
+
+
 def test_exact_duplicate_remains_accepted_after_configured_caps_are_lowered(
     tmp_path: Path,
 ) -> None:

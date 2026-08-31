@@ -122,7 +122,8 @@ def test_retention_documentation_describes_occurrence_records() -> None:
     assert "independently decodable event records" in readme
     assert "per-admission event ID and occurrence time" in readme
     assert "better-hindsight-retained-event-v2" in configuration
-    assert "separately\nadmitted identical turn receives a new event ID" in configuration
+    assert "separately admitted identical callback receives a new event ID" in configuration
+    assert "stable content-derived identity while queued" in configuration
     assert "concatenate exactly to that canonical source" not in configuration
     assert "Identical rows\nare admission no-ops" not in configuration
 

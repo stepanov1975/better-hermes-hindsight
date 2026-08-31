@@ -860,6 +860,8 @@ def test_lifecycle_counter_starts_before_deterministic_turn_construction(
         tags: object,
         segment_max_bytes: object,
         segment_count_limit: object,
+        assistant_context: object,
+        model_selected: object,
     ) -> tuple[RetainedSegment, ...]:
         nonlocal construction_calls
         with construction_lock:
@@ -876,6 +878,8 @@ def test_lifecycle_counter_starts_before_deterministic_turn_construction(
             tags=tags,
             segment_max_bytes=segment_max_bytes,
             segment_count_limit=segment_count_limit,
+            assistant_context=assistant_context,
+            model_selected=model_selected,
         )
 
     monkeypatch.setattr(

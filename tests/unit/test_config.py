@@ -607,6 +607,35 @@ def test_one_row_outbox_requires_a_complete_two_role_event_envelope(tmp_path: Pa
     assert two_rows.retain.segment_max_bytes == 348
 
 
+def test_retention_capacity_counts_all_rows_needed_by_the_smallest_event(
+    tmp_path: Path,
+) -> None:
+    profile = {
+        "retain": {
+            "enabled": True,
+            "segment_max_bytes": 348,
+            "tags": ["project:sample"],
+        },
+        "outbox": {"max_pending_rows": 2, "max_pending_bytes": 1_372},
+    }
+
+    with pytest.raises(ConfigError, match="complete smallest retained event admission"):
+        load_config(
+            hermes_home=tmp_path / "aggregate-too-small",
+            environ={},
+            injected=profile,
+        )
+
+    profile["outbox"] = {"max_pending_rows": 2, "max_pending_bytes": 2_739}
+    config = load_config(
+        hermes_home=tmp_path / "aggregate-exact",
+        environ={},
+        injected=profile,
+    )
+
+    assert config.outbox.max_pending_bytes == 2_739
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 def test_retain_tags_reject_non_scalar_unicode_with_a_sanitized_config_error(
     tmp_path: Path,

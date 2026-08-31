@@ -22,8 +22,10 @@ from .redaction import redact_sensitive_text
 
 DEFAULT_API_URL = "http://localhost:8888"
 DEFAULT_BANK_ID = "hermes"
-PAYLOAD_SCHEMA_VERSION = "better-hindsight-turn-v1"
+LEGACY_PAYLOAD_SCHEMA_VERSION = "better-hindsight-turn-v1"
+PAYLOAD_SCHEMA_VERSION = "better-hindsight-turn-v2"
 RETAINED_EVENT_RECORD_SCHEMA = "better-hindsight-retained-event-v2"
+RETAINED_MODEL_RECORD_SCHEMA = "better-hindsight-retained-memory-v1"
 DEFAULT_RECALL_TIMEOUT_SECONDS = 3.5
 DEFAULT_RECALL_INPUT_MAX_CHARS = 4096
 DEFAULT_RECALL_INPUT_MAX_TOKENS = 500
@@ -298,6 +300,17 @@ class BetterHindsightConfig:
             observation_scopes=self.retain.observation_scopes,
         )
 
+    @property
+    def legacy_destination_fingerprint(self) -> str:
+        """Return the compatible pre-event-record destination identity."""
+        return derive_destination_fingerprint(
+            api_url=self.api_url,
+            bank_id=self.bank_id,
+            retain_tags=self.retain.tags,
+            observation_scopes=self.retain.observation_scopes,
+            payload_schema=LEGACY_PAYLOAD_SCHEMA_VERSION,
+        )
+
     def authorize_gateway(
         self,
         *,
@@ -387,6 +400,16 @@ def load_config(
             "retain.segment_max_bytes plus the code-owned row allowance must not exceed "
             "outbox.max_pending_bytes"
         )
+    minimum_admission_bytes = _minimum_retained_admission_bytes(
+        retain.tags,
+        max_pending_rows=outbox.max_pending_rows,
+        segment_max_bytes=retain.segment_max_bytes,
+    )
+    if retain.enabled and minimum_admission_bytes > outbox.max_pending_bytes:
+        raise _error(
+            "outbox.max_pending_bytes must fit the complete smallest retained event admission "
+            "with configured tags"
+        )
     if outbox.retry_initial_seconds > outbox.retry_max_seconds:
         raise _error("outbox.retry_initial_seconds must not exceed outbox.retry_max_seconds")
 
@@ -453,18 +476,20 @@ def derive_destination_fingerprint(
     bank_id: object,
     retain_tags: object = (),
     observation_scopes: object = None,
+    payload_schema: object = PAYLOAD_SCHEMA_VERSION,
 ) -> str:
     """Hash normalized destination and retain transport policy without credentials or timing."""
     normalized_url = normalize_api_url(api_url)
     normalized_bank = _parse_bank_id(bank_id)
     canonical_tags = canonicalize_retain_tags(retain_tags)
     normalized_scopes = _parse_observation_scopes(observation_scopes)
+    normalized_payload_schema = _parse_exact_nonempty_string(payload_schema, "payload_schema")
     payload = json.dumps(
         {
             "api_url": normalized_url,
             "bank_id": normalized_bank,
             "observation_scopes": normalized_scopes,
-            "payload_schema": PAYLOAD_SCHEMA_VERSION,
+            "payload_schema": normalized_payload_schema,
             "retain_tags": canonical_tags,
         },
         ensure_ascii=True,
@@ -1075,13 +1100,47 @@ def _minimum_retained_segment_bytes(
     roles = [{"content": "x", "role": "assistant"}]
     if max_pending_rows == 1:
         roles.insert(0, {"content": "x", "role": "user"})
+    return _minimum_retained_content_bytes(tags, roles=roles)
+
+
+def _minimum_retained_admission_bytes(
+    tags: Sequence[str],
+    *,
+    max_pending_rows: int,
+    segment_max_bytes: int,
+) -> int:
+    complete_bytes = _minimum_retained_content_bytes(
+        tags,
+        roles=(
+            {"content": "x", "role": "user"},
+            {"content": "x", "role": "assistant"},
+        ),
+    )
+    if max_pending_rows == 1 or complete_bytes <= segment_max_bytes:
+        return complete_bytes + OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES
+    user_bytes = _minimum_retained_content_bytes(
+        tags,
+        roles=({"content": "x", "role": "user"},),
+    )
+    assistant_bytes = _minimum_retained_content_bytes(
+        tags,
+        roles=({"content": "x", "role": "assistant"},),
+    )
+    return user_bytes + assistant_bytes + 2 * OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES
+
+
+def _minimum_retained_content_bytes(
+    tags: Sequence[str],
+    *,
+    roles: Sequence[dict[str, str]],
+) -> int:
     content = json.dumps(
         {
             "event_id": "0" * 32,
             "occurred_at": "2000-01-01T00:00:00.000000+00:00",
             "payload_schema": PAYLOAD_SCHEMA_VERSION,
             "record_schema": RETAINED_EVENT_RECORD_SCHEMA,
-            "roles": roles,
+            "roles": list(roles),
             "session_sha256": "0" * 64,
             "tags": list(tags),
         },
@@ -1110,8 +1169,10 @@ __all__ = [
     "DEFAULT_OUTBOX_RETRY_INITIAL_SECONDS",
     "DEFAULT_OUTBOX_RETRY_MAX_SECONDS",
     "OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES",
+    "LEGACY_PAYLOAD_SCHEMA_VERSION",
     "PAYLOAD_SCHEMA_VERSION",
     "RETAINED_EVENT_RECORD_SCHEMA",
+    "RETAINED_MODEL_RECORD_SCHEMA",
     "DEFAULT_RECALL_CONTEXT_MAX_BYTES",
     "DEFAULT_RECALL_INPUT_MAX_CHARS",
     "DEFAULT_RECALL_TIMEOUT_SECONDS",

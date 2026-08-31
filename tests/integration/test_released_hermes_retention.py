@@ -321,6 +321,8 @@ def _expected_segment(
     session_id: str,
     user_content: str,
     assistant_content: str,
+    assistant_context: str | None = None,
+    model_selected: bool = False,
 ) -> tuple[str, str]:
     segments = build_retained_segments(
         session_id=session_id,
@@ -328,6 +330,8 @@ def _expected_segment(
         assistant_content=assistant_content,
         tags=FIXTURE_TAGS,
         segment_max_bytes=4096,
+        assistant_context=assistant_context,
+        model_selected=model_selected,
     )
     assert len(segments) == 1
     return segments[0].document_id, segments[0].content
@@ -350,7 +354,9 @@ def test_released_model_retain_and_status_tools_route_through_durable_runtime(
             user_content=(
                 "This is an agent-selected durable memory record, not a direct user quotation."
             ),
-            assistant_content=f"Context: {context}\n\n{content}",
+            assistant_content=content,
+            assistant_context=context,
+            model_selected=True,
         )
 
         harness.loop.run(_arm_retain_delay(harness.server))

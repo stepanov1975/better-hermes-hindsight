@@ -60,6 +60,8 @@ def _build(
     tags: object = ("project:sample",),
     segment_max_bytes: object = 4096,
     segment_count_limit: object = None,
+    assistant_context: object = None,
+    model_selected: object = False,
 ) -> tuple[RetainedSegment, ...]:
     return build_retained_segments(
         session_id=session_id,
@@ -68,6 +70,8 @@ def _build(
         tags=tags,
         segment_max_bytes=segment_max_bytes,
         segment_count_limit=segment_count_limit,
+        assistant_context=assistant_context,
+        model_selected=model_selected,
     )
 
 
@@ -114,22 +118,22 @@ def _segment_digest(segment: RetainedSegment) -> str:
 
 
 def test_literal_golden_document_identity_vector() -> None:
-    """Freeze v1 identity without deriving the expected values through production code."""
+    """Freeze v2 identity without deriving expected values through production code."""
 
     expected_source = (
         '{"event_id":"0123456789abcdef0123456789abcdef",'
         '"occurred_at":"2026-08-31T12:34:56.123456+00:00",'
-        '"payload_schema":"better-hindsight-turn-v1",'
+        '"payload_schema":"better-hindsight-turn-v2",'
         '"record_schema":"better-hindsight-retained-event-v2","roles":['
         '{"content":"Hello, 世界","role":"user"},'
         '{"content":"Acknowledged.","role":"assistant"}],'
         '"session_sha256":"0c36857851849f43582b86eaf6b2185d3538b471e3364dc3651feeca5df4a5c1",'
         '"tags":["project:sample","source:golden"]}'
     )
-    expected_source_sha256 = "c90267a81943d604183a7e0f0202e13ae53fc9f756ded1b08ed5a289a0c95638"
-    expected_payload_hash = "f8e74329886fe8dc135877266f1fc44fcd4f80ae5a4e71823382b152bf42dea2"
+    expected_source_sha256 = "de211c30b94a7e6b2f100211504db26bd184b56d13aca61093bd3f27f9f059c1"
+    expected_payload_hash = "cb7a6a9bff4ff28a71918c842ef9093a48c0f0c1ce31362582dd7a631f0dac69"
     expected_document_id = (
-        "better-hindsight-turn-v1:f8e74329886fe8dc135877266f1fc44fcd4f80ae5a4e71823382b152bf42dea2"
+        "better-hindsight-turn-v2:cb7a6a9bff4ff28a71918c842ef9093a48c0f0c1ce31362582dd7a631f0dac69"
     )
 
     segments = _build(
@@ -146,7 +150,7 @@ def test_literal_golden_document_identity_vector() -> None:
     assert segment.source_sha256 == expected_source_sha256
     assert segment.payload_hash == expected_payload_hash
     assert segment.document_id == expected_document_id
-    assert segment.payload_schema == "better-hindsight-turn-v1"
+    assert segment.payload_schema == "better-hindsight-turn-v2"
     assert segment.segment_index == 0
     assert segment.segment_count == 1
 
@@ -496,7 +500,52 @@ def test_each_segment_hash_and_document_id_derive_from_the_exact_canonical_recor
         expected_hash = _segment_digest(segment)
         assert segment.payload_hash == expected_hash
         assert segment.document_id == DOCUMENT_ID_PREFIX + expected_hash
-        assert re.fullmatch(r"better-hindsight-turn-v1:[0-9a-f]{64}", segment.document_id)
+        assert re.fullmatch(r"better-hindsight-turn-v2:[0-9a-f]{64}", segment.document_id)
+
+
+def test_model_selected_retention_has_stable_identity_across_reconstructed_calls() -> None:
+    def build() -> tuple[RetainedSegment, ...]:
+        return _build(
+            session_id="model-selected-retention",
+            user_content=(
+                "This memory was selected by the assistant; it is not a direct user quote."
+            ),
+            assistant_content="Alex prefers verified changes.",
+            assistant_context="user preference",
+            model_selected=True,
+            segment_max_bytes=4096,
+        )
+
+    first = build()
+    second = build()
+
+    assert first == second
+    decoded = json.loads(first[0].content)
+    assert decoded["record_schema"] == "better-hindsight-retained-memory-v1"
+    assert re.fullmatch(r"[0-9a-f]{32}", decoded["memory_id"])
+    assert "occurred_at" not in decoded
+    assert "event_id" not in decoded
+
+
+def test_model_selected_context_is_repeated_on_every_split_content_record() -> None:
+    segments = _build(
+        session_id="model-selected-retention",
+        user_content="This memory was selected by the assistant; it is not a direct user quote.",
+        assistant_content="First durable statement.\n\nSecond durable statement.",
+        assistant_context="user preference",
+        model_selected=True,
+        segment_max_bytes=370,
+    )
+
+    assistant_records = [
+        json.loads(segment.content)["roles"][0]["content"]
+        for segment in segments
+        if json.loads(segment.content)["roles"][0]["role"] == "assistant"
+    ]
+    assert assistant_records == [
+        "Context: user preference\n\nFirst durable statement.",
+        "Context: user preference\n\nSecond durable statement.",
+    ]
 
 
 def test_segment_dataclass_repr_never_exposes_content() -> None:

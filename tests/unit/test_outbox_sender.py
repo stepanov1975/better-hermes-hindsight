@@ -33,7 +33,6 @@ from better_hermes_hindsight.client import (
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.outbox import SQLiteOutbox
 from better_hermes_hindsight.retention import (
-    DOCUMENT_ID_PREFIX,
     RetainedSegment,
     build_retained_segments,
     derive_segment_payload_hash,
@@ -104,7 +103,7 @@ def _legacy_segment() -> RetainedSegment:
         content=content,
     )
     return RetainedSegment(
-        document_id=DOCUMENT_ID_PREFIX + payload_hash,
+        document_id="better-hindsight-turn-v1:" + payload_hash,
         payload_hash=payload_hash,
         payload_schema="better-hindsight-turn-v1",
         source_sha256=source_sha256,
@@ -133,6 +132,30 @@ def _execute(path: Path, statement: str, parameters: tuple[object, ...] = ()) ->
         connection.commit()
     finally:
         connection.close()
+
+
+def _insert_legacy_segment(config: BetterHindsightConfig, segment: RetainedSegment) -> None:
+    _execute(
+        config.outbox.path,
+        """
+        INSERT INTO outbox (
+            document_id, payload_hash, payload_schema, source_sha256,
+            segment_index, segment_count, content, destination_fingerprint,
+            state, attempt_count, next_attempt_at, last_error_category,
+            created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, 90.0, NULL, 80.0, 80.0)
+        """,
+        (
+            segment.document_id,
+            segment.payload_hash,
+            segment.payload_schema,
+            segment.source_sha256,
+            segment.segment_index,
+            segment.segment_count,
+            segment.content,
+            config.legacy_destination_fingerprint,
+        ),
+    )
 
 
 def _schema_contract(path: Path) -> tuple[int, tuple[tuple[object, ...], ...]]:
@@ -1078,6 +1101,23 @@ def test_delayed_restart_sends_the_captured_occurrence_timestamp(
 
 
 @pytest.mark.skipif(os.name != "posix", reason="sender ownership is POSIX-only")
+def test_timestamped_v2_rows_do_not_match_the_legacy_sender_identity(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    segment = _single_segment("timestamp-schema")
+    outbox = SQLiteOutbox.open(config)
+    try:
+        assert outbox.admit((segment,)).accepted
+        (row,) = outbox.read_unconfirmed()
+    finally:
+        outbox.close()
+
+    assert row.payload_schema == "better-hindsight-turn-v2"
+    assert row.destination_fingerprint == config.destination_fingerprint
+    assert row.payload_schema != "better-hindsight-turn-v1"
+    assert row.destination_fingerprint != config.legacy_destination_fingerprint
+
+
+@pytest.mark.skipif(os.name != "posix", reason="sender ownership is POSIX-only")
 def test_legacy_pending_v1_row_delivers_with_null_timestamp(tmp_path: Path) -> None:
     config = _config(tmp_path)
     segment = _legacy_segment()
@@ -1097,8 +1137,7 @@ def test_legacy_pending_v1_row_delivers_with_null_timestamp(tmp_path: Path) -> N
         wall_time=_WallClock(100.0),
     )
     try:
-        assert delegate.admit((segment,)).accepted
-        _execute(config.outbox.path, "UPDATE outbox SET next_attempt_at=90.0")
+        _insert_legacy_segment(config, segment)
         sender.start()
         assert observed.completed.wait(timeout=2.0)
         assert delegate.read_unconfirmed() == ()
@@ -1163,7 +1202,7 @@ def test_sender_preserves_remote_metadata_needed_to_reconstruct_segmented_source
     ordered = sorted(remote_documents, key=lambda segment: segment.segment_index)
     assert [segment.segment_index for segment in ordered] == list(range(len(segments)))
     assert {segment.segment_count for segment in ordered} == {len(segments)}
-    assert {segment.payload_schema for segment in ordered} == {"better-hindsight-turn-v1"}
+    assert {segment.payload_schema for segment in ordered} == {"better-hindsight-turn-v2"}
     reconstructed = "".join(segment.content for segment in ordered)
     assert hashlib.sha256(reconstructed.encode("utf-8")).hexdigest() == segments[0].source_sha256
 
