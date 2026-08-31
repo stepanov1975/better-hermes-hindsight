@@ -281,6 +281,91 @@ def test_provider_passes_projected_query_and_request_to_diagnostic_capture(
     assert captured[0]["result_count"] == 1
 
 
+def test_configured_recall_deadline_covers_projection_runtime_and_formatting(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_config(tmp_path, _base_config())
+    now = 100.0
+    handle = _RecordingHandle()
+    outcomes: list[str] = []
+    formatting_deadlines: list[float] = []
+
+    def monotonic() -> float:
+        return now
+
+    def project(query: str, *, max_chars: int, max_tokens: int) -> str:
+        nonlocal now
+        del max_chars, max_tokens
+        now += 0.025
+        return query
+
+    def recall(query: str, *, timeout: float) -> object:
+        nonlocal now
+        handle.recalls.append((query, timeout))
+        now += 0.05
+        return handle.response
+
+    def format_response(
+        response: object,
+        *,
+        max_bytes: int,
+        deadline: float,
+    ) -> tuple[str, list[dict[str, object]]]:
+        nonlocal now
+        del response, max_bytes
+        formatting_deadlines.append(deadline)
+        now += 0.06
+        return "formatted context", [{"memory": "fixture observation"}]
+
+    def capture(_config: object, **fields: object) -> None:
+        outcomes.append(cast(str, fields["outcome"]))
+
+    handle.recall = recall  # type: ignore[method-assign]
+    monkeypatch.setattr("better_hermes_hindsight.provider.time.monotonic", monotonic)
+    monkeypatch.setattr(provider_module, "project_query", project)
+    monkeypatch.setattr(provider_module, "format_recall_context_with_records", format_response)
+    monkeypatch.setattr(provider_module, "enqueue_recall_capture", capture)
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session", hermes_home=str(tmp_path), platform="cli")
+
+    assert provider.prefetch("current query") == ""
+    assert len(handle.recalls) == 1
+    assert handle.recalls[0][0] == "current query"
+    assert handle.recalls[0][1] == pytest.approx(0.1)
+    assert len(formatting_deadlines) == 1
+    assert formatting_deadlines[0] == pytest.approx(100.125)
+    assert outcomes == ["timeout"]
+
+
+def test_projection_that_consumes_the_total_deadline_skips_remote_recall(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_config(tmp_path, _base_config())
+    now = 100.0
+    handle = _RecordingHandle()
+
+    def monotonic() -> float:
+        return now
+
+    def project(query: str, *, max_chars: int, max_tokens: int) -> str:
+        nonlocal now
+        del max_chars, max_tokens
+        now += 0.2
+        return query
+
+    monkeypatch.setattr("better_hermes_hindsight.provider.time.monotonic", monotonic)
+    monkeypatch.setattr(provider_module, "project_query", project)
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session", hermes_home=str(tmp_path), platform="cli")
+
+    assert provider.prefetch("current query") == ""
+    assert handle.recalls == []
+
+
 def test_recall_status_counts_only_memories_injected_by_the_latest_prefetch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -418,7 +503,9 @@ def test_recall_tool_returns_structured_redacted_untrusted_memories(
     }
     assert CONTEXT_PREAMBLE not in raw
     assert secret not in raw
-    assert handle.recalls == [("focused query\n", 0.125)]
+    assert len(handle.recalls) == 1
+    assert handle.recalls[0][0] == "focused query\n"
+    assert handle.recalls[0][1] == pytest.approx(0.125, abs=0.01)
 
 
 def test_recall_tool_omits_later_normalized_exact_duplicates(
@@ -468,7 +555,7 @@ def test_recall_tool_sends_only_the_configured_token_bounded_query(
     assert projected.endswith("-TAIL")
     assert projected.count(QUERY_OMISSION_MARKER) == 1
     assert count_query_tokens(projected) <= 64
-    assert timeout == 0.125
+    assert timeout == pytest.approx(0.125, abs=0.01)
     provider.shutdown()
 
 
@@ -739,7 +826,9 @@ def test_gateway_authorization_uses_separate_identity_kwargs_and_current_query_o
     )
 
     assert len(acquired) == 1
-    assert handle.recalls == [("current head\n\ncurrent tail", 0.125)]
+    assert len(handle.recalls) == 1
+    assert handle.recalls[0][0] == "current head\n\ncurrent tail"
+    assert handle.recalls[0][1] == pytest.approx(0.125, abs=0.01)
     assert CONTEXT_PREAMBLE in context
     assert "fixture observation" in context
     assert "prior provider text" not in handle.recalls[0][0]
@@ -773,7 +862,7 @@ def test_prefetch_sends_only_the_configured_token_bounded_query(
     assert projected.endswith("-TAIL")
     assert projected.count(QUERY_OMISSION_MARKER) == 1
     assert count_query_tokens(projected) <= 64
-    assert timeout == 0.125
+    assert timeout == pytest.approx(0.125, abs=0.01)
     provider.shutdown()
 
 
@@ -1019,7 +1108,9 @@ def test_prefetch_fails_open_for_timeout_adapter_version_bank_and_runtime_catego
     )
 
     assert provider.prefetch("current query") == ""
-    assert handle.recalls == [("current query", 0.125)]
+    assert len(handle.recalls) == 1
+    assert handle.recalls[0][0] == "current query"
+    assert handle.recalls[0][1] == pytest.approx(0.125, abs=0.01)
     assert caplog.messages == [RECALL_FAILED_DIAGNOSTIC]
     assert str(failure) not in caplog.text
 
@@ -1047,7 +1138,9 @@ def test_malformed_recall_response_fails_open_and_no_lifecycle_hook_performs_net
     assert handle.recalls == []
     caplog.set_level(logging.WARNING)
     assert provider.prefetch("current query") == ""
-    assert handle.recalls == [("current query", 0.125)]
+    assert len(handle.recalls) == 1
+    assert handle.recalls[0][0] == "current query"
+    assert handle.recalls[0][1] == pytest.approx(0.125, abs=0.01)
     assert RECALL_FAILED_DIAGNOSTIC not in caplog.messages
 
     handle.response = _ExplosiveResults()

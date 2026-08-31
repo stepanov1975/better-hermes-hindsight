@@ -19,6 +19,9 @@ from .telemetry import elapsed_milliseconds, emit_event
 
 HINDSIGHT_REQUEST_TIMEOUT_SECONDS = 300.0
 HINDSIGHT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+HINDSIGHT_MAX_RECALL_RESPONSE_BYTES = 2 * 1024 * 1024
+HINDSIGHT_MAX_RECALL_RESULTS = 4096
+HINDSIGHT_MAX_RECALL_NESTED_ITEMS = 4096
 MISSION_UPDATE_FIELDS = frozenset({"retain_mission", "observations_mission"})
 HINDSIGHT_ERROR_REASONS = frozenset(
     {
@@ -294,6 +297,8 @@ class JsonTransportProtocol(Protocol):
         path: str,
         *,
         json_body: Mapping[str, object] | None = None,
+        timeout_seconds: float | None = None,
+        max_response_bytes: int | None = None,
     ) -> JsonResponse: ...
 
     async def close(self) -> None: ...
@@ -350,18 +355,38 @@ class _AiohttpJsonTransport:
         path: str,
         *,
         json_body: Mapping[str, object] | None = None,
+        timeout_seconds: float | None = None,
+        max_response_bytes: int | None = None,
     ) -> JsonResponse:
         import aiohttp
 
         if self._session.closed:
             raise _JsonTransportError("session_closed")
+        response_limit = (
+            HINDSIGHT_MAX_RESPONSE_BYTES if max_response_bytes is None else max_response_bytes
+        )
+        if (
+            type(response_limit) is not int
+            or not 0 < response_limit <= HINDSIGHT_MAX_RESPONSE_BYTES
+        ):
+            raise _JsonTransportError("transport_error")
         try:
-            async with self._session.request(
-                method,
-                f"{self._base_url}{path}",
-                json=json_body,
-                allow_redirects=False,
-            ) as response:
+            if timeout_seconds is None:
+                request = self._session.request(
+                    method,
+                    f"{self._base_url}{path}",
+                    json=json_body,
+                    allow_redirects=False,
+                )
+            else:
+                request = self._session.request(
+                    method,
+                    f"{self._base_url}{path}",
+                    json=json_body,
+                    allow_redirects=False,
+                    timeout=aiohttp.ClientTimeout(total=timeout_seconds),
+                )
+            async with request as response:
                 status = response.status
                 if status != 200:
                     response.close()
@@ -375,7 +400,7 @@ class _AiohttpJsonTransport:
                 body = bytearray()
                 async for chunk in response.content.iter_chunked(64 * 1024):
                     body.extend(chunk)
-                    if len(body) > HINDSIGHT_MAX_RESPONSE_BYTES:
+                    if len(body) > response_limit:
                         response.close()
                         raise _JsonTransportError(
                             "response_oversized",
@@ -499,7 +524,19 @@ class HindsightClientAdapter:
         """Recall current-query memories with the exact supported request defaults."""
 
         payload = _recall_body(query, self._recall_config)
-        return await self._perform_recall(payload)
+        return await self._perform_recall(payload, timeout_seconds=None)
+
+    async def recall_with_timeout(self, query: str, *, timeout_seconds: float) -> RecallResponse:
+        """Recall with a smaller caller-owned native transport deadline."""
+
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0.0:
+            raise HindsightClientError(
+                "recall_failed",
+                "Better Hindsight recall failed.",
+                reason="timeout",
+            )
+        payload = _recall_body(query, self._recall_config)
+        return await self._perform_recall(payload, timeout_seconds=timeout_seconds)
 
     async def replay_recall(self, query: str, request: Mapping[str, object]) -> RecallResponse:
         """Replay one plugin-recorded request with Hindsight trace collection enabled."""
@@ -511,9 +548,14 @@ class HindsightClientAdapter:
                 reason="schema_invalid",
             )
         payload = _diagnostic_recall_body(query, request)
-        return await self._perform_recall(payload)
+        return await self._perform_recall(payload, timeout_seconds=None)
 
-    async def _perform_recall(self, payload: Mapping[str, object]) -> RecallResponse:
+    async def _perform_recall(
+        self,
+        payload: Mapping[str, object],
+        *,
+        timeout_seconds: float | None,
+    ) -> RecallResponse:
         return await _observed_http_call(
             operation="recall",
             category="recall_failed",
@@ -522,6 +564,8 @@ class HindsightClientAdapter:
                 "POST",
                 f"{self._bank_path}/memories/recall",
                 json_body=payload,
+                timeout_seconds=timeout_seconds,
+                max_response_bytes=HINDSIGHT_MAX_RECALL_RESPONSE_BYTES,
             ),
             decoder=_decode_recall_response,
         )
@@ -728,6 +772,8 @@ def _decode_mission_update(value: object) -> None:
 def _decode_recall_response(value: object) -> RecallResponse:
     payload = _exact_dict(value)
     raw_results = _required_exact(payload, "results", list)
+    if len(raw_results) > HINDSIGHT_MAX_RECALL_RESULTS:
+        raise TypeError
     results = [_decode_recall_result(item) for item in raw_results]
     raw_source_facts = payload.get("source_facts")
     source_facts: dict[str, RecallResult] | None
@@ -735,6 +781,8 @@ def _decode_recall_response(value: object) -> RecallResponse:
         source_facts = None
     else:
         facts = _exact_dict(raw_source_facts)
+        if len(facts) > HINDSIGHT_MAX_RECALL_RESULTS:
+            raise TypeError
         source_facts = {}
         for key, item in facts.items():
             if type(key) is not str:
@@ -790,7 +838,9 @@ def _decode_recall_trace(value: object) -> RecallTrace | None:
 def _retrieval_candidate_count(value: list[object] | dict[object, object]) -> int:
     collections: Iterable[object] = value.values() if isinstance(value, dict) else value
     total = 0
-    for item in collections:
+    for index, item in enumerate(collections):
+        if index >= HINDSIGHT_MAX_RECALL_NESTED_ITEMS:
+            break
         if not isinstance(item, dict):
             continue
         results = item.get("results")
@@ -946,7 +996,9 @@ def _optional_string_list(payload: Mapping[object, object], key: str) -> list[st
     value = payload.get(key)
     if value is None:
         return None
-    if type(value) is not list or any(type(item) is not str for item in value):
+    if type(value) is not list or len(value) > HINDSIGHT_MAX_RECALL_NESTED_ITEMS:
+        raise TypeError
+    if any(type(item) is not str for item in value):
         raise TypeError
     return cast(list[str], value)
 
@@ -955,9 +1007,13 @@ def _optional_string_dict(payload: Mapping[object, object], key: str) -> dict[st
     value = payload.get(key)
     if value is None:
         return None
-    if type(value) is not dict or any(
-        type(item_key) is not str or type(item_value) is not str
-        for item_key, item_value in value.items()
+    if (
+        type(value) is not dict
+        or len(value) > HINDSIGHT_MAX_RECALL_NESTED_ITEMS
+        or any(
+            type(item_key) is not str or type(item_value) is not str
+            for item_key, item_value in value.items()
+        )
     ):
         raise TypeError
     return cast(dict[str, str], value)
@@ -1097,6 +1153,9 @@ def _emit_http_event(
 
 __all__ = [
     "DiagnosticRecallClientProtocol",
+    "HINDSIGHT_MAX_RECALL_NESTED_ITEMS",
+    "HINDSIGHT_MAX_RECALL_RESPONSE_BYTES",
+    "HINDSIGHT_MAX_RECALL_RESULTS",
     "HINDSIGHT_REQUEST_TIMEOUT_SECONDS",
     "HindsightClientAdapter",
     "HindsightClientError",
