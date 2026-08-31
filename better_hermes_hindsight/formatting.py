@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import re
+import time
 import unicodedata
 from collections.abc import Mapping, Sequence
 from functools import lru_cache
@@ -207,12 +208,14 @@ def format_recall_context_with_records(
     response: object,
     *,
     max_bytes: int,
+    deadline: float | None = None,
 ) -> tuple[str, list[dict[str, object]]]:
     """Return one bounded context envelope and its model-facing records."""
 
     context, records, _selected = format_recall_context_with_selected_results(
         response,
         max_bytes=max_bytes,
+        deadline=deadline,
     )
     return context, records
 
@@ -221,6 +224,7 @@ def format_recall_context_with_selected_results(
     response: object,
     *,
     max_bytes: int,
+    deadline: float | None = None,
 ) -> tuple[str, list[dict[str, object]], list[object]]:
     """Return bounded context, model records, and their ranked source results."""
 
@@ -228,6 +232,7 @@ def format_recall_context_with_selected_results(
         format_recall_context_with_selected_results_and_provenance(
             response,
             max_bytes=max_bytes,
+            deadline=deadline,
         )
     )
     return context, records, selected_results
@@ -237,6 +242,7 @@ def format_recall_context_with_selected_results_and_provenance(
     response: object,
     *,
     max_bytes: int,
+    deadline: float | None = None,
 ) -> tuple[str, list[dict[str, object]], list[object], list[bool]]:
     """Return selected context records plus formatter-owned truncation provenance."""
 
@@ -248,11 +254,14 @@ def format_recall_context_with_selected_results_and_provenance(
             return "", [], [], []
 
         lines: list[str] = []
+        fixed_bytes = len((CONTEXT_PREAMBLE + "\n\n" + CONTEXT_SUFFIX).encode("utf-8"))
+        lines_bytes = 0
         records: list[dict[str, object]] = []
         selected_results: list[object] = []
         truncated_flags: list[bool] = []
         seen_memories: set[tuple[str, str | None, str | None, str | None]] = set()
         for result in results:
+            _raise_if_deadline_reached(deadline)
             record = _project_record(result)
             memory = record["memory"]
             if not isinstance(memory, str):
@@ -262,14 +271,21 @@ def format_recall_context_with_selected_results_and_provenance(
                 continue
             seen_memories.add(fingerprint)
             line = _serialize_record(record)
-            if _fits([*lines, line], max_bytes=max_bytes):
+            line_bytes = len(line.encode("utf-8"))
+            separator_bytes = 1 if lines else 0
+            if fixed_bytes + lines_bytes + separator_bytes + line_bytes <= max_bytes:
                 lines.append(line)
+                lines_bytes += separator_bytes + line_bytes
                 records.append(record)
                 selected_results.append(result)
                 truncated_flags.append(False)
                 continue
 
-            truncated = _fit_truncated_record(record, lines=lines, max_bytes=max_bytes)
+            truncated = _fit_truncated_record(
+                record,
+                available_line_bytes=max_bytes - fixed_bytes - lines_bytes - separator_bytes,
+                deadline=deadline,
+            )
             if truncated is not None:
                 line, record = truncated
                 lines.append(line)
@@ -278,6 +294,7 @@ def format_recall_context_with_selected_results_and_provenance(
                 truncated_flags.append(True)
             break
 
+        _raise_if_deadline_reached(deadline)
         return (
             ("", [], [], [])
             if not lines
@@ -353,15 +370,11 @@ def _render(lines: list[str]) -> str:
     return CONTEXT_PREAMBLE + "\n" + "\n".join(lines) + "\n" + CONTEXT_SUFFIX
 
 
-def _fits(lines: list[str], *, max_bytes: int) -> bool:
-    return len(_render(lines).encode("utf-8")) <= max_bytes
-
-
 def _fit_truncated_record(
     record: dict[str, object],
     *,
-    lines: list[str],
-    max_bytes: int,
+    available_line_bytes: int,
+    deadline: float | None,
 ) -> tuple[str, dict[str, object]] | None:
     text = record["memory"]
     if not isinstance(text, str):  # Kept local so this helper remains total if called directly.
@@ -374,7 +387,7 @@ def _fit_truncated_record(
         return _serialize_record(truncated_record)
 
     minimum = serialize(0)
-    if not _fits([*lines, minimum], max_bytes=max_bytes):
+    if len(minimum.encode("utf-8")) > available_line_bytes:
         return None
 
     low = 0
@@ -382,15 +395,21 @@ def _fit_truncated_record(
     best = minimum
     best_record = dict(truncated_record)
     while low <= high:
+        _raise_if_deadline_reached(deadline)
         middle = (low + high) // 2
         candidate = serialize(middle)
-        if _fits([*lines, candidate], max_bytes=max_bytes):
+        if len(candidate.encode("utf-8")) <= available_line_bytes:
             best = candidate
             best_record = dict(truncated_record)
             low = middle + 1
         else:
             high = middle - 1
     return best, best_record
+
+
+def _raise_if_deadline_reached(deadline: float | None) -> None:
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError
 
 
 __all__ = [

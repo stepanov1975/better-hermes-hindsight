@@ -62,7 +62,9 @@ class _RecordingTransport:
         path: str,
         *,
         json_body: Mapping[str, object] | None = None,
+        timeout_seconds: float | None = None,
     ) -> JsonResponse:
+        del timeout_seconds
         self.calls.append((method, path, json_body))
         key = (method, path)
         failure = self.failures.get(key)
@@ -325,6 +327,27 @@ def test_query_only_recall_preserves_wire_defaults_and_quotes_bank(tmp_path: Pat
             },
         )
     ]
+
+
+def test_recall_decoding_accepts_only_the_defensive_total_result_cap(tmp_path: Path) -> None:
+    config = _config(tmp_path, injected={"bank_id": "sample-bank"})
+    transport = _RecordingTransport()
+    path = "/v1/default/banks/sample-bank/memories/recall"
+    result = {"id": "result", "text": "memory"}
+    adapter = HindsightClientAdapter(config=config, transport=transport)
+
+    transport.responses[("POST", path)] = {
+        "results": [result] * client_module.HINDSIGHT_MAX_RECALL_RESULTS,
+    }
+    accepted = asyncio.run(adapter.recall("at cap"))
+    assert len(accepted.results) == client_module.HINDSIGHT_MAX_RECALL_RESULTS
+
+    transport.responses[("POST", path)] = {
+        "results": [result] * (client_module.HINDSIGHT_MAX_RECALL_RESULTS + 1),
+    }
+    with pytest.raises(HindsightClientError) as caught:
+        asyncio.run(adapter.recall("over cap"))
+    assert caught.value.reason == "schema_invalid"
 
 
 @pytest.mark.parametrize(

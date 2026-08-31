@@ -207,6 +207,8 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         if not isinstance(query, str) or not query:
             return ""
 
+        started_at = time.monotonic()
+        deadline = started_at + config.recall.timeout_seconds
         try:
             projected = project_query(
                 query,
@@ -218,7 +220,15 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         except Exception:
             logger.warning(RECALL_FAILED_DIAGNOSTIC)
             return ""
-        recalled = self._recall_projected(projected, warn_on_format_failure=False)
+        if time.monotonic() >= deadline:
+            logger.warning(RECALL_FAILED_DIAGNOSTIC)
+            return ""
+        recalled = self._recall_projected(
+            projected,
+            deadline=deadline,
+            started_at=started_at,
+            warn_on_format_failure=False,
+        )
         if recalled is None:
             return ""
         context, records = recalled
@@ -326,6 +336,8 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         config = self._config
         if not self._recall_enabled or config is None or self._runtime is None:
             return _tool_json(error=_RECALL_TOOL_UNAVAILABLE)
+        started_at = time.monotonic()
+        deadline = started_at + config.recall.timeout_seconds
         try:
             projected = project_query(
                 query,
@@ -336,8 +348,15 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             return _tool_json(error=_RECALL_TOOL_INVALID_QUERY)
         if not projected.strip():
             return _tool_json(error=_RECALL_TOOL_INVALID_QUERY)
+        if time.monotonic() >= deadline:
+            return _tool_json(error=_RECALL_TOOL_UNAVAILABLE)
 
-        recalled = self._recall_projected(projected, warn_on_format_failure=True)
+        recalled = self._recall_projected(
+            projected,
+            deadline=deadline,
+            started_at=started_at,
+            warn_on_format_failure=True,
+        )
         if recalled is None:
             return _tool_json(error=_RECALL_TOOL_UNAVAILABLE)
         _context, records = recalled
@@ -432,13 +451,14 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         self,
         projected: str,
         *,
+        deadline: float,
+        started_at: float,
         warn_on_format_failure: bool,
     ) -> tuple[str, list[dict[str, object]]] | None:
         config = self._config
         runtime = self._runtime
         if not self._recall_enabled or config is None or runtime is None:
             return None
-        started_at = time.monotonic()
         request = recall_request_parameters(config.recall)
 
         def record(outcome: str, **fields: object) -> None:
@@ -473,9 +493,12 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             )
 
         try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                raise AsyncCallTimeoutError
             response = runtime.recall(
                 projected,
-                timeout=config.recall.timeout_seconds,
+                timeout=remaining,
             )
         except AsyncCallTimeoutError:
             record("timeout")
@@ -504,15 +527,23 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                 logger.warning(RECALL_FAILED_DIAGNOSTIC)
             return None
         if result_count == 0:
+            if time.monotonic() >= deadline:
+                record("timeout")
+                return None
             record("empty", formatted_bytes=0, result_count=0)
             return "", []
         try:
             context, records = format_recall_context_with_records(
                 response,
                 max_bytes=config.recall.context_max_bytes,
+                deadline=deadline,
             )
         except Exception:
             record("format_error")
+            logger.warning(RECALL_FAILED_DIAGNOSTIC)
+            return None
+        if time.monotonic() >= deadline:
+            record("timeout")
             logger.warning(RECALL_FAILED_DIAGNOSTIC)
             return None
         if not context:

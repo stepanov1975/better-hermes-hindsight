@@ -540,6 +540,35 @@ def test_context_budget_counts_preamble_separators_suffix_and_every_complete_rec
     assert len(_json_records(full)) == 3
 
 
+def test_large_result_formatting_visits_rendered_records_only_linearly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result_count = 30_000
+    response = SimpleNamespace(
+        results=[SimpleNamespace(text=f"memory-{index}") for index in range(result_count)]
+    )
+    rendered_record_visits = 0
+    original_render = formatting_module._render
+
+    def counted_render(lines: list[str]) -> str:
+        nonlocal rendered_record_visits
+        rendered_record_visits += len(lines)
+        if rendered_record_visits > result_count:
+            raise RuntimeError("formatter repeatedly rendered accumulated records")
+        return original_render(lines)
+
+    monkeypatch.setattr(formatting_module, "_render", counted_render)
+
+    context, records = formatting_module.format_recall_context_with_records(
+        response,
+        max_bytes=1_048_576,
+    )
+
+    assert len(records) == result_count
+    assert len(_json_records(context)) == result_count
+    assert rendered_record_visits <= result_count
+
+
 def test_context_count_reports_only_records_that_fit_the_output_budget() -> None:
     first = _result(result_id="first", text="first memory")
     response = _response(
