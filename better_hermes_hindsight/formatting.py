@@ -6,7 +6,8 @@ import base64
 import hashlib
 import json
 import re
-from collections.abc import Sequence
+import unicodedata
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from importlib.resources import files
 from typing import Protocol, cast
@@ -209,21 +210,63 @@ def format_recall_context_with_records(
 ) -> tuple[str, list[dict[str, object]]]:
     """Return one bounded context envelope and its model-facing records."""
 
+    context, records, _selected = format_recall_context_with_selected_results(
+        response,
+        max_bytes=max_bytes,
+    )
+    return context, records
+
+
+def format_recall_context_with_selected_results(
+    response: object,
+    *,
+    max_bytes: int,
+) -> tuple[str, list[dict[str, object]], list[object]]:
+    """Return bounded context, model records, and their ranked source results."""
+
+    context, records, selected_results, _truncated = (
+        format_recall_context_with_selected_results_and_provenance(
+            response,
+            max_bytes=max_bytes,
+        )
+    )
+    return context, records, selected_results
+
+
+def format_recall_context_with_selected_results_and_provenance(
+    response: object,
+    *,
+    max_bytes: int,
+) -> tuple[str, list[dict[str, object]], list[object], list[bool]]:
+    """Return selected context records plus formatter-owned truncation provenance."""
+
     if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
-        return "", []
+        return "", [], [], []
     try:
         results = cast(_RecallResponseLike, response).results
         if not isinstance(results, Sequence) or isinstance(results, (str, bytes, bytearray)):
-            return "", []
+            return "", [], [], []
 
         lines: list[str] = []
         records: list[dict[str, object]] = []
+        selected_results: list[object] = []
+        truncated_flags: list[bool] = []
+        seen_memories: set[tuple[str, str | None, str | None, str | None]] = set()
         for result in results:
             record = _project_record(result)
+            memory = record["memory"]
+            if not isinstance(memory, str):
+                raise TypeError("recall result text is malformed")
+            fingerprint = _memory_fingerprint(record)
+            if fingerprint in seen_memories:
+                continue
+            seen_memories.add(fingerprint)
             line = _serialize_record(record)
             if _fits([*lines, line], max_bytes=max_bytes):
                 lines.append(line)
                 records.append(record)
+                selected_results.append(result)
+                truncated_flags.append(False)
                 continue
 
             truncated = _fit_truncated_record(record, lines=lines, max_bytes=max_bytes)
@@ -231,11 +274,17 @@ def format_recall_context_with_records(
                 line, record = truncated
                 lines.append(line)
                 records.append(record)
+                selected_results.append(result)
+                truncated_flags.append(True)
             break
 
-        return ("", []) if not lines else (_render(lines), records)
+        return (
+            ("", [], [], [])
+            if not lines
+            else (_render(lines), records, selected_results, truncated_flags)
+        )
     except Exception:
-        return "", []
+        return "", [], [], []
 
 
 def _project_record(result: object) -> dict[str, object]:
@@ -258,6 +307,24 @@ def _project_record(result: object) -> dict[str, object]:
             record[field_name] = value
 
     return record
+
+
+def _memory_fingerprint(
+    record: Mapping[str, object],
+) -> tuple[str, str | None, str | None, str | None]:
+    """Normalize text while preserving distinct model-facing occurrence metadata."""
+
+    text = record["memory"]
+    if not isinstance(text, str):
+        raise TypeError("recall result text is malformed")
+    normalized = " ".join(unicodedata.normalize("NFKC", text).split())
+    temporal: list[str | None] = []
+    for field_name in ("occurred_start", "occurred_end", "mentioned_at"):
+        value = record.get(field_name)
+        if value is not None and not isinstance(value, str):
+            raise TypeError(f"recall result {field_name} is malformed")
+        temporal.append(value)
+    return normalized, temporal[0], temporal[1], temporal[2]
 
 
 def _serialize_record(record: dict[str, object]) -> str:
@@ -339,5 +406,6 @@ __all__ = [
     "format_recall_context",
     "format_recall_context_with_count",
     "format_recall_context_with_records",
+    "format_recall_context_with_selected_results",
     "project_query",
 ]

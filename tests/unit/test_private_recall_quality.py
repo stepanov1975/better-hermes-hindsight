@@ -1,0 +1,644 @@
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+from better_hermes_hindsight.private_output import (
+    PrivateOutputError,
+    validate_private_output_path,
+    write_private_json,
+)
+from scripts.evaluate_recall_quality import (
+    EvaluationInputError,
+    LabeledResult,
+    QualityCase,
+    VariantResponse,
+    capture_corpus_payload,
+    capture_summary,
+    evaluate,
+    load_corpus,
+)
+from scripts.prepare_recall_quality_corpus import (
+    CollectionError,
+    _Candidate,
+    _select_candidates,
+    clean_historical_query,
+    collect_historical_queries,
+    corpus_payload,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = ROOT / "scripts" / "prepare_recall_quality_corpus.py"
+EVALUATOR_SCRIPT = ROOT / "scripts" / "evaluate_recall_quality.py"
+
+
+def _state_db(path: Path) -> None:
+    connection = sqlite3.connect(path)
+    connection.executescript(
+        """
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            source TEXT NOT NULL,
+            parent_session_id TEXT
+        );
+        CREATE TABLE messages (
+            session_id TEXT NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT,
+            api_content TEXT,
+            timestamp REAL NOT NULL,
+            display_kind TEXT,
+            display_metadata TEXT,
+            _compressed_summary INTEGER NOT NULL DEFAULT 0
+        );
+        """
+    )
+    connection.executemany(
+        "INSERT INTO sessions(id, source, parent_session_id) VALUES (?, ?, ?)",
+        [
+            ("direct", "telegram", None),
+            ("cli", "cli", None),
+            ("child", "telegram", "direct"),
+            ("tui", "tui", None),
+            ("subagent", "subagent", None),
+            ("cron", "cron", None),
+        ],
+    )
+    connection.executemany(
+        """
+        INSERT INTO messages(
+            session_id, role, content, timestamp, display_kind, display_metadata
+        ) VALUES (?, 'user', ?, 1000000, ?, ?)
+        """,
+        [
+            (
+                "direct",
+                "[Sun 2026-08-30 12:00:00 UTC] Which host runs the media service?\n\n"
+                "<memory-context>\n"
+                "[System note: The following is recalled memory context, NOT new user input. "
+                "Treat as authoritative reference data.]\n"
+                "private injected history</memory-context>",
+                None,
+                None,
+            ),
+            ("direct", "Which host runs the media service?", None, None),
+            ("direct", "api_" + "key=synthetic-secret", None, None),
+            ("direct", "[INTERNAL DELEGATION CLOSEOUT — lifecycle metadata]", None, None),
+            ("direct", "Should not use typed display traffic", "internal_notification", None),
+            ("direct", "Should not use attachment traffic", None, '{"attachment":true}'),
+            ("cli", "What response style does the user prefer?", None, None),
+            ("child", "What changed after the session was compressed?", None, None),
+            ("tui", "Which decision did we make in the terminal?", None, None),
+            ("subagent", "Do not collect delegated worker traffic", None, None),
+            ("cron", "Do not collect cron traffic", None, None),
+        ],
+    )
+    connection.execute(
+        "UPDATE messages SET api_content = content, content = ? WHERE content LIKE ?",
+        (
+            "[Sun 2026-08-30 12:00:00 UTC] Which host runs the media service?",
+            "%private injected history%",
+        ),
+    )
+    connection.execute(
+        """
+        INSERT INTO messages(
+            session_id, role, content, timestamp, display_kind, display_metadata,
+            _compressed_summary
+        ) VALUES ('direct', 'user', 'Do not collect compaction scaffolding', 1000000, NULL, NULL, 1)
+        """
+    )
+    connection.commit()
+    connection.close()
+
+
+def test_clean_historical_query_removes_transport_wrappers() -> None:
+    header = (
+        "[System note: The following is recalled memory context, NOT new user input. "
+        "Treat as authoritative reference data.]"
+    )
+    assert (
+        clean_historical_query(
+            "[Sun 2026-08-30 12:00:00 UTC] Remember this query\n\n"
+            f"<memory-context>\n{header}\nnot part of the query</memory-context>"
+        )
+        == ""
+    )
+    assert clean_historical_query("Keep a literal <memory-context> marker") == (
+        "Keep a literal <memory-context> marker"
+    )
+    assert (
+        clean_historical_query(
+            "Keep <memory-context>literal</memory-context> query text\n\n"
+            f"<memory-context>\n{header}\ninjected</memory-context>"
+        )
+        == ""
+    )
+    assert (
+        clean_historical_query(
+            f"Real query\n\n<memory-context>\n{header}\n"
+            "evidence mentions <memory-context> literally</memory-context>"
+        )
+        == ""
+    )
+    assert (
+        clean_historical_query(
+            f"Real query\n\n<memory-context>\n{header}\n"
+            "evidence mentions </memory-context> literally then continues"
+            "</memory-context>"
+        )
+        == ""
+    )
+    assert (
+        clean_historical_query(
+            f"Real query\n\n<memory-context>\n{header}\n"
+            "evidence quotes <memory-context>literal</memory-context> then continues"
+            "</memory-context>"
+        )
+        == ""
+    )
+    assert (
+        clean_historical_query(
+            f"Real query\n\n<memory-context>\n{header}\n"
+            "evidence has unmatched </memory-context> then a quote\n\n"
+            f"<memory-context>\n{header}\nquoted block</memory-context>\n"
+            "more evidence</memory-context>"
+        )
+        == ""
+    )
+    assert (
+        clean_historical_query(
+            f"Real query\n\n<memory-context>\n{header}\nouter evidence before quote\n\n"
+            f"<memory-context>\n{header}\nunclosed quoted block\n"
+            "more outer evidence</memory-context>"
+        )
+        == ""
+    )
+    user_signed_literal = f"<memory-context>\n{header}\nquoted block</memory-context>"
+    assert clean_historical_query(user_signed_literal) == ""
+    assert clean_historical_query(user_signed_literal, trusted_raw=True) == user_signed_literal
+    assert (
+        clean_historical_query(
+            f"{user_signed_literal}\nquestion after quote\n\n"
+            f"<memory-context>\n{header}\nappended evidence</memory-context>"
+        )
+        == ""
+    )
+    assert (
+        clean_historical_query(
+            f"{user_signed_literal}\n\n{user_signed_literal}\nquestion after quotations"
+        )
+        == ""
+    )
+    assert (
+        clean_historical_query(
+            f"{user_signed_literal}\nquestion with unmatched <memory-context>\n\n"
+            f"<memory-context>\n{header}\nappended evidence</memory-context>"
+        )
+        == ""
+    )
+    assert (
+        clean_historical_query(
+            f"Real query\n\n<memory-context>\n{header}\nouter evidence\n\n"
+            f"<memory-context>\n{header}\nnested evidence</memory-context>\n"
+            "outer evidence continues</memory-context>"
+        )
+        == ""
+    )
+
+
+def test_session_cap_uses_an_equivalent_query_from_an_uncapped_session() -> None:
+    candidates = [
+        _Candidate("session-a", "Another query", "another query", b"\x00"),
+        _Candidate("session-a", "Repeated query", "repeated query", b"\x01"),
+        _Candidate("session-b", "Repeated query", "repeated query", b"\x01"),
+    ]
+
+    selected, rejected = _select_candidates(candidates, limit=2, max_per_session=1)
+
+    assert [candidate.query for candidate in selected] == ["Another query", "Repeated query"]
+    assert [candidate.session_id for candidate in selected] == ["session-a", "session-b"]
+    assert rejected == 0
+
+
+def test_session_cap_reassigns_shared_query_to_avoid_underfill() -> None:
+    candidates = [
+        _Candidate("session-a", "Shared query", "shared query", b"\x00"),
+        _Candidate("session-b", "Shared query", "shared query", b"\x00"),
+        _Candidate("session-a", "A-only query", "a-only query", b"\x01"),
+    ]
+
+    selected, rejected = _select_candidates(candidates, limit=2, max_per_session=1)
+
+    assert [candidate.query for candidate in selected] == ["Shared query", "A-only query"]
+    assert [candidate.session_id for candidate in selected] == ["session-b", "session-a"]
+    assert rejected == 0
+
+
+def test_collect_historical_queries_is_bounded_private_and_provenance_free(tmp_path: Path) -> None:
+    database = tmp_path / "state.db"
+    _state_db(database)
+
+    queries, stats = collect_historical_queries(
+        database,
+        days=1,
+        limit=10,
+        max_per_session=2,
+        max_chars=1_200,
+        max_lines=12,
+        sources=("telegram", "cli", "tui"),
+        seed="synthetic-seed",
+        now=1_000_100,
+    )
+
+    assert set(queries) == {
+        "Which host runs the media service?",
+        "What response style does the user prefer?",
+        "What changed after the session was compressed?",
+        "Which decision did we make in the terminal?",
+    }
+    assert stats["scanned"] == 7
+    assert stats["selected"] == 4
+    assert stats["excluded_credential_pattern"] == 1
+    assert stats["excluded_duplicate"] == 1
+    assert stats["excluded_internal"] == 1
+    payload = corpus_payload(queries)
+    encoded = json.dumps(payload)
+    assert "session_id" not in encoded
+    assert "message_id" not in encoded
+
+
+def test_collector_reads_active_wal_without_changing_rows(tmp_path: Path) -> None:
+    database = tmp_path / "state.db"
+    _state_db(database)
+    writer = sqlite3.connect(database)
+    assert writer.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+    writer.execute(
+        "INSERT INTO messages(session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+        ("direct", "user", "Which setting did we use?", 1_000_001),
+    )
+    writer.commit()
+    before = writer.execute(
+        "SELECT session_id, role, content, timestamp, display_kind, display_metadata "
+        "FROM messages ORDER BY rowid"
+    ).fetchall()
+
+    queries, _stats = collect_historical_queries(
+        database,
+        days=1,
+        limit=20,
+        max_per_session=20,
+        max_chars=1_200,
+        max_lines=12,
+        sources=("telegram", "cli", "tui"),
+        seed="synthetic-seed",
+        now=1_000_100,
+    )
+
+    after = writer.execute(
+        "SELECT session_id, role, content, timestamp, display_kind, display_metadata "
+        "FROM messages ORDER BY rowid"
+    ).fetchall()
+    writer.close()
+    assert before == after
+    assert "Which setting did we use?" in queries
+
+
+def test_collector_excludes_embedded_nul_before_materializing_text(tmp_path: Path) -> None:
+    database = tmp_path / "state.db"
+    _state_db(database)
+    connection = sqlite3.connect(database)
+    connection.execute(
+        "INSERT INTO messages(session_id, role, content, timestamp) VALUES (?, 'user', ?, ?)",
+        ("direct", "valid prefix\x00" + "x" * 100_000, 1_000_001),
+    )
+    connection.commit()
+    connection.close()
+
+    queries, stats = collect_historical_queries(
+        database.resolve(),
+        days=30_000,
+        limit=20,
+        max_per_session=20,
+        max_chars=1_200,
+        max_lines=12,
+        sources=("telegram", "cli", "tui"),
+        seed="seed",
+        now=1_000_100,
+    )
+
+    assert stats["scanned"] == 7
+    assert all("\x00" not in query for query in queries)
+
+
+def test_collector_rejects_limits_above_safe_reassignment_depth(tmp_path: Path) -> None:
+    with pytest.raises(CollectionError, match="must not exceed 500"):
+        collect_historical_queries(
+            (tmp_path / "state.db").resolve(),
+            days=1,
+            limit=501,
+            max_per_session=1,
+            max_chars=1_200,
+            max_lines=12,
+            sources=("telegram",),
+            seed="seed",
+        )
+
+
+def test_collector_bounds_raw_rows_and_streamed_candidate_window(tmp_path: Path) -> None:
+    database = tmp_path / "state.db"
+    _state_db(database)
+    connection = sqlite3.connect(database)
+    connection.executemany(
+        "INSERT INTO messages(session_id, role, content, timestamp) VALUES (?, 'user', ?, ?)",
+        [("direct", f"Bounded historical query number {index}", 1_000_002) for index in range(150)],
+    )
+    connection.execute(
+        "INSERT INTO messages(session_id, role, content, timestamp) VALUES (?, 'user', ?, ?)",
+        ("direct", "X" * 70_000, 1_000_003),
+    )
+    connection.commit()
+    connection.close()
+
+    queries, stats = collect_historical_queries(
+        database,
+        days=1,
+        limit=1,
+        max_per_session=200,
+        max_chars=1_200,
+        max_lines=12,
+        sources=("telegram",),
+        seed="synthetic-seed",
+        now=1_000_100,
+    )
+
+    assert stats["scanned"] == 100
+    assert stats["selected"] == 1
+    assert len(queries) == 1
+    assert len(queries[0]) <= 1_200
+
+
+def test_collector_cli_prints_only_aggregate_counts_and_creates_private_file(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "state.db"
+    _state_db(database)
+    output = tmp_path / "private" / "queries.json"
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--state-db",
+            str(database),
+            "--output",
+            str(output),
+            "--days",
+            "30000",
+            "--limit",
+            "10",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "media service" not in completed.stdout
+    assert json.loads(completed.stdout)["selected"] == 4
+    assert stat.S_IMODE(output.stat().st_mode) == 0o600
+    assert stat.S_IMODE(output.parent.stat().st_mode) == 0o700
+    cases = load_corpus(output)
+    assert len(cases) == 4
+    assert all(not case.labels_complete for case in cases)
+
+
+def test_private_json_refuses_insecure_parent_and_existing_output(tmp_path: Path) -> None:
+    insecure = tmp_path / "insecure"
+    insecure.mkdir(mode=0o755)
+    os.chmod(insecure, 0o755)
+    with pytest.raises(PrivateOutputError, match="group or other"):
+        write_private_json(insecure / "artifact.json", {"private": True})
+
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    first = private / "artifact.json"
+    write_private_json(first, {"private": True})
+    with pytest.raises(PrivateOutputError, match="already exists"):
+        write_private_json(first, {"private": False})
+
+
+def test_private_json_uses_a_bounded_temporary_basename(tmp_path: Path) -> None:
+    destination = (tmp_path / "private" / ("x" * 240 + ".json")).resolve()
+
+    validate_private_output_path(destination)
+    write_private_json(destination, {"private": True})
+
+    assert json.loads(destination.read_text(encoding="utf-8")) == {"private": True}
+
+
+def test_private_json_does_not_publish_a_partial_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    destination = private / "artifact.json"
+
+    def fail_link(*_args: object, **_kwargs: object) -> None:
+        raise OSError("synthetic publication failure")
+
+    monkeypatch.setattr(os, "link", fail_link)
+
+    with pytest.raises(PrivateOutputError, match="could not be written"):
+        write_private_json(destination, {"private": True})
+
+    assert not destination.exists()
+    assert list(private.iterdir()) == []
+
+
+def test_private_json_treats_published_link_as_commit_when_directory_sync_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    destination = private / "artifact.json"
+    real_fsync = os.fsync
+    calls = 0
+
+    def fail_directory_sync(descriptor: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("directory sync failed")
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(os, "fsync", fail_directory_sync)
+    write_private_json(destination, {"complete": True})
+
+    assert json.loads(destination.read_text(encoding="utf-8")) == {"complete": True}
+
+
+def test_private_json_treats_published_link_as_commit_when_temp_cleanup_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    destination = private / "artifact.json"
+
+    def fail_unlink(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise OSError("temporary cleanup failed")
+
+    monkeypatch.setattr(os, "unlink", fail_unlink)
+    write_private_json(destination, {"complete": True})
+
+    assert json.loads(destination.read_text(encoding="utf-8")) == {"complete": True}
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in private.iterdir())
+
+
+def test_private_json_refuses_a_symlinked_ancestor(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir(mode=0o700)
+    symlink = tmp_path / "linked"
+    symlink.symlink_to(real, target_is_directory=True)
+
+    with pytest.raises(PrivateOutputError, match="directory is unavailable"):
+        write_private_json(symlink / "nested" / "artifact.json", {"private": True})
+    assert not (real / "nested" / "artifact.json").exists()
+
+
+def test_incomplete_labels_cannot_be_scored() -> None:
+    case = QualityCase(
+        case_id="historical-001",
+        query="Which host runs the service?",
+        expect_recall=False,
+        useful_result_ids=frozenset(),
+        redundant_result_ids=frozenset(),
+        irrelevant_result_ids=frozenset(),
+        responses={},
+        labels_complete=False,
+    )
+    responses = {"baseline": {case.case_id: VariantResponse(results=(), elapsed_ms=1.0)}}
+
+    with pytest.raises(EvaluationInputError, match="incomplete labels"):
+        evaluate((case,), responses)
+
+
+def test_live_cli_rejects_incomplete_labels_before_loading_live_config(tmp_path: Path) -> None:
+    corpus = tmp_path / "unlabelled.json"
+    corpus.write_text(
+        json.dumps(corpus_payload(["Which host runs the service?"])),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(EVALUATOR_SCRIPT),
+            str(corpus),
+            "--hermes-home",
+            str(tmp_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "corpus contains incomplete labels" in completed.stderr
+    assert "configured CLI principal" not in completed.stderr
+
+
+def test_capture_cli_preflights_destination_before_loading_live_config(tmp_path: Path) -> None:
+    corpus = tmp_path / "unlabelled.json"
+    corpus.write_text(
+        json.dumps(corpus_payload(["Which host runs the service?"])),
+        encoding="utf-8",
+    )
+    private_dir = tmp_path / "private"
+    private_dir.mkdir(mode=0o700)
+    destination = private_dir / "capture.json"
+    destination.write_text("occupied", encoding="utf-8")
+    destination.chmod(0o600)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(EVALUATOR_SCRIPT),
+            str(corpus),
+            "--hermes-home",
+            str(tmp_path),
+            "--capture-private",
+            str(destination),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "private output file already exists" in completed.stderr
+    assert "configured CLI principal" not in completed.stderr
+
+
+def test_capture_payload_round_trips_private_responses_without_provenance(tmp_path: Path) -> None:
+    case = QualityCase(
+        case_id="historical-001",
+        query="Which host runs the service?",
+        expect_recall=False,
+        useful_result_ids=frozenset(),
+        redundant_result_ids=frozenset(),
+        irrelevant_result_ids=frozenset(),
+        responses={},
+    )
+    responses = {
+        "baseline": {
+            case.case_id: VariantResponse(
+                results=(
+                    LabeledResult(
+                        "result-1",
+                        "The service runs on host one.",
+                        memory_type="world",
+                        occurred_start="2026-08-01T00:00:00+00:00",
+                        occurred_end="2026-08-02T00:00:00+00:00",
+                        mentioned_at="2026-08-03T00:00:00+00:00",
+                    ),
+                ),
+                elapsed_ms=12.5,
+            )
+        },
+        "prefer_observations": {case.case_id: VariantResponse(results=(), elapsed_ms=11.0)},
+    }
+
+    payload = capture_corpus_payload((case,), responses)
+    output = tmp_path / "private"
+    output.mkdir(mode=0o700)
+    corpus = output / "capture.json"
+    write_private_json(corpus, payload)
+
+    loaded = load_corpus(corpus)
+    loaded_result = loaded[0].responses["baseline"].results[0]
+    assert loaded_result.result_id == "result-1"
+    assert loaded_result.memory_type == "world"
+    assert loaded_result.occurred_start == "2026-08-01T00:00:00+00:00"
+    assert loaded_result.occurred_end == "2026-08-02T00:00:00+00:00"
+    assert loaded_result.mentioned_at == "2026-08-03T00:00:00+00:00"
+    assert loaded_result.truncated is False
+    assert loaded[0].labels_complete is False
+    assert capture_summary((case,), responses) == {
+        "result": "captured",
+        "schema_version": 1,
+        "case_count": 1,
+        "variants": {
+            "baseline": {"returned_records": 1, "returned_text_bytes": 29},
+            "prefer_observations": {"returned_records": 0, "returned_text_bytes": 0},
+        },
+    }

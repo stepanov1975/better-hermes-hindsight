@@ -421,6 +421,29 @@ def test_recall_tool_returns_structured_redacted_untrusted_memories(
     assert handle.recalls == [("focused query\n", 0.125)]
 
 
+def test_recall_tool_omits_later_normalized_exact_duplicates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _write_config(tmp_path, _base_config())
+    response = RecallResponse(
+        results=[
+            RecallResult(id="rank-1", text="Stable Ａ memory\ntext", type="observation"),
+            RecallResult(id="rank-2", text="Stable A memory   text", type="world"),
+        ]
+    )
+    handle = _RecordingHandle(response=response)
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session", hermes_home=str(tmp_path), platform="cli")
+
+    payload = json.loads(
+        provider.handle_tool_call("better_hindsight_recall", {"query": "focused query"})
+    )
+
+    assert payload["memories"] == [{"memory": "Stable Ａ memory\ntext", "type": "observation"}]
+
+
 def test_recall_tool_sends_only_the_configured_token_bounded_query(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

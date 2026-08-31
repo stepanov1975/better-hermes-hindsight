@@ -41,7 +41,9 @@ operation, model-facing reflection, dynamic routing, or minimum maintenance is m
 3. It projects and bounds the query by characters and by Hindsight's exact `cl100k_base` input-token
    rule, preserving bounded head-and-tail context.
 4. The async client performs one deadline-bounded Hindsight recall.
-5. The formatter projects allowlisted fields, redacts likely credentials, frames records as untrusted evidence, and enforces the output-byte limit.
+5. The formatter projects allowlisted fields, redacts likely credentials, removes later exact
+   duplicates using normalized model-facing text plus identical occurrence metadata, frames records
+   as untrusted evidence, and enforces the output-byte limit.
 6. Errors and timeouts return no external context rather than failing Hermes.
 
 The model-facing `better_hindsight_recall` tool reuses this configured path and returns structured

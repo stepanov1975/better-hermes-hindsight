@@ -10,6 +10,11 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
   contract and an isolated live retain, outbox restart recovery, recall, replay, and cleanup proof.
 - Added contract coverage confirming Better continues to omit the optional 0.9.2 retain
   `resolve_entities` field.
+- Added a strict privacy-preserving recall-quality evaluator with a synthetic regression fixture and a
+  read-only comparison mode that changes only `prefer_observations`.
+- Added an owner-only historical-query collector and private live-response capture so real-bank
+  evaluations can be labeled and scored without committing or printing queries, recalled text, IDs,
+  or labels.
 
 ### Fixed
 
@@ -21,6 +26,9 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 - Register the recall trust policy through Hermes's cache-safe plugin system-prompt section when
   available, while retaining the provider-block fallback for older or generic host contexts. This
   keeps automatic recall evidence governed when model-facing memory tools are disabled.
+- Remove later exact duplicates from automatic and explicit model-facing recall after redaction,
+  Unicode compatibility normalization, and whitespace collapsing while preserving first rank and
+  distinct occurrence metadata.
 
 ## 0.4.0 - 2026-08-22
 
