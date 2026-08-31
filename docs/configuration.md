@@ -266,7 +266,7 @@ is lost before its SQLite transaction commits remains outside the durability gua
 The callback ignores the raw `messages` transcript and uses only its direct non-empty user and
 assistant text arguments. Before hashing, segmentation, or SQLite admission, both role texts and the
 configured low-cardinality tags pass through the same deliberately narrow deterministic redactor
-described above. Each callback captures one random event ID and one timezone-aware occurrence time.
+described above. Each callback captures one random event ID and one fixed-width UTC occurrence time.
 The encoder first tries one complete event record, then complete role records, then paragraph records
 split only at common blank-line boundaries. Every emitted `better-hindsight-retained-event-v2`
 content value is complete compact UTF-8 JSON containing the payload schema, event identity,

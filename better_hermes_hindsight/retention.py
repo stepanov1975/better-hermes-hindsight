@@ -8,7 +8,7 @@ import re
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import NoReturn
 
 from .config import (
@@ -281,7 +281,7 @@ def _new_event_id() -> str:
 
 
 def _capture_occurrence_time() -> str:
-    return datetime.now().astimezone().isoformat(timespec="microseconds")
+    return datetime.now(UTC).isoformat(timespec="microseconds")
 
 
 def _reject() -> NoReturn:

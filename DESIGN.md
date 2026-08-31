@@ -54,7 +54,7 @@ destination, principal, or retention policy.
 
 1. Hermes invokes `sync_turn()` after a completed turn.
 2. The provider verifies retention, context, and principal policy.
-3. It captures one local event ID and timezone-aware occurrence time for the admission, redacts the turn,
+3. It captures one local event ID and fixed-width UTC occurrence time for the admission, redacts the turn,
    and builds either one complete turn record or role/paragraph-bounded records that are each independently
    decodable. A semantic unit that cannot fit the configured exact UTF-8 byte limit rejects the whole
    admission instead of being split arbitrarily.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 
 import pytest
 
@@ -22,6 +23,7 @@ from better_hermes_hindsight.retention import (
 EVENT_ID = "0123456789abcdef0123456789abcdef"
 OCCURRED_AT = "2026-08-31T12:34:56.123456+00:00"
 RECORD_SCHEMA = "better-hindsight-retained-event-v2"
+_CAPTURE_OCCURRENCE_TIME = retention_module._capture_occurrence_time
 
 
 @pytest.fixture(autouse=True)
@@ -33,6 +35,21 @@ def _fixed_event_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda: OCCURRED_AT,
         raising=False,
     )
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="POSIX timezone control is unavailable")
+def test_occurrence_time_is_fixed_width_utc_under_second_precision_local_timezone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    try:
+        with monkeypatch.context() as timezone_environment:
+            timezone_environment.setenv("TZ", "XST-0:00:30")
+            time.tzset()
+            occurred_at = _CAPTURE_OCCURRENCE_TIME()
+    finally:
+        time.tzset()
+
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}\+00:00", occurred_at)
 
 
 def _build(
