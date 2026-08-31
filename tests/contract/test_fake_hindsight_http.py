@@ -1329,7 +1329,7 @@ def test_adapter_rejects_oversized_response_and_next_request_succeeds(
             adapter = create_hindsight_client(
                 _config(tmp_path, base_url=server.base_url, api_key=None)
             )
-            monkeypatch.setattr(client_module, "HINDSIGHT_MAX_RESPONSE_BYTES", 64)
+            monkeypatch.setattr(client_module, "HINDSIGHT_MAX_RECALL_RESPONSE_BYTES", 64)
             failure = await _capture_failure(lambda: adapter.recall("oversized response"))
             assert type(failure) is HindsightClientError
             assert isinstance(failure, HindsightClientError)
@@ -1337,7 +1337,11 @@ def test_adapter_rejects_oversized_response_and_next_request_succeeds(
             assert str(failure) == "Better Hindsight recall failed."
             assert failure.__cause__ is None
 
-            monkeypatch.setattr(client_module, "HINDSIGHT_MAX_RESPONSE_BYTES", 16 * 1024 * 1024)
+            monkeypatch.setattr(
+                client_module,
+                "HINDSIGHT_MAX_RECALL_RESPONSE_BYTES",
+                2 * 1024 * 1024,
+            )
             response = await adapter.recall("after oversized response")
             assert response.results[0].text == "fixture observation"
         finally:

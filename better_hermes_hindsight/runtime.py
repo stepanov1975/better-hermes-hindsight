@@ -11,7 +11,7 @@ import threading
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Generic, NoReturn, Protocol, TypeVar
+from typing import Generic, NoReturn, Protocol, TypeVar, cast
 
 from .client import (
     HindsightClientError,
@@ -366,6 +366,10 @@ SenderFactory = Callable[
     SenderProtocol,
 ]
 _RuntimeOperation = Callable[[HindsightClientProtocol], Awaitable[_T]]
+
+
+class _DeadlineRecallClientProtocol(Protocol):
+    async def recall_with_timeout(self, query: str, *, timeout_seconds: float) -> object: ...
 
 
 class OutboxSender:
@@ -762,7 +766,25 @@ class ProcessRuntime:
     def recall(self, query: str, *, timeout: float) -> object:
         """Recall through the shared client under the caller's total deadline."""
 
-        return self.call(lambda client: client.recall(query), timeout=timeout)
+        async def recall_with_native_timeout(client: HindsightClientProtocol) -> object:
+            margin = min(0.005, timeout / 10.0)
+            recall_with_timeout = getattr(client, "recall_with_timeout", None)
+            if callable(recall_with_timeout):
+                deadline_client = cast(_DeadlineRecallClientProtocol, client)
+                try:
+                    return await deadline_client.recall_with_timeout(
+                        query,
+                        timeout_seconds=timeout - margin,
+                    )
+                except HindsightClientError as error:
+                    if error.reason == "timeout":
+                        raise AsyncCallTimeoutError(
+                            "Better Hindsight operation exceeded its total deadline."
+                        ) from None
+                    raise
+            return await client.recall(query)
+
+        return self.call(recall_with_native_timeout, timeout=timeout)
 
     def finalize(self) -> bool:
         """Stop all async work before exact outbox, client, then runner closure."""

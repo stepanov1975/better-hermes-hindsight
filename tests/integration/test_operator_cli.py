@@ -240,7 +240,16 @@ if mode in client_modes:
                 status=200,
             )
 
-        async def request(self, method, path, *, json_body=None):
+        async def request(
+            self,
+            method,
+            path,
+            *,
+            json_body=None,
+            timeout_seconds=None,
+            max_response_bytes=None,
+        ):
+            del timeout_seconds, max_response_bytes
             assert path == f"/v1/default/banks/{fixture_bank_id}/config"
             if method == "GET":
                 self.calls.append("get")
