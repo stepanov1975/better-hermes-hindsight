@@ -114,7 +114,7 @@ response budget; it does not limit query input.
 | `recall.context_max_bytes` | `8192` | 1 through 1,048,576 bytes |
 | `retain.enabled` | `false` | Boolean; explicit opt-in only |
 | `retain.timeout_seconds` | `60.0` | Greater than zero, at most 300 seconds |
-| `retain.segment_max_bytes` | `65536` | 1 through 16,777,216 bytes; plus the code-owned 1,024-byte row allowance it must not exceed `outbox.max_pending_bytes` |
+| `retain.segment_max_bytes` | `65536` | 1 through 16,777,216 bytes; when retention is enabled it must fit the event wrapper for the configured tags, and with the code-owned 1,024-byte row allowance it must not exceed `outbox.max_pending_bytes` |
 | `retain.observation_scopes` | `null` | `null`, `combined`, `shared`, or `[[]]` |
 | `retain.tags` | `[]` | At most 64 unique non-empty tags, each at most 256 characters |
 | mission texts | `null` | Distinct optional non-empty `retain_mission` and `observations_mission` fields |
@@ -266,15 +266,21 @@ is lost before its SQLite transaction commits remains outside the durability gua
 The callback ignores the raw `messages` transcript and uses only its direct non-empty user and
 assistant text arguments. Before hashing, segmentation, or SQLite admission, both role texts and the
 configured low-cardinality tags pass through the same deliberately narrow deterministic redactor
-described above. The canonical source is compact deterministic UTF-8 JSON with payload schema
-`better-hindsight-turn-v1`, SHA-256 of the raw session identifier, explicit `user` and `assistant`
-role records, and sorted configured tags. The raw session identifier is not stored. Segments preserve
-Unicode code-point boundaries and concatenate exactly to that canonical source.
+described above. Each callback captures one random event ID and one timezone-aware occurrence time.
+The encoder first tries one complete event record, then complete role records, then paragraph records
+split only at common blank-line boundaries. Every emitted `better-hindsight-retained-event-v2`
+content value is complete compact UTF-8 JSON containing the payload schema, event identity,
+occurrence time, SHA-256 of the raw session identifier, sorted tags, and its retained role content.
+The raw session identifier is not stored. If any semantic unit plus its wrapper cannot fit, or the
+segment-count limit would be exceeded, the complete admission is rejected.
 
-Each segment ID starts with `better-hindsight-turn-v1:` followed by lowercase SHA-256 of its final
-canonical redacted segment record. That record includes the payload schema, digest of the complete
-canonical source, zero-based segment index and total count, and exact segment content. Identical rows
-are admission no-ops; an ID collision or immutable-row mismatch rejects the complete turn.
+For outbox integrity, `source_sha256` covers the ordered concatenation of those exact canonical record
+strings; that sequence represents retained semantic units and provenance, not the original turn byte
+stream or one canonical turn object. Each document ID starts with `better-hindsight-turn-v1:` followed
+by lowercase SHA-256 of its final segment record, which includes that source digest, zero-based index,
+total count, and exact content. Retries of one admitted occurrence are row no-ops, while a separately
+admitted identical turn receives a new event ID, timestamp, and document IDs. An ID collision or
+immutable-row mismatch rejects the complete turn.
 
 Admission uses one `BEGIN IMMEDIATE` transaction. Capacity is checked against all existing
 unconfirmed rows plus every new nonduplicate segment before any insertion, so a completed turn is

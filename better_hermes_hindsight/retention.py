@@ -39,7 +39,7 @@ class _RetentionCapacityExceeded(Exception):
 
 @dataclass(frozen=True, slots=True)
 class RetainedSegment:
-    """One immutable segment of a complete canonical redacted turn."""
+    """One immutable, independently decodable record for a retained occurrence."""
 
     document_id: str
     payload_hash: str
@@ -62,7 +62,7 @@ def build_retained_segments(
     """Build canonical redacted segments for one completed Hermes callback.
 
     The raw session identifier is used only as SHA-256 input. Role content and configured tags pass
-    through the shared high-confidence redactor before the canonical source is hashed or segmented.
+    through the shared high-confidence redactor before semantic records are encoded and hashed.
     Every failure crosses this boundary as one fixed message with no chained input-bearing
     exception.
     """
