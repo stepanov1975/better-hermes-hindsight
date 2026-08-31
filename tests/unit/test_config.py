@@ -563,6 +563,23 @@ def test_enabled_retention_rejects_a_segment_limit_smaller_than_its_event_envelo
         )
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_retain_tags_reject_non_scalar_unicode_with_a_sanitized_config_error(
+    tmp_path: Path,
+    enabled: bool,
+) -> None:
+    with pytest.raises(ConfigError) as caught:
+        load_config(
+            hermes_home=tmp_path,
+            environ={},
+            injected={"retain": {"enabled": enabled, "tags": ["\ud800"]}},
+        )
+
+    message = str(caught.value)
+    assert "retain.tags entry must contain only Unicode scalar values" in message
+    assert "\ud800" not in message
+
+
 def test_cross_field_queue_bounds_are_enforced(tmp_path: Path) -> None:
     assert OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES == 1024
 

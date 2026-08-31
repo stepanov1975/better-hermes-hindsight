@@ -34,6 +34,8 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 - Replace arbitrary UTF-8 byte slicing with independently decodable role/paragraph-bounded retained
   records, including common blank-line conventions; reject unusable enabled segment limits at
   configuration and reject admissions when a semantic unit still cannot fit.
+- Bound automatic segment construction by the configured queue row limit and reject surrogate tags
+  through the sanitized configuration boundary.
 
 ## 0.4.0 - 2026-08-22
 

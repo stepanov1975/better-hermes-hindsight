@@ -633,6 +633,8 @@ def _parse_exact_nonempty_string(value: object, field_name: str) -> str:
         raise _error(f"{field_name} must be a non-empty string without outer whitespace")
     if _contains_control(value):
         raise _error(f"{field_name} must not contain control characters")
+    if any(0xD800 <= ord(character) <= 0xDFFF for character in value):
+        raise _error(f"{field_name} must contain only Unicode scalar values")
     return value
 
 

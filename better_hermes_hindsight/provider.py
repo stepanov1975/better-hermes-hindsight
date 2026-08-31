@@ -274,6 +274,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                 session_id=session_id,
                 user_content=user_content,
                 assistant_content=assistant_content,
+                segment_count_limit=config.outbox.max_pending_rows,
             )
             emit_event(
                 logger,

@@ -61,7 +61,7 @@ class _ProviderHandle:
     ) -> None:
         self.result = result or AdmissionResult(AdmissionStatus.ADMITTED, inserted_count=1)
         self.failure = failure
-        self.admissions: list[tuple[str, str, str]] = []
+        self.admissions: list[tuple[str, str, str, int | None]] = []
         self.recalls: list[tuple[str, float]] = []
         self.close_calls = 0
 
@@ -71,8 +71,9 @@ class _ProviderHandle:
         session_id: str,
         user_content: str,
         assistant_content: str,
+        segment_count_limit: int | None = None,
     ) -> AdmissionResult:
-        self.admissions.append((session_id, user_content, assistant_content))
+        self.admissions.append((session_id, user_content, assistant_content, segment_count_limit))
         if self.failure is not None:
             raise self.failure
         return self.result
@@ -305,6 +306,7 @@ def _write_profile(
     recall_enabled: bool,
     retain_enabled: bool,
     single_principal: bool = True,
+    max_pending_rows: int = 2_000,
 ) -> None:
     directory = home / "better_hindsight"
     directory.mkdir(parents=True, exist_ok=True)
@@ -318,7 +320,10 @@ def _write_profile(
             "segment_max_bytes": 4096,
             "tags": ["project:synthetic"],
         },
-        "outbox": {"max_pending_bytes": 1_000_000},
+        "outbox": {
+            "max_pending_bytes": 1_000_000,
+            "max_pending_rows": max_pending_rows,
+        },
     }
     (directory / "config.json").write_text(
         json.dumps(document, sort_keys=True),
@@ -383,7 +388,12 @@ def test_retain_only_primary_acquires_runtime_admits_and_keeps_prefetch_empty(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    _write_profile(tmp_path, recall_enabled=False, retain_enabled=True)
+    _write_profile(
+        tmp_path,
+        recall_enabled=False,
+        retain_enabled=True,
+        max_pending_rows=3,
+    )
     handle = _ProviderHandle()
     configs: list[BetterHindsightConfig] = []
 
@@ -412,7 +422,7 @@ def test_retain_only_primary_acquires_runtime_admits_and_keeps_prefetch_empty(
         "better_hindsight_status",
     ]
     assert handle.admissions == [
-        ("callback-session", "synthetic direct user", "synthetic direct assistant")
+        ("callback-session", "synthetic direct user", "synthetic direct assistant", 3)
     ]
     assert caplog.messages == []
     provider.shutdown()

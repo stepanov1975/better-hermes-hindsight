@@ -116,7 +116,7 @@ response budget; it does not limit query input.
 | `retain.timeout_seconds` | `60.0` | Greater than zero, at most 300 seconds |
 | `retain.segment_max_bytes` | `65536` | 1 through 16,777,216 bytes; when retention is enabled it must fit the event wrapper for the configured tags, and with the code-owned 1,024-byte row allowance it must not exceed `outbox.max_pending_bytes` |
 | `retain.observation_scopes` | `null` | `null`, `combined`, `shared`, or `[[]]` |
-| `retain.tags` | `[]` | At most 64 unique non-empty tags, each at most 256 characters |
+| `retain.tags` | `[]` | At most 64 unique non-empty Unicode-scalar tags, each at most 256 characters |
 | mission texts | `null` | Distinct optional non-empty `retain_mission` and `observations_mission` fields |
 | `outbox.path` | `better_hindsight/outbox.sqlite3` | Must resolve inside `hermes_home` |
 | `outbox.max_pending_rows` | `2000` | Integer from 1 through 100,000 |
@@ -282,11 +282,12 @@ total count, and exact content. Retries of one admitted occurrence are row no-op
 admitted identical turn receives a new event ID, timestamp, and document IDs. An ID collision or
 immutable-row mismatch rejects the complete turn.
 
-Admission uses one `BEGIN IMMEDIATE` transaction. Capacity is checked against all existing
-unconfirmed rows plus every new nonduplicate segment before any insertion, so a completed turn is
-inserted in full or not at all. Local durability begins only after that transaction commits. Queue
-saturation, bounded SQLite contention, construction failure, runtime finalization, or another local
-failure fails open for the conversation and emits only the fixed warning
+Automatic callback construction stops at `outbox.max_pending_rows` semantic records before hashing
+or queue admission. Admission then uses one `BEGIN IMMEDIATE` transaction. Capacity is checked
+against all existing unconfirmed rows plus every new nonduplicate segment before any insertion, so
+a completed turn is inserted in full or not at all. Local durability begins only after that
+transaction commits. Queue saturation, bounded SQLite contention, construction failure, runtime
+finalization, or another local failure fails open for the conversation and emits only the fixed warning
 `Better Hindsight local retention admission was rejected.` The warning contains no turn payload,
 session identifier, endpoint, bank, credential, or path.
 
