@@ -55,6 +55,7 @@ class _RecordingTransport:
         self.failures: dict[tuple[str, str], BaseException] = {}
         self.close_failure: BaseException | None = None
         self.closed = False
+        self.response_limits: list[int | None] = []
 
     async def request(
         self,
@@ -63,8 +64,10 @@ class _RecordingTransport:
         *,
         json_body: Mapping[str, object] | None = None,
         timeout_seconds: float | None = None,
+        max_response_bytes: int | None = None,
     ) -> JsonResponse:
         del timeout_seconds
+        self.response_limits.append(max_response_bytes)
         self.calls.append((method, path, json_body))
         key = (method, path)
         failure = self.failures.get(key)
@@ -265,6 +268,7 @@ def test_recall_serializes_full_contract_and_decodes_internal_models(tmp_path: P
         ],
         source_facts={"fact-1": RecallResult(id="fact-1", text="source fact")},
     )
+    assert transport.response_limits == [2 * 1024 * 1024]
     assert transport.calls == [
         (
             "POST",
@@ -347,6 +351,30 @@ def test_recall_decoding_accepts_only_the_defensive_total_result_cap(tmp_path: P
     }
     with pytest.raises(HindsightClientError) as caught:
         asyncio.run(adapter.recall("over cap"))
+    assert caught.value.reason == "schema_invalid"
+
+
+def test_recall_rejects_oversized_nested_result_collections_before_scanning(
+    tmp_path: Path,
+) -> None:
+    nested_limit = 4096
+    config = _config(tmp_path, injected={"bank_id": "sample-bank"})
+    transport = _RecordingTransport()
+    path = "/v1/default/banks/sample-bank/memories/recall"
+    transport.responses[("POST", path)] = {
+        "results": [
+            {
+                "id": "result",
+                "text": "memory",
+                "entities": ["entity"] * (nested_limit + 1),
+            }
+        ]
+    }
+    adapter = HindsightClientAdapter(config=config, transport=transport)
+
+    with pytest.raises(HindsightClientError) as caught:
+        asyncio.run(adapter.recall("nested over cap"))
+
     assert caught.value.reason == "schema_invalid"
 
 

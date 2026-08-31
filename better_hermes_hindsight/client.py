@@ -19,7 +19,9 @@ from .telemetry import elapsed_milliseconds, emit_event
 
 HINDSIGHT_REQUEST_TIMEOUT_SECONDS = 300.0
 HINDSIGHT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+HINDSIGHT_MAX_RECALL_RESPONSE_BYTES = 2 * 1024 * 1024
 HINDSIGHT_MAX_RECALL_RESULTS = 4096
+HINDSIGHT_MAX_RECALL_NESTED_ITEMS = 4096
 MISSION_UPDATE_FIELDS = frozenset({"retain_mission", "observations_mission"})
 HINDSIGHT_ERROR_REASONS = frozenset(
     {
@@ -295,6 +297,7 @@ class JsonTransportProtocol(Protocol):
         *,
         json_body: Mapping[str, object] | None = None,
         timeout_seconds: float | None = None,
+        max_response_bytes: int | None = None,
     ) -> JsonResponse: ...
 
     async def close(self) -> None: ...
@@ -352,11 +355,20 @@ class _AiohttpJsonTransport:
         *,
         json_body: Mapping[str, object] | None = None,
         timeout_seconds: float | None = None,
+        max_response_bytes: int | None = None,
     ) -> JsonResponse:
         import aiohttp
 
         if self._session.closed:
             raise _JsonTransportError("session_closed")
+        response_limit = (
+            HINDSIGHT_MAX_RESPONSE_BYTES if max_response_bytes is None else max_response_bytes
+        )
+        if (
+            type(response_limit) is not int
+            or not 0 < response_limit <= HINDSIGHT_MAX_RESPONSE_BYTES
+        ):
+            raise _JsonTransportError("transport_error")
         try:
             if timeout_seconds is None:
                 request = self._session.request(
@@ -387,7 +399,7 @@ class _AiohttpJsonTransport:
                 body = bytearray()
                 async for chunk in response.content.iter_chunked(64 * 1024):
                     body.extend(chunk)
-                    if len(body) > HINDSIGHT_MAX_RESPONSE_BYTES:
+                    if len(body) > response_limit:
                         response.close()
                         raise _JsonTransportError(
                             "response_oversized",
@@ -552,6 +564,7 @@ class HindsightClientAdapter:
                 f"{self._bank_path}/memories/recall",
                 json_body=payload,
                 timeout_seconds=timeout_seconds,
+                max_response_bytes=HINDSIGHT_MAX_RECALL_RESPONSE_BYTES,
             ),
             decoder=_decode_recall_response,
         )
@@ -824,7 +837,9 @@ def _decode_recall_trace(value: object) -> RecallTrace | None:
 def _retrieval_candidate_count(value: list[object] | dict[object, object]) -> int:
     collections: Iterable[object] = value.values() if isinstance(value, dict) else value
     total = 0
-    for item in collections:
+    for index, item in enumerate(collections):
+        if index >= HINDSIGHT_MAX_RECALL_NESTED_ITEMS:
+            break
         if not isinstance(item, dict):
             continue
         results = item.get("results")
@@ -980,7 +995,9 @@ def _optional_string_list(payload: Mapping[object, object], key: str) -> list[st
     value = payload.get(key)
     if value is None:
         return None
-    if type(value) is not list or any(type(item) is not str for item in value):
+    if type(value) is not list or len(value) > HINDSIGHT_MAX_RECALL_NESTED_ITEMS:
+        raise TypeError
+    if any(type(item) is not str for item in value):
         raise TypeError
     return cast(list[str], value)
 
@@ -989,9 +1006,13 @@ def _optional_string_dict(payload: Mapping[object, object], key: str) -> dict[st
     value = payload.get(key)
     if value is None:
         return None
-    if type(value) is not dict or any(
-        type(item_key) is not str or type(item_value) is not str
-        for item_key, item_value in value.items()
+    if (
+        type(value) is not dict
+        or len(value) > HINDSIGHT_MAX_RECALL_NESTED_ITEMS
+        or any(
+            type(item_key) is not str or type(item_value) is not str
+            for item_key, item_value in value.items()
+        )
     ):
         raise TypeError
     return cast(dict[str, str], value)
@@ -1131,6 +1152,8 @@ def _emit_http_event(
 
 __all__ = [
     "DiagnosticRecallClientProtocol",
+    "HINDSIGHT_MAX_RECALL_NESTED_ITEMS",
+    "HINDSIGHT_MAX_RECALL_RESPONSE_BYTES",
     "HINDSIGHT_MAX_RECALL_RESULTS",
     "HINDSIGHT_REQUEST_TIMEOUT_SECONDS",
     "HindsightClientAdapter",

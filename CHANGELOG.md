@@ -29,9 +29,9 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 - Remove later exact duplicates from automatic and explicit model-facing recall after redaction,
   Unicode compatibility normalization, and whitespace collapsing while preserving first rank and
   distinct occurrence metadata.
-- Make recall formatting linear in emitted JSONL bytes, reject oversized result collections and
-  individual records before redaction, and apply one deadline across query projection,
-  network/decode, redaction, and formatting.
+- Make recall formatting linear in emitted JSONL bytes and apply one deadline across query
+  projection, network/decode, redaction, and formatting. Bound recall response bytes, result and
+  nested-collection counts, and per-record input before synchronous processing.
 
 ## 0.4.0 - 2026-08-22
 
