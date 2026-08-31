@@ -315,7 +315,7 @@ def _write_profile(
         "recall": {"enabled": recall_enabled, "timeout_seconds": 0.125},
         "retain": {
             "enabled": retain_enabled,
-            "segment_max_bytes": 256,
+            "segment_max_bytes": 4096,
             "tags": ["project:synthetic"],
         },
         "outbox": {"max_pending_bytes": 1_000_000},
@@ -355,7 +355,7 @@ def _runtime_config(
             "retain": {
                 "enabled": retain_enabled,
                 "timeout_seconds": retain_timeout_seconds,
-                "segment_max_bytes": 128,
+                "segment_max_bytes": 4096,
                 "tags": ["project:synthetic"],
             },
             "outbox": {

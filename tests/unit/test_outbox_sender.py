@@ -20,6 +20,7 @@ from typing import Protocol, cast
 import pytest
 
 import better_hermes_hindsight.outbox as outbox_module
+import better_hermes_hindsight.retention as retention_module
 import better_hermes_hindsight.runtime as runtime_module
 from better_hermes_hindsight.client import (
     HindsightClientError,
@@ -31,7 +32,13 @@ from better_hermes_hindsight.client import (
 )
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.outbox import SQLiteOutbox
-from better_hermes_hindsight.retention import RetainedSegment, build_retained_segments
+from better_hermes_hindsight.retention import (
+    DOCUMENT_ID_PREFIX,
+    RetainedSegment,
+    build_retained_segments,
+    derive_segment_payload_hash,
+    retained_event_timestamp,
+)
 from better_hermes_hindsight.runtime import AsyncCallTimeoutError, AsyncRunner
 
 
@@ -86,6 +93,27 @@ def _single_segment(seed: str) -> RetainedSegment:
     return segments[0]
 
 
+def _legacy_segment() -> RetainedSegment:
+    content = 'turn-v1","roles":[{"content":"legacy pending fragment'
+    source_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    payload_hash = derive_segment_payload_hash(
+        payload_schema="better-hindsight-turn-v1",
+        source_sha256=source_sha256,
+        segment_index=0,
+        segment_count=1,
+        content=content,
+    )
+    return RetainedSegment(
+        document_id=DOCUMENT_ID_PREFIX + payload_hash,
+        payload_hash=payload_hash,
+        payload_schema="better-hindsight-turn-v1",
+        source_sha256=source_sha256,
+        segment_index=0,
+        segment_count=1,
+        content=content,
+    )
+
+
 def _client_segment(segment: RetainedSegment) -> ClientRetainSegment:
     return ClientRetainSegment(
         content=segment.content,
@@ -94,6 +122,7 @@ def _client_segment(segment: RetainedSegment) -> ClientRetainSegment:
         source_sha256=segment.source_sha256,
         segment_index=segment.segment_index,
         segment_count=segment.segment_count,
+        timestamp=retained_event_timestamp(segment.content),
     )
 
 
@@ -561,7 +590,7 @@ def test_recovery_later_row_failure_rolls_back_every_row(tmp_path: Path) -> None
 
 
 def test_claim_selects_one_due_matching_row_in_frozen_order(tmp_path: Path) -> None:
-    segment_max_bytes = 64
+    segment_max_bytes = 4096
     config = _config(tmp_path, segment_max_bytes=segment_max_bytes)
     outbox = SQLiteOutbox.open(config)
     first_turn = _turn("claim-a", segment_max_bytes=segment_max_bytes)
@@ -991,12 +1020,113 @@ def test_sender_eagerly_recovers_preexisting_sending_and_deletes_typed_success(
 
 
 @pytest.mark.skipif(os.name != "posix", reason="sender ownership is POSIX-only")
+def test_delayed_restart_sends_the_captured_occurrence_timestamp(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    occurred_at = "2026-08-31T04:00:00.123456+00:00"
+    monkeypatch.setattr(retention_module, "_new_event_id", lambda: "9" * 32)
+    monkeypatch.setattr(retention_module, "_capture_occurrence_time", lambda: occurred_at)
+    config = _config(tmp_path)
+    segment = build_retained_segments(
+        session_id="session-delayed-restart",
+        user_content="I paid the fee today.",
+        assistant_content="The payment was recorded.",
+        tags=("project:sample",),
+        segment_max_bytes=config.retain.segment_max_bytes,
+    )[0]
+
+    admitting = SQLiteOutbox.open(config)
+    try:
+        assert admitting.admit((segment,)).accepted
+        _execute(
+            config.outbox.path,
+            "UPDATE outbox SET next_attempt_at=900.0 WHERE document_id=?",
+            (segment.document_id,),
+        )
+    finally:
+        admitting.close()
+
+    delegate = SQLiteOutbox.open(config)
+    observed = _ObservedOutbox(delegate)
+    runner = AsyncRunner()
+
+    async def confirm(_segment: ClientRetainSegment, _attempt: int) -> RetainConfirmation:
+        return RetainConfirmation(confirmed=True)
+
+    client = _ScriptedRetainClient(confirm)
+    sender = _make_sender(
+        config=config,
+        outbox=observed,
+        client=client,
+        runner=runner,
+        wall_time=_WallClock(1_000.0),
+    )
+    try:
+        sender.start()
+        assert observed.completed.wait(timeout=2.0)
+        assert delegate.read_unconfirmed() == ()
+    finally:
+        sender.request_stop()
+        assert sender.join(timeout=2.0)
+        runner.shutdown()
+        delegate.close()
+
+    assert len(client.factory_segments) == 1
+    assert client.factory_segments[0].timestamp == occurred_at
+    assert json.loads(client.factory_segments[0].content)["occurred_at"] == occurred_at
+
+
+@pytest.mark.skipif(os.name != "posix", reason="sender ownership is POSIX-only")
+def test_legacy_pending_v1_row_delivers_with_null_timestamp(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    segment = _legacy_segment()
+    delegate = SQLiteOutbox.open(config)
+    observed = _ObservedOutbox(delegate)
+    runner = AsyncRunner()
+
+    async def confirm(_segment: ClientRetainSegment, _attempt: int) -> RetainConfirmation:
+        return RetainConfirmation(confirmed=True)
+
+    client = _ScriptedRetainClient(confirm)
+    sender = _make_sender(
+        config=config,
+        outbox=observed,
+        client=client,
+        runner=runner,
+        wall_time=_WallClock(100.0),
+    )
+    try:
+        assert delegate.admit((segment,)).accepted
+        _execute(config.outbox.path, "UPDATE outbox SET next_attempt_at=90.0")
+        sender.start()
+        assert observed.completed.wait(timeout=2.0)
+        assert delegate.read_unconfirmed() == ()
+    finally:
+        sender.request_stop()
+        assert sender.join(timeout=2.0)
+        runner.shutdown()
+        delegate.close()
+
+    assert client.factory_segments == [_client_segment(segment)]
+    assert client.factory_segments[0].timestamp is None
+
+
+@pytest.mark.skipif(os.name != "posix", reason="sender ownership is POSIX-only")
 def test_sender_preserves_remote_metadata_needed_to_reconstruct_segmented_source(
     tmp_path: Path,
 ) -> None:
-    segment_max_bytes = 128
+    segment_max_bytes = 460
     config = _config(tmp_path, segment_max_bytes=segment_max_bytes)
-    segments = _turn("remote-reconstruction", segment_max_bytes=segment_max_bytes)
+    segments = build_retained_segments(
+        session_id="session-remote-reconstruction",
+        user_content=("Mira visited Tokyo. She filed the report. " * 2)
+        + "\n\n"
+        + ("The second paragraph stays independently useful. " * 2),
+        assistant_content="The report was recorded for Mira. " * 2,
+        tags=("project:sample",),
+        segment_max_bytes=segment_max_bytes,
+    )
     assert len(segments) > 1
     delegate = SQLiteOutbox.open(config)
     observed = _ObservedOutbox(delegate)

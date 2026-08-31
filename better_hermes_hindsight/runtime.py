@@ -35,7 +35,12 @@ from .outbox import (
     ProfileLockStatus,
     SQLiteOutbox,
 )
-from .retention import RetainedSegment, RetentionCapacityError, build_retained_segments
+from .retention import (
+    RetainedSegment,
+    RetentionCapacityError,
+    build_retained_segments,
+    retained_event_timestamp,
+)
 from .telemetry import elapsed_milliseconds, emit_event
 
 ASYNC_CANCELLATION_DRAIN_SECONDS = 0.05
@@ -527,6 +532,7 @@ class OutboxSender:
             source_sha256=row.source_sha256,
             segment_index=row.segment_index,
             segment_count=row.segment_count,
+            timestamp=retained_event_timestamp(row.content),
         )
         started = time.monotonic()
         category: OutboxFailureCategory | None = None

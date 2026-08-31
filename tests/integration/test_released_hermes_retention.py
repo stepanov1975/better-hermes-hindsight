@@ -16,6 +16,7 @@ from typing import Any, TypeVar
 import pytest
 from agent.memory_manager import MemoryManager
 
+import better_hermes_hindsight.retention as retention_module
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.outbox import OutboxOpenError, OutboxRow, SQLiteOutbox
 from better_hermes_hindsight.provider import BetterHindsightMemoryProvider
@@ -33,6 +34,16 @@ FIXTURE_ERROR_SENTINEL = "synthetic-released-retention-error"
 FIXTURE_TAGS = ("kind:released-proof", "source:fixture")
 
 _T = TypeVar("_T")
+
+
+@pytest.fixture(autouse=True)
+def _fixed_retained_event_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(retention_module, "_new_event_id", lambda: "9" * 32)
+    monkeypatch.setattr(
+        retention_module,
+        "_capture_occurrence_time",
+        lambda: "2026-08-31T04:00:00+00:00",
+    )
 
 
 class _DedicatedLoop:

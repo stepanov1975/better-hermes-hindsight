@@ -29,6 +29,10 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 - Remove later exact duplicates from automatic and explicit model-facing recall after redaction,
   Unicode compatibility normalization, and whitespace collapsing while preserving first rank and
   distinct occurrence metadata.
+- Preserve retained-event occurrence time and repeated-event identity across delayed delivery and
+  restart retries while continuing to deliver legacy pending v1 rows safely.
+- Replace arbitrary UTF-8 byte slicing with independently decodable role/paragraph-bounded retained
+  records, rejecting the whole admission when a semantic unit cannot fit the configured byte limit.
 
 ## 0.4.0 - 2026-08-22
 

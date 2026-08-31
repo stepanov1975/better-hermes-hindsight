@@ -29,7 +29,7 @@ def _config(
     home: Path,
     *,
     path: str = "better_hindsight/outbox.sqlite3",
-    segment_max_bytes: int = 64,
+    segment_max_bytes: int = 460,
     max_pending_rows: int = 2_000,
     max_pending_bytes: int = 1_000_000,
     busy_timeout_seconds: float = 0.2,
@@ -52,11 +52,15 @@ def _config(
     )
 
 
-def _turn(seed: str, *, segment_max_bytes: int = 64) -> tuple[RetainedSegment, ...]:
+def _turn(seed: str, *, segment_max_bytes: int = 460) -> tuple[RetainedSegment, ...]:
     return build_retained_segments(
         session_id=f"session-{seed}",
-        user_content=f"user-{seed}-" + seed * 40,
-        assistant_content=f"assistant-{seed}-" + seed * 40,
+        user_content=(f"user-{seed}: " + "first semantic context " * 3)
+        + "\n\n"
+        + (f"user-{seed}: " + "second semantic context " * 3),
+        assistant_content=(f"assistant-{seed}: " + "first semantic response " * 3)
+        + "\n\n"
+        + (f"assistant-{seed}: " + "second semantic response " * 3),
         tags=("project:sample",),
         segment_max_bytes=segment_max_bytes,
     )
@@ -807,7 +811,7 @@ def test_content_is_omitted_from_outbox_and_row_reprs(tmp_path: Path) -> None:
         user_content=canary,
         assistant_content="safe response",
         tags=(),
-        segment_max_bytes=64,
+        segment_max_bytes=4096,
     )
     config = _config(tmp_path)
     outbox = SQLiteOutbox.open(config)

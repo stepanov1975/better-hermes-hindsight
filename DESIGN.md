@@ -54,10 +54,16 @@ destination, principal, or retention policy.
 
 1. Hermes invokes `sync_turn()` after a completed turn.
 2. The provider verifies retention, context, and principal policy.
-3. It redacts and deterministically segments the source.
-4. One SQLite transaction admits every segment or none, subject to configured limits.
+3. It captures one local event ID and timezone-aware occurrence time for the admission, redacts the turn,
+   and builds either one complete turn record or role/paragraph-bounded records that are each independently
+   decodable. A semantic unit that cannot fit the configured exact UTF-8 byte limit rejects the whole
+   admission instead of being split arbitrarily.
+4. One SQLite transaction admits every segment or none, subject to configured limits. The event time is
+   persisted inside each record, so sender retries and process restarts retain the original occurrence.
 5. A background sender claims due rows for the current destination fingerprint.
-6. Each row is sent with a stable document ID, synchronous Hindsight retention, and `update_mode="replace"`.
+6. Each row is sent with the persisted occurrence timestamp, a stable document ID, synchronous Hindsight
+   retention, and `update_mode="replace"`. Legacy pending v1 fragments remain deliverable with a null
+   timestamp.
 7. Confirmed rows are removed; unconfirmed rows are rescheduled with bounded backoff.
 
 The model-facing `better_hindsight_retain` tool accepts one self-contained durable memory plus an

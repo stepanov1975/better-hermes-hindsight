@@ -188,6 +188,7 @@ class RetainSegment:
     source_sha256: str
     segment_index: int
     segment_count: int
+    timestamp: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -530,7 +531,7 @@ class HindsightClientAdapter:
 
         item: dict[str, object] = {
             "content": segment.content,
-            "timestamp": None,
+            "timestamp": segment.timestamp,
             "context": None,
             "metadata": {
                 "better_hindsight_payload_schema": segment.payload_schema,

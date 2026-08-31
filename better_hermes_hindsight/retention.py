@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import NoReturn
 
 from .config import PAYLOAD_SCHEMA_VERSION, canonicalize_retain_tags
@@ -13,6 +16,8 @@ from .redaction import redact_sensitive_text
 
 DOCUMENT_ID_PREFIX = "better-hindsight-turn-v1:"
 RETENTION_REJECTED_MESSAGE = "Better Hindsight retention input was rejected."
+RETAINED_EVENT_RECORD_SCHEMA = "better-hindsight-retained-event-v2"
+_EVENT_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
 
 
 class RetentionConstructionError(ValueError):
@@ -138,24 +143,29 @@ def _build_retained_segments(
         _reject()
 
     session_sha256 = hashlib.sha256(session_id.encode("utf-8")).hexdigest()
-    source = _canonical_json(
-        {
-            "payload_schema": PAYLOAD_SCHEMA_VERSION,
-            "roles": [
-                {"role": "user", "content": redacted_user},
-                {"role": "assistant", "content": redacted_assistant},
-            ],
-            "session_sha256": session_sha256,
-            "tags": list(canonical_tags),
-        }
+    event_id = _new_event_id()
+    occurred_at = _capture_occurrence_time()
+    if _EVENT_ID_PATTERN.fullmatch(event_id) is None or not occurred_at:
+        _reject()
+    common: dict[str, object] = {
+        "event_id": event_id,
+        "occurred_at": occurred_at,
+        "payload_schema": PAYLOAD_SCHEMA_VERSION,
+        "record_schema": RETAINED_EVENT_RECORD_SCHEMA,
+        "session_sha256": session_sha256,
+        "tags": list(canonical_tags),
+    }
+    roles = (
+        {"role": "user", "content": redacted_user},
+        {"role": "assistant", "content": redacted_assistant},
     )
-    source_bytes = source.encode("utf-8")
-    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
-    contents = _segment_utf8(
-        source,
-        segment_max_bytes,
+    contents = _semantic_contents(
+        common=common,
+        roles=roles,
+        max_bytes=segment_max_bytes,
         segment_count_limit=validated_segment_count_limit,
     )
+    source_sha256 = hashlib.sha256("".join(contents).encode("utf-8")).hexdigest()
     segment_count = len(contents)
 
     segments: list[RetainedSegment] = []
@@ -190,34 +200,83 @@ def _canonical_json(value: object) -> str:
     )
 
 
-def _segment_utf8(
-    text: str,
-    max_bytes: int,
+def _semantic_contents(
     *,
+    common: dict[str, object],
+    roles: Sequence[dict[str, str]],
+    max_bytes: int,
     segment_count_limit: int | None,
 ) -> tuple[str, ...]:
-    segments: list[str] = []
-    characters: list[str] = []
-    used_bytes = 0
-    for character in text:
-        character_bytes = len(character.encode("utf-8"))
-        if character_bytes > max_bytes:
-            _reject()
-        if characters and used_bytes + character_bytes > max_bytes:
-            if segment_count_limit is not None and len(segments) >= segment_count_limit:
-                raise _RetentionCapacityExceeded from None
-            segments.append("".join(characters))
-            characters = []
-            used_bytes = 0
-        characters.append(character)
-        used_bytes += character_bytes
-    if characters:
-        if segment_count_limit is not None and len(segments) >= segment_count_limit:
+    complete = _event_content(common=common, roles=roles)
+    if len(complete.encode("utf-8")) <= max_bytes:
+        if segment_count_limit is not None and segment_count_limit < 1:
             raise _RetentionCapacityExceeded from None
-        segments.append("".join(characters))
-    if not segments:
+        return (complete,)
+
+    contents: list[str] = []
+    for role in roles:
+        role_name = role["role"]
+        complete_role = _event_content(common=common, roles=(role,))
+        if len(complete_role.encode("utf-8")) <= max_bytes:
+            contents.append(complete_role)
+            if segment_count_limit is not None and len(contents) > segment_count_limit:
+                raise _RetentionCapacityExceeded from None
+            continue
+
+        for paragraph in _semantic_paragraphs(role["content"]):
+            content = _event_content(
+                common=common,
+                roles=({"role": role_name, "content": paragraph},),
+            )
+            if len(content.encode("utf-8")) > max_bytes:
+                raise _RetentionCapacityExceeded from None
+            contents.append(content)
+            if segment_count_limit is not None and len(contents) > segment_count_limit:
+                raise _RetentionCapacityExceeded from None
+    if not contents:
         _reject()
-    return tuple(segments)
+    return tuple(contents)
+
+
+def _semantic_paragraphs(text: str) -> tuple[str, ...]:
+    paragraphs = tuple(part for part in text.split("\n\n") if part.strip())
+    if not paragraphs:
+        _reject()
+    return paragraphs
+
+
+def _event_content(
+    *,
+    common: dict[str, object],
+    roles: Sequence[dict[str, str]],
+) -> str:
+    return _canonical_json({**common, "roles": list(roles)})
+
+
+def retained_event_timestamp(content: str) -> str | None:
+    """Read a v2 occurrence timestamp from persisted content; legacy v1 content has none."""
+
+    try:
+        value = json.loads(content)
+        if type(value) is not dict or value.get("record_schema") != RETAINED_EVENT_RECORD_SCHEMA:
+            return None
+        timestamp = value.get("occurred_at")
+        if not isinstance(timestamp, str) or not timestamp:
+            return None
+        parsed = datetime.fromisoformat(timestamp)
+        if parsed.tzinfo is None or parsed.utcoffset() is None:
+            return None
+        return timestamp
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _new_event_id() -> str:
+    return uuid.uuid4().hex
+
+
+def _capture_occurrence_time() -> str:
+    return datetime.now().astimezone().isoformat(timespec="microseconds")
 
 
 def _reject() -> NoReturn:
@@ -232,4 +291,5 @@ __all__ = [
     "RetentionConstructionError",
     "build_retained_segments",
     "derive_segment_payload_hash",
+    "retained_event_timestamp",
 ]

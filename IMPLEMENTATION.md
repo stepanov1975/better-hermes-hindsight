@@ -12,7 +12,8 @@ The provider currently includes:
 - bounded, fail-open current-query recall;
 - model tools for bounded recall, durable retention admission, and compact passive queue status;
 - optional redacted automatic retention;
-- deterministic segmentation and reconstructable source metadata;
+- semantic, independently decodable segmentation with persisted event identity, occurrence time, and
+  reconstructable source metadata;
 - a SQLite-backed durable outbox with bounded retries;
 - process-shared sender/runtime ownership for the current Linux deployment;
 - principal and destination policy;

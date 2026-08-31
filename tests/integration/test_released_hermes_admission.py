@@ -104,7 +104,7 @@ def _write_retain_only_profile(hermes_home: Path) -> BetterHindsightConfig:
                 "recall": {"enabled": False},
                 "retain": {
                     "enabled": True,
-                    "segment_max_bytes": 128,
+                    "segment_max_bytes": 4096,
                     "tags": ["project:synthetic"],
                 },
                 "outbox": {
