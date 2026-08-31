@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from types import SimpleNamespace
 
 import pytest
@@ -21,6 +22,7 @@ from better_hermes_hindsight.formatting import (
     format_recall_context_with_count,
     project_query,
 )
+from better_hermes_hindsight.redaction import redact_sensitive_text
 
 
 def _response(*results: RecallResult) -> RecallResponse:
@@ -567,6 +569,68 @@ def test_large_result_formatting_visits_rendered_records_only_linearly(
     assert len(records) == result_count
     assert len(_json_records(context)) == result_count
     assert rendered_record_visits <= result_count
+
+
+def test_oversized_record_is_skipped_before_redaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_limit = 16 * 1024
+    private_key_header = "-----BEGIN " + "".join(("PRI", "VATE")) + " KEY-----\n"
+    oversized = private_key_header * (input_limit // len(private_key_header) + 1)
+    assert len(oversized.encode("utf-8")) > input_limit
+    redacted_inputs: list[str] = []
+
+    def record_redaction(text: str) -> str:
+        redacted_inputs.append(text)
+        return redact_sensitive_text(text)
+
+    monkeypatch.setattr(
+        "better_hermes_hindsight.formatting.redact_sensitive_text",
+        record_redaction,
+    )
+    context, records = formatting_module.format_recall_context_with_records(
+        SimpleNamespace(results=[SimpleNamespace(text=oversized), SimpleNamespace(text="small")]),
+        max_bytes=100_000,
+    )
+
+    assert redacted_inputs == ["small"]
+    assert records == [{"memory": "small"}]
+    assert _json_records(context) == records
+
+
+def test_deadline_is_rechecked_after_bounded_record_redaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = 100.0
+
+    def monotonic() -> float:
+        return now
+
+    def consume_deadline(text: str) -> str:
+        nonlocal now
+        now = 101.0
+        return text
+
+    fingerprint_calls: list[Mapping[str, object]] = []
+    original_fingerprint = formatting_module._memory_fingerprint
+
+    def record_fingerprint(record: Mapping[str, object]) -> object:
+        fingerprint_calls.append(record)
+        return original_fingerprint(record)
+
+    monkeypatch.setattr("better_hermes_hindsight.formatting.time.monotonic", monotonic)
+    monkeypatch.setattr(
+        "better_hermes_hindsight.formatting.redact_sensitive_text",
+        consume_deadline,
+    )
+    monkeypatch.setattr(formatting_module, "_memory_fingerprint", record_fingerprint)
+
+    assert formatting_module.format_recall_context_with_records(
+        SimpleNamespace(results=[SimpleNamespace(text="memory")]),
+        max_bytes=8_192,
+        deadline=100.5,
+    ) == ("", [])
+    assert fingerprint_calls == []
 
 
 def test_context_count_reports_only_records_that_fit_the_output_budget() -> None:

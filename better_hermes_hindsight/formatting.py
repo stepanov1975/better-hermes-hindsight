@@ -34,6 +34,11 @@ QUERY_OMISSION_MARKER = "\n[... query middle omitted ...]\n"
 QUERY_TOKEN_ENCODING = "cl100k_base"  # nosec B105 - public tokenizer name, not a secret.
 TEXT_TRUNCATION_MARKER = " [... memory text truncated ...]"
 
+# Bound synchronous redaction/normalization work for one adversarial SDK result. The
+# transport still owns the whole-response byte cap, while this formatter checks the
+# total deadline between bounded record-processing phases.
+_RECALL_RECORD_INPUT_MAX_BYTES = 16 * 1024
+
 # Official OpenAI encoding table:
 # https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken
 _QUERY_ENCODING_RESOURCE = "data/cl100k_base.tiktoken"
@@ -263,14 +268,19 @@ def format_recall_context_with_selected_results_and_provenance(
         for result in results:
             _raise_if_deadline_reached(deadline)
             record = _project_record(result)
+            if record is None:
+                continue
+            _raise_if_deadline_reached(deadline)
             memory = record["memory"]
             if not isinstance(memory, str):
                 raise TypeError("recall result text is malformed")
             fingerprint = _memory_fingerprint(record)
+            _raise_if_deadline_reached(deadline)
             if fingerprint in seen_memories:
                 continue
             seen_memories.add(fingerprint)
             line = _serialize_record(record)
+            _raise_if_deadline_reached(deadline)
             line_bytes = len(line.encode("utf-8"))
             separator_bytes = 1 if lines else 0
             if fixed_bytes + lines_bytes + separator_bytes + line_bytes <= max_bytes:
@@ -304,26 +314,46 @@ def format_recall_context_with_selected_results_and_provenance(
         return "", [], [], []
 
 
-def _project_record(result: object) -> dict[str, object]:
+def _project_record(result: object) -> dict[str, object] | None:
     text = getattr(result, "text", _MISSING)
     if not isinstance(text, str):
         raise TypeError("recall result text is malformed")
 
-    record: dict[str, object] = {"memory": redact_sensitive_text(text)}
+    remaining_input_bytes = _RECALL_RECORD_INPUT_MAX_BYTES
+    text_bytes = _bounded_utf8_size(text, maximum=remaining_input_bytes)
+    if text_bytes is None:
+        return None
+    remaining_input_bytes -= text_bytes
+
+    raw_fields: dict[str, str] = {}
     result_type = getattr(result, "type", None)
     if result_type is not None:
         if not isinstance(result_type, str):
             raise TypeError("recall result type is malformed")
-        record["type"] = result_type
+        raw_fields["type"] = result_type
 
     for field_name in ("occurred_start", "occurred_end", "mentioned_at"):
         value = getattr(result, field_name, None)
         if value is not None:
             if not isinstance(value, str):
                 raise TypeError(f"recall result {field_name} is malformed")
-            record[field_name] = value
+            raw_fields[field_name] = value
 
+    for value in raw_fields.values():
+        value_bytes = _bounded_utf8_size(value, maximum=remaining_input_bytes)
+        if value_bytes is None:
+            return None
+        remaining_input_bytes -= value_bytes
+
+    record: dict[str, object] = {"memory": redact_sensitive_text(text), **raw_fields}
     return record
+
+
+def _bounded_utf8_size(text: str, *, maximum: int) -> int | None:
+    if len(text) > maximum:
+        return None
+    encoded_size = len(text.encode("utf-8"))
+    return encoded_size if encoded_size <= maximum else None
 
 
 def _memory_fingerprint(
