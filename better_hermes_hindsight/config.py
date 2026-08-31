@@ -373,7 +373,10 @@ def load_config(
 
     if retain.observation_scopes == ((),) and not single_principal:
         raise _error("retain.observation_scopes='shared' requires explicit single_principal=true")
-    minimum_segment_bytes = _minimum_retained_segment_bytes(retain.tags)
+    minimum_segment_bytes = _minimum_retained_segment_bytes(
+        retain.tags,
+        max_pending_rows=outbox.max_pending_rows,
+    )
     if retain.enabled and retain.segment_max_bytes < minimum_segment_bytes:
         raise _error(
             "retain.segment_max_bytes must be at least "
@@ -1064,14 +1067,21 @@ def _parse_principals(value: object) -> tuple[AllowedPrincipal, ...]:
     return tuple(principals)
 
 
-def _minimum_retained_segment_bytes(tags: Sequence[str]) -> int:
+def _minimum_retained_segment_bytes(
+    tags: Sequence[str],
+    *,
+    max_pending_rows: int,
+) -> int:
+    roles = [{"content": "x", "role": "assistant"}]
+    if max_pending_rows == 1:
+        roles.insert(0, {"content": "x", "role": "user"})
     content = json.dumps(
         {
             "event_id": "0" * 32,
             "occurred_at": "2000-01-01T00:00:00.000000+00:00",
             "payload_schema": PAYLOAD_SCHEMA_VERSION,
             "record_schema": RETAINED_EVENT_RECORD_SCHEMA,
-            "roles": [{"content": "x", "role": "assistant"}],
+            "roles": roles,
             "session_sha256": "0" * 64,
             "tags": list(tags),
         },

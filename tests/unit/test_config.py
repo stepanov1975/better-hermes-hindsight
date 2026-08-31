@@ -563,6 +563,50 @@ def test_enabled_retention_rejects_a_segment_limit_smaller_than_its_event_envelo
         )
 
 
+def test_one_row_outbox_requires_a_complete_two_role_event_envelope(tmp_path: Path) -> None:
+    with pytest.raises(ConfigError, match="segment_max_bytes.*retained event envelope"):
+        load_config(
+            hermes_home=tmp_path / "one-row-too-small",
+            environ={},
+            injected={
+                "retain": {
+                    "enabled": True,
+                    "segment_max_bytes": 348,
+                    "tags": ["project:sample"],
+                },
+                "outbox": {"max_pending_rows": 1},
+            },
+        )
+
+    one_row = load_config(
+        hermes_home=tmp_path / "one-row-exact",
+        environ={},
+        injected={
+            "retain": {
+                "enabled": True,
+                "segment_max_bytes": 378,
+                "tags": ["project:sample"],
+            },
+            "outbox": {"max_pending_rows": 1},
+        },
+    )
+    two_rows = load_config(
+        hermes_home=tmp_path / "two-rows-exact",
+        environ={},
+        injected={
+            "retain": {
+                "enabled": True,
+                "segment_max_bytes": 348,
+                "tags": ["project:sample"],
+            },
+            "outbox": {"max_pending_rows": 2},
+        },
+    )
+
+    assert one_row.retain.segment_max_bytes == 378
+    assert two_rows.retain.segment_max_bytes == 348
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 def test_retain_tags_reject_non_scalar_unicode_with_a_sanitized_config_error(
     tmp_path: Path,

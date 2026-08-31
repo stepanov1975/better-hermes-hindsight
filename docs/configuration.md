@@ -114,7 +114,7 @@ response budget; it does not limit query input.
 | `recall.context_max_bytes` | `8192` | 1 through 1,048,576 bytes |
 | `retain.enabled` | `false` | Boolean; explicit opt-in only |
 | `retain.timeout_seconds` | `60.0` | Greater than zero, at most 300 seconds |
-| `retain.segment_max_bytes` | `65536` | 1 through 16,777,216 bytes; when retention is enabled it must fit the event wrapper for the configured tags, and with the code-owned 1,024-byte row allowance it must not exceed `outbox.max_pending_bytes` |
+| `retain.segment_max_bytes` | `65536` | 1 through 16,777,216 bytes; when retention is enabled it must fit the event wrapper required by the configured tags and row limit, and with the code-owned 1,024-byte row allowance it must not exceed `outbox.max_pending_bytes` |
 | `retain.observation_scopes` | `null` | `null`, `combined`, `shared`, or `[[]]` |
 | `retain.tags` | `[]` | At most 64 unique non-empty Unicode-scalar tags, each at most 256 characters |
 | mission texts | `null` | Distinct optional non-empty `retain_mission` and `observations_mission` fields |
