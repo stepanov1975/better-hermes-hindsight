@@ -4,6 +4,8 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+## 0.5.0 - 2026-09-01
+
 ### Added
 
 - Added a weekly and manually dispatchable isolated live CI proof against the digest-pinned Hindsight
