@@ -210,13 +210,27 @@ jobs:
           RELEASES_JSON_FILE: ${{ runner.temp }}/releases-after-create.json
         run: |
           set -euo pipefail
-          gh api --paginate --slurp \
-            "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
-            | jq 'add' > "$RELEASES_JSON_FILE"
-          release_count=$(jq --arg tag "$RELEASE_TAG" \
-            '[.[] | select(.tag_name == $tag)] | length' "$RELEASES_JSON_FILE")
+          release_count=0
+          for retry_delay in 0 1 2 4 8 16; do
+            if [[ "$retry_delay" -gt 0 ]]; then
+              echo "Draft ${RELEASE_TAG} is not visible yet; retrying in ${retry_delay}s."
+              sleep "$retry_delay"
+            fi
+            gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              | jq 'add' > "$RELEASES_JSON_FILE"
+            release_count=$(jq --arg tag "$RELEASE_TAG" \
+              '[.[] | select(.tag_name == $tag)] | length' "$RELEASES_JSON_FILE")
+            if [[ "$release_count" -gt 1 ]]; then
+              echo "Multiple GitHub releases claim ${RELEASE_TAG}; refusing ambiguous publication." >&2
+              exit 1
+            fi
+            if [[ "$release_count" -eq 1 ]]; then
+              break
+            fi
+          done
           if [[ "$release_count" -ne 1 ]]; then
-            echo "Expected exactly one draft for ${RELEASE_TAG}; found ${release_count}." >&2
+            echo "Expected one draft for ${RELEASE_TAG} after bounded retries; found ${release_count}." >&2
             exit 1
           fi
           release_id=$(jq -r --arg tag "$RELEASE_TAG" \
