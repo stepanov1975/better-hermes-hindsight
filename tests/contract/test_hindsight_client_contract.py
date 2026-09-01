@@ -15,6 +15,8 @@ import pytest
 import better_hermes_hindsight.client as client_module
 from better_hermes_hindsight import __version__
 from better_hermes_hindsight.client import (
+    HINDSIGHT_MAX_REFLECT_RESPONSE_BYTES,
+    HINDSIGHT_MAX_REFLECT_TEXT_BYTES,
     HINDSIGHT_REQUEST_TIMEOUT_SECONDS,
     HindsightClientAdapter,
     HindsightClientError,
@@ -26,6 +28,7 @@ from better_hermes_hindsight.client import (
     RecallResponse,
     RecallResult,
     RecallScores,
+    ReflectResponse,
     RetainConfirmation,
     RetainSegment,
     create_hindsight_client,
@@ -56,6 +59,7 @@ class _RecordingTransport:
         self.close_failure: BaseException | None = None
         self.closed = False
         self.response_limits: list[int | None] = []
+        self.timeouts: list[float | None] = []
 
     async def request(
         self,
@@ -66,7 +70,7 @@ class _RecordingTransport:
         timeout_seconds: float | None = None,
         max_response_bytes: int | None = None,
     ) -> JsonResponse:
-        del timeout_seconds
+        self.timeouts.append(timeout_seconds)
         self.response_limits.append(max_response_bytes)
         self.calls.append((method, path, json_body))
         key = (method, path)
@@ -302,6 +306,131 @@ def test_recall_serializes_full_contract_and_decodes_internal_models(tmp_path: P
             },
         )
     ]
+
+
+@pytest.mark.parametrize("supported_version", ["0.8.5", "0.9.1", "0.9.2"])
+def test_reflect_uses_exact_bounded_wire_contract_and_native_timeout(
+    tmp_path: Path,
+    supported_version: str,
+) -> None:
+    config = _config(
+        tmp_path,
+        injected={
+            "bank_id": "bank/with spaces",
+            "reflect": {
+                "enabled": True,
+                "budget": "high",
+                "max_tokens": 8192,
+                "tags": ["scope-a", "scope-b"],
+                "tag_mode": "all_strict",
+            },
+        },
+    )
+    transport = _RecordingTransport()
+    path = "/v1/default/banks/bank%2Fwith%20spaces/reflect"
+    transport.responses[("POST", path)] = {
+        "text": f"reasoned synthesis from {supported_version}",
+        "based_on": {"ignored_fixture_version": supported_version},
+        "structured_output": {"must": "not escape"},
+        "usage": {"ignored_fixture_version": supported_version},
+        "trace": {"ignored_fixture_version": supported_version},
+    }
+    adapter = HindsightClientAdapter(config=config, transport=transport)
+
+    response = asyncio.run(adapter.reflect_with_timeout("reflection query", timeout_seconds=7.5))
+
+    assert response == ReflectResponse(text=f"reasoned synthesis from {supported_version}")
+    assert transport.calls == [
+        (
+            "POST",
+            path,
+            {
+                "query": "reflection query",
+                "budget": "high",
+                "max_tokens": 8192,
+                "tags": ["scope-a", "scope-b"],
+                "tags_match": "all_strict",
+            },
+        )
+    ]
+    assert transport.timeouts == [7.5]
+    assert transport.response_limits == [HINDSIGHT_MAX_REFLECT_RESPONSE_BYTES]
+    assert HINDSIGHT_MAX_REFLECT_RESPONSE_BYTES == 1024 * 1024
+
+
+def test_reflect_defaults_are_fixed_and_caller_cannot_add_controls(tmp_path: Path) -> None:
+    config = _config(tmp_path, injected={"bank_id": "sample-bank"})
+    transport = _RecordingTransport()
+    path = "/v1/default/banks/sample-bank/reflect"
+    transport.responses[("POST", path)] = {"text": "default synthesis"}
+    adapter = HindsightClientAdapter(config=config, transport=transport)
+
+    assert asyncio.run(adapter.reflect("query only")) == ReflectResponse(text="default synthesis")
+    assert transport.calls == [
+        (
+            "POST",
+            path,
+            {
+                "query": "query only",
+                "budget": "low",
+                "max_tokens": 1024,
+                "tags": None,
+                "tags_match": "any",
+            },
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"text": ""},
+        {"text": " \n\t "},
+        {"text": 1},
+        {"text": _StringSubclass("subclass")},
+        {"text": "🙂" * (HINDSIGHT_MAX_REFLECT_TEXT_BYTES // 4 + 1)},
+    ],
+)
+def test_reflect_strictly_rejects_malformed_or_oversized_text(
+    tmp_path: Path,
+    payload: object,
+) -> None:
+    config = _config(tmp_path, injected={"bank_id": "sample-bank"})
+    transport = _RecordingTransport()
+    path = "/v1/default/banks/sample-bank/reflect"
+    transport.responses[("POST", path)] = payload
+    adapter = HindsightClientAdapter(config=config, transport=transport)
+
+    with pytest.raises(HindsightClientError) as caught:
+        asyncio.run(adapter.reflect("malformed response"))
+
+    assert caught.value.category == "reflect_failed"
+    assert caught.value.reason == "schema_invalid"
+    assert str(caught.value) == "Better Hindsight reflection failed."
+    assert caught.value.__cause__ is None
+
+
+def test_reflect_accepts_exact_decoded_text_cap_and_sanitizes_timeout(tmp_path: Path) -> None:
+    config = _config(tmp_path, injected={"bank_id": "sample-bank"})
+    transport = _RecordingTransport()
+    path = "/v1/default/banks/sample-bank/reflect"
+    exact_text = "x" * HINDSIGHT_MAX_REFLECT_TEXT_BYTES
+    transport.responses[("POST", path)] = {"text": exact_text}
+    adapter = HindsightClientAdapter(config=config, transport=transport)
+
+    assert asyncio.run(adapter.reflect("exact cap")) == ReflectResponse(text=exact_text)
+
+    transport.failures[("POST", path)] = client_module._JsonTransportError("timeout")
+    with pytest.raises(HindsightClientError) as caught:
+        asyncio.run(adapter.reflect_with_timeout("timeout sentinel", timeout_seconds=0.5))
+
+    assert caught.value.category == "reflect_failed"
+    assert caught.value.reason == "timeout"
+    assert str(caught.value) == "Better Hindsight reflection failed."
+    assert "sentinel" not in str(caught.value)
+    assert caught.value.__cause__ is None
+    assert transport.timeouts == [None, 0.5]
 
 
 def test_query_only_recall_preserves_wire_defaults_and_quotes_bank(tmp_path: Path) -> None:

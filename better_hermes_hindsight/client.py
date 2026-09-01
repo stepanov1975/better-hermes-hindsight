@@ -14,7 +14,7 @@ from typing import Protocol, TypeVar, cast
 from urllib.parse import quote
 
 from . import __version__
-from .config import BetterHindsightConfig, ObservationScopes, RecallConfig
+from .config import BetterHindsightConfig, ObservationScopes, RecallConfig, ReflectConfig
 from .telemetry import elapsed_milliseconds, emit_event
 
 HINDSIGHT_REQUEST_TIMEOUT_SECONDS = 300.0
@@ -22,6 +22,8 @@ HINDSIGHT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 HINDSIGHT_MAX_RECALL_RESPONSE_BYTES = 2 * 1024 * 1024
 HINDSIGHT_MAX_RECALL_RESULTS = 4096
 HINDSIGHT_MAX_RECALL_NESTED_ITEMS = 4096
+HINDSIGHT_MAX_REFLECT_RESPONSE_BYTES = 1024 * 1024
+HINDSIGHT_MAX_REFLECT_TEXT_BYTES = 256 * 1024
 MISSION_UPDATE_FIELDS = frozenset({"retain_mission", "observations_mission"})
 HINDSIGHT_ERROR_REASONS = frozenset(
     {
@@ -39,6 +41,7 @@ HINDSIGHT_ERROR_REASONS = frozenset(
         "non_json",
         "rate_limited",
         "recall_failed",
+        "reflect_failed",
         "redirect",
         "response_oversized",
         "retain_failed",
@@ -182,6 +185,13 @@ class RecallResponse:
 
 
 @dataclass(frozen=True, slots=True)
+class ReflectResponse:
+    """Strictly decoded reflection text consumed by the provider formatter."""
+
+    text: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
 class RetainSegment:
     """One immutable outbox segment ready for Hindsight delivery."""
 
@@ -278,6 +288,12 @@ class DiagnosticRecallClientProtocol(Protocol):
     """Operator-only trace replay surface."""
 
     async def replay_recall(self, query: str, request: Mapping[str, object]) -> RecallResponse: ...
+
+
+class ReflectClientProtocol(Protocol):
+    """Bounded explicit reflection surface used by the process runtime."""
+
+    async def reflect(self, query: str) -> ReflectResponse: ...
 
 
 class MissionClientProtocol(Protocol):
@@ -504,6 +520,7 @@ class HindsightClientAdapter:
         "_bank_id",
         "_bank_path",
         "_recall_config",
+        "_reflect_config",
         "_retain_scopes",
         "_retain_tags",
         "_transport",
@@ -513,6 +530,7 @@ class HindsightClientAdapter:
         self._bank_id = config.bank_id
         self._bank_path = f"/v1/default/banks/{quote(config.bank_id, safe='')}"
         self._recall_config = config.recall
+        self._reflect_config = config.reflect
         self._retain_scopes = config.retain.observation_scopes
         self._retain_tags = config.retain.tags
         self._transport = transport
@@ -568,6 +586,44 @@ class HindsightClientAdapter:
                 max_response_bytes=HINDSIGHT_MAX_RECALL_RESPONSE_BYTES,
             ),
             decoder=_decode_recall_response,
+        )
+
+    async def reflect(self, query: str) -> ReflectResponse:
+        """Generate a bounded read-only reflection using the configured bank policy."""
+
+        payload = _reflect_body(query, self._reflect_config)
+        return await self._perform_reflect(payload, timeout_seconds=None)
+
+    async def reflect_with_timeout(self, query: str, *, timeout_seconds: float) -> ReflectResponse:
+        """Reflect with a smaller caller-owned native transport deadline."""
+
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0.0:
+            raise HindsightClientError(
+                "reflect_failed",
+                "Better Hindsight reflection failed.",
+                reason="timeout",
+            )
+        payload = _reflect_body(query, self._reflect_config)
+        return await self._perform_reflect(payload, timeout_seconds=timeout_seconds)
+
+    async def _perform_reflect(
+        self,
+        payload: Mapping[str, object],
+        *,
+        timeout_seconds: float | None,
+    ) -> ReflectResponse:
+        return await _observed_http_call(
+            operation="reflect",
+            category="reflect_failed",
+            message="Better Hindsight reflection failed.",
+            call=lambda: self._transport.request(
+                "POST",
+                f"{self._bank_path}/reflect",
+                json_body=payload,
+                timeout_seconds=timeout_seconds,
+                max_response_bytes=HINDSIGHT_MAX_REFLECT_RESPONSE_BYTES,
+            ),
+            decoder=_decode_reflect_response,
         )
 
     async def retain_segment(self, segment: RetainSegment) -> RetainConfirmation:
@@ -694,6 +750,16 @@ def _recall_body(query: str, config: RecallConfig) -> dict[str, object]:
     }
 
 
+def _reflect_body(query: str, config: ReflectConfig) -> dict[str, object]:
+    return {
+        "query": query,
+        "budget": config.budget,
+        "max_tokens": config.max_tokens,
+        "tags": list(config.tags) if config.tags is not None else None,
+        "tags_match": config.tag_mode or "any",
+    }
+
+
 def recall_request_parameters(config: RecallConfig) -> dict[str, object]:
     """Return the exact credential-free request parameters used for replay capture."""
 
@@ -793,6 +859,14 @@ def _decode_recall_response(value: object) -> RecallResponse:
         source_facts=source_facts,
         trace=_decode_recall_trace(payload.get("trace")),
     )
+
+
+def _decode_reflect_response(value: object) -> ReflectResponse:
+    payload = _exact_dict(value)
+    text = _required_exact(payload, "text", str)
+    if not text.strip() or len(text.encode("utf-8")) > HINDSIGHT_MAX_REFLECT_TEXT_BYTES:
+        raise TypeError
+    return ReflectResponse(text=text)
 
 
 def _decode_recall_trace(value: object) -> RecallTrace | None:
@@ -1153,6 +1227,8 @@ def _emit_http_event(
 
 __all__ = [
     "DiagnosticRecallClientProtocol",
+    "HINDSIGHT_MAX_REFLECT_RESPONSE_BYTES",
+    "HINDSIGHT_MAX_REFLECT_TEXT_BYTES",
     "HINDSIGHT_MAX_RECALL_NESTED_ITEMS",
     "HINDSIGHT_MAX_RECALL_RESPONSE_BYTES",
     "HINDSIGHT_MAX_RECALL_RESULTS",
@@ -1172,6 +1248,8 @@ __all__ = [
     "RecallResult",
     "RecallScores",
     "RecallTrace",
+    "ReflectClientProtocol",
+    "ReflectResponse",
     "RetainConfirmation",
     "RetainSegment",
     "create_hindsight_client",

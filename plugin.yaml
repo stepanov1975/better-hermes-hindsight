@@ -2,7 +2,7 @@ manifest_version: 1
 name: better_hindsight
 kind: exclusive
 version: 0.4.0
-description: Current-query recall for supported external Hindsight services.
+description: Bounded recall and opt-in reflection for supported external Hindsight services.
 pip_dependencies:
   - "aiohttp>=3.14.1,<4"
   - "tiktoken>=0.12,<0.14"

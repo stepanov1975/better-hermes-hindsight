@@ -6,6 +6,12 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ### Added
 
+- Added default-off `better_hindsight_reflect`, a fixed-bank, principal-authorized, read-only model
+  tool with independent query, deadline, raw-response, decoded-text, and serialized-output bounds.
+  It returns only redacted Hindsight synthesis inside the existing untrusted historical-evidence
+  envelope and exposes no caller-selected destination, tags, policy, trace, or source payload.
+- Added deterministic reflection contract coverage for the shared Hindsight 0.8.5/0.9.1/0.9.2
+  endpoint and minimal request/response fields.
 - Added explicit support for Hindsight API version 0.9.2 after review of Better's narrow HTTP
   contract and an isolated live retain, outbox restart recovery, recall, replay, and cleanup proof.
 - Added contract coverage confirming Better continues to omit the optional 0.9.2 retain

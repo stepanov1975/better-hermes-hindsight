@@ -5,6 +5,12 @@
 - `better_hindsight_recall(query)` performs bounded recall through the configured authorized path.
   It returns a structured `memories` list with a fixed untrusted-history label and without internal
   ranking scores or source-identifier counts.
+- `better_hindsight_reflect(query)` performs one default-off, deadline-bounded synthesis through the
+  configured authorized bank. The caller supplies only the query; bank, budget, final-answer target,
+  tags, and tag mode remain local. It returns one redacted, byte-bounded reflection record inside the
+  untrusted historical-evidence envelope, or one sanitized unavailable result. Reflection is
+  read-only for bank memory but invokes Hindsight's configured LLM and may create audit/usage records.
+  A local timeout does not guarantee backend model cancellation or refund work/cost already incurred.
 - `better_hindsight_retain(content, context?)` durably admits one agent-selected memory to the local
   outbox when retention is enabled for an authorized primary handle. Its canonical acknowledgement is
   `queued_locally` or `already_queued`; neither claims remote delivery. Model input is capped before
@@ -13,8 +19,8 @@
   state and total queued work; degraded output adds only actionable nonzero counts and relevant state.
   It performs no remote call. Full diagnostics remain operator-only.
 
-The retain tool accepts no per-call bank, tag, scope, timeout, or retry overrides. Exact diagnostic
-replay and mission changes remain operator-only.
+The reflect and retain tools accept no per-call bank, policy, timeout, or delivery controls beyond
+their declared inputs. Exact diagnostic replay and mission changes remain operator-only.
 
 ## Status
 
@@ -58,8 +64,8 @@ A timeout may mean the server committed after the caller deadline. Stable replac
 
 ## Structured diagnostics
 
-Recall, local retention admission, each internal HTTP operation, client lifecycle, remote sender
-attempts, and sender-loop failures emit compact JSON through normal Python logging. HTTP events record
+Recall, reflection, local retention admission, each internal HTTP operation, client lifecycle, remote
+sender attempts, and sender-loop failures emit compact JSON through normal Python logging. HTTP events record
 only a fixed operation/outcome, elapsed milliseconds, response byte count, and numeric status when a
 response existed. Fixed outcomes distinguish connection, TLS, DNS, timeout, redirect, authentication,
 rate-limit, server-status, content-type, malformed-JSON, size-limit, schema, cancellation, and
@@ -68,7 +74,7 @@ closed-session failures. Sender and recall events preserve the same fixed reason
 Events never include queries, recalled text, turn content, document IDs, tags, bank names, endpoints,
 principal identifiers, exception text, response bodies, headers, or credentials. The principal event
 names are `better_hindsight.http_request`, `better_hindsight.client_lifecycle`,
-`better_hindsight.recall`, `better_hindsight.recall_diagnostic`,
+`better_hindsight.recall`, `better_hindsight.reflect`, `better_hindsight.recall_diagnostic`,
 `better_hindsight.admission`, `better_hindsight.sender_attempt`, and
 `better_hindsight.sender_loop`.
 

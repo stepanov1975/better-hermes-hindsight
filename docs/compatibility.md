@@ -12,11 +12,29 @@ Better Hermes Hindsight follows the Hermes checkout used by its maintainer rathe
 - Compatibility fails only when required provider/CLI interfaces are missing or behavior tests fail.
 - Historical Hermes versions are not blocking CI lanes.
 
-The relevant public host contract is Hermes's `MemoryProvider`/`MemoryManager` lifecycle: provider discovery, `is_available()`, `initialize()`, current-query prefetch, `recall_status()`, `sync_turn()`, session switching, shutdown, and plugin CLI registration. Tests exercise these behaviors through the real installed host where practical.
+The relevant public host contract is Hermes's `MemoryProvider`/`MemoryManager` lifecycle: provider
+discovery, `is_available()`, `initialize()`, current-query prefetch, `recall_status()`, `sync_turn()`,
+model-tool schema/dispatch, session switching, shutdown, and plugin CLI registration. Tests exercise
+these behaviors through the real installed host where practical.
 
 ## Hindsight compatibility
 
-Better intentionally targets the exact external Hindsight 0.8.5, 0.9.1, and 0.9.2 HTTP contracts. It implements only recall, synchronous retain, bank-config read, and bank-config patch over `aiohttp`; it does not import or depend on the Hindsight Python SDK. Other Hindsight versions are unsupported until their used operations are reviewed and the isolated live proof passes.
+Better intentionally targets the exact external Hindsight 0.8.5, 0.9.1, and 0.9.2 HTTP contracts. It
+implements only recall, read-only reflection, synchronous retain, bank-config read, and bank-config
+patch over `aiohttp`; it does not import or depend on the Hindsight Python SDK. Other Hindsight
+versions are unsupported until their used operations are reviewed and the isolated live proof passes.
+
+All three supported versions expose `POST /v1/default/banks/{bank_id}/reflect` with the narrow fields
+Better uses: `query`, `budget`, `max_tokens`, and optional `tags`/`tags_match`. Their response requires
+one `text` field. Better omits tag groups, optional source facts, tool traces, response schemas,
+contextual policy, mental-model exclusions, and other caller controls. Hindsight 0.9.1 adds optional
+`apply_all_directives`; Better deliberately omits it so the request remains compatible with 0.8.5 and
+does not expand model authority.
+
+Deterministic fake-service tests pin this shared wire subset. The existing explicitly enabled isolated
+live test proves recall and retention behavior, not reflection. A deployment that will enable
+reflection must separately prove one synthetic query against its isolated Hindsight LLM configuration;
+a skipped or recall-only live test is not evidence that reflection works for that deployment.
 
 Hindsight 0.9.1 adds optional `source_facts_truncated` to recall responses and optional
 `operation_id` to retain requests. Better ignores the additive response field and continues to omit
@@ -49,7 +67,8 @@ provider handle for the same Hermes home shares that runtime. A handle initializ
 Hermes home or any other configuration fails open without constructing a second client. Consequently,
 a gateway using `gateway.multiplex_profiles: true` may select Better for at most one routed profile.
 Selecting Better in several multiplexed profiles is unsupported: the first initialized profile owns
-the runtime and later profiles have Better recall and retention disabled with a sanitized warning.
+the runtime and later profiles have Better recall, reflection, and retention disabled with a sanitized
+warning.
 
 This is a deliberate isolation boundary rather than dynamic bank routing. The provider also reads
 `HINDSIGHT_API_KEY` from the process environment, so it cannot select different Hindsight credentials

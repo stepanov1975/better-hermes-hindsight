@@ -13,6 +13,17 @@ import pytest
 from better_hermes_hindsight.config import (
     DEFAULT_API_URL,
     DEFAULT_BANK_ID,
+    DEFAULT_REFLECT_BUDGET,
+    DEFAULT_REFLECT_INPUT_MAX_CHARS,
+    DEFAULT_REFLECT_INPUT_MAX_TOKENS,
+    DEFAULT_REFLECT_MAX_TOKENS,
+    DEFAULT_REFLECT_OUTPUT_MAX_BYTES,
+    DEFAULT_REFLECT_TIMEOUT_SECONDS,
+    MAX_REFLECT_INPUT_CHARS,
+    MAX_REFLECT_INPUT_TOKENS,
+    MAX_REFLECT_MAX_TOKENS,
+    MAX_REFLECT_OUTPUT_BYTES,
+    MAX_REFLECT_TIMEOUT_SECONDS,
     OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES,
     PAYLOAD_SCHEMA_VERSION,
     ConfigError,
@@ -97,6 +108,15 @@ def test_defaults_follow_the_best_effort_product_contract(tmp_path: Path) -> Non
     assert not hasattr(config, "integration_mode")
     assert config.recall.enabled is True
     assert config.recall.input_max_tokens == 500
+    assert config.reflect.enabled is False
+    assert config.reflect.timeout_seconds == DEFAULT_REFLECT_TIMEOUT_SECONDS == 60.0
+    assert config.reflect.input_max_chars == DEFAULT_REFLECT_INPUT_MAX_CHARS == 4096
+    assert config.reflect.input_max_tokens == DEFAULT_REFLECT_INPUT_MAX_TOKENS == 500
+    assert config.reflect.output_max_bytes == DEFAULT_REFLECT_OUTPUT_MAX_BYTES == 16_384
+    assert config.reflect.budget == DEFAULT_REFLECT_BUDGET == "low"
+    assert config.reflect.max_tokens == DEFAULT_REFLECT_MAX_TOKENS == 1024
+    assert config.reflect.tags is None
+    assert config.reflect.tag_mode is None
     assert config.retain.enabled is False
     assert config.retain.timeout_seconds == 60.0
     assert config.outbox.max_pending_rows == 2_000
@@ -229,6 +249,8 @@ def test_unbounded_json_integer_is_a_sanitized_config_error(tmp_path: Path) -> N
         ({"batch_size": 10}, "batch_size"),
         ({"integration_mode": "hybrid"}, "integration_mode"),
         ({"recall": {"unexpected": True}}, "recall.unexpected"),
+        ({"reflect": {"unexpected": True}}, "reflect.unexpected"),
+        ({"reflect": {"tags_match": "all"}}, "reflect.tags_match"),
         ({"retain": {"unexpected": True}}, "retain.unexpected"),
         ({"retain": {"extraction_mode": "custom"}}, "retain.extraction_mode"),
         ({"missions": {"unexpected": True}}, "missions.unexpected"),
@@ -320,6 +342,17 @@ def test_complete_typed_configuration_round_trips(tmp_path: Path) -> None:
                 "include_source_facts": True,
                 "max_source_facts_tokens": 222,
             },
+            "reflect": {
+                "enabled": True,
+                "timeout_seconds": 12.5,
+                "input_max_chars": 3200,
+                "input_max_tokens": 498,
+                "output_max_bytes": 12_345,
+                "budget": "high",
+                "max_tokens": 8192,
+                "tags": ["project:sample"],
+                "tag_mode": "all_strict",
+            },
             "retain": {
                 "enabled": False,
                 "timeout_seconds": 45.0,
@@ -363,6 +396,16 @@ def test_complete_typed_configuration_round_trips(tmp_path: Path) -> None:
     assert config.recall.min_scores.as_dict() == {"semantic": 0.1, "final": 1.2}
     assert config.recall.include_source_facts is True
     assert config.recall.max_source_facts_tokens == 222
+    assert config.reflect.enabled is True
+    assert config.reflect.timeout_seconds == 12.5
+    assert config.reflect.input_max_chars == 3200
+    assert config.reflect.input_max_tokens == 498
+    assert config.reflect.output_max_bytes == 12_345
+    assert config.reflect.budget == "high"
+    assert config.reflect.max_tokens == 8192
+    assert config.reflect.tags == ("project:sample",)
+    assert config.reflect.tag_mode == "all_strict"
+    assert not hasattr(config.reflect, "tags_match")
     assert config.retain.enabled is False
     assert config.retain.timeout_seconds == 45.0
     assert config.retain.segment_max_bytes == 70000
@@ -421,6 +464,34 @@ def test_omitted_hindsight_recall_controls_remain_none(tmp_path: Path) -> None:
     assert config.outbox.payload_schema == PAYLOAD_SCHEMA_VERSION
     assert config.outbox.max_pending_rows == 2_000
     assert config.outbox.max_pending_bytes == 134_217_728
+
+
+def test_reflect_accepts_exact_hard_bounds_and_fixed_tag_policy(tmp_path: Path) -> None:
+    config = load_config(
+        hermes_home=tmp_path,
+        environ={},
+        injected={
+            "reflect": {
+                "enabled": True,
+                "timeout_seconds": MAX_REFLECT_TIMEOUT_SECONDS,
+                "input_max_chars": MAX_REFLECT_INPUT_CHARS,
+                "input_max_tokens": MAX_REFLECT_INPUT_TOKENS,
+                "output_max_bytes": MAX_REFLECT_OUTPUT_BYTES,
+                "budget": "mid",
+                "max_tokens": MAX_REFLECT_MAX_TOKENS,
+                "tags": ["scope:a", "scope:b"],
+                "tag_mode": "exact",
+            }
+        },
+    )
+
+    assert config.reflect.timeout_seconds == 300.0
+    assert config.reflect.input_max_chars == 65_536
+    assert config.reflect.input_max_tokens == 1_048_576
+    assert config.reflect.output_max_bytes == 1_048_576
+    assert config.reflect.max_tokens == 16_384
+    assert config.reflect.tags == ("scope:a", "scope:b")
+    assert config.reflect.tag_mode == "exact"
 
 
 def test_mission_policy_is_removed_but_distinct_mission_texts_remain(tmp_path: Path) -> None:
@@ -505,6 +576,20 @@ def test_bare_empty_observation_scope_is_rejected(tmp_path: Path) -> None:
         {"recall": {"min_scores": {"semantic": float("nan")}}},
         {"recall": {"min_scores": {"semantic": 10**1000}}},
         {"recall": {"max_source_facts_tokens": 0}},
+        {"reflect": {"enabled": 1}},
+        {"reflect": {"timeout_seconds": 0}},
+        {"reflect": {"timeout_seconds": 301}},
+        {"reflect": {"input_max_chars": 0}},
+        {"reflect": {"input_max_chars": 65_537}},
+        {"reflect": {"input_max_tokens": 0}},
+        {"reflect": {"input_max_tokens": 1_048_577}},
+        {"reflect": {"output_max_bytes": 0}},
+        {"reflect": {"output_max_bytes": 1_048_577}},
+        {"reflect": {"budget": "extreme"}},
+        {"reflect": {"max_tokens": 0}},
+        {"reflect": {"max_tokens": 16_385}},
+        {"reflect": {"tags": ["duplicate", "duplicate"]}},
+        {"reflect": {"tag_mode": "loose"}},
         {"retain": {"segment_max_bytes": 0}},
         {"retain": {"timeout_seconds": 0}},
         {"retain": {"timeout_seconds": 301}},
@@ -888,6 +973,7 @@ def test_agent_context_is_only_a_separate_write_gate(tmp_path: Path) -> None:
         environ={},
         injected={
             "single_principal": True,
+            "reflect": {"enabled": True},
             "retain": {"enabled": True},
             "allowed_principals": [
                 {
@@ -906,9 +992,43 @@ def test_agent_context_is_only_a_separate_write_gate(tmp_path: Path) -> None:
     )
 
     assert authorization.recall_enabled is True
+    assert authorization.reflect_enabled is True
     assert authorization.retain_enabled is False
     assert authorization.identity_authorized is True
     assert not hasattr(authorization, "agent_context")
+
+
+def test_reflect_only_authorization_enables_memory_for_an_exact_identity(tmp_path: Path) -> None:
+    config = load_config(
+        hermes_home=tmp_path,
+        environ={},
+        injected={
+            "single_principal": True,
+            "recall": {"enabled": False},
+            "reflect": {"enabled": True},
+            "retain": {"enabled": False},
+        },
+    )
+
+    authorized = config.authorize_cli(agent_context="secondary")
+    unauthorized = load_config(
+        hermes_home=tmp_path / "unauthorized",
+        environ={},
+        injected={
+            "single_principal": False,
+            "recall": {"enabled": False},
+            "reflect": {"enabled": True},
+            "retain": {"enabled": False},
+        },
+    ).authorize_cli(agent_context="primary")
+
+    assert authorized.identity_authorized is True
+    assert authorized.recall_enabled is False
+    assert authorized.reflect_enabled is True
+    assert authorized.retain_enabled is False
+    assert authorized.memory_enabled is True
+    assert unauthorized.reflect_enabled is False
+    assert unauthorized.memory_enabled is False
 
 
 def test_cli_requires_explicit_single_principal_declaration(tmp_path: Path) -> None:

@@ -13,7 +13,11 @@ from pathlib import Path
 import pytest
 
 import better_hermes_hindsight.runtime as runtime_module
-from better_hermes_hindsight.client import RetainConfirmation, RetainSegment
+from better_hermes_hindsight.client import (
+    HindsightClientError,
+    RetainConfirmation,
+    RetainSegment,
+)
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.runtime import (
     AsyncCallTimeoutError,
@@ -35,6 +39,10 @@ class _FakeClient:
     async def recall(self, query: str) -> object:
         self.calls.append(f"recall:{query}")
         return {"query": query}
+
+    async def reflect(self, query: str) -> object:
+        self.calls.append(f"reflect:{query}")
+        return {"reflection": query}
 
     async def retain_segment(self, segment: RetainSegment) -> RetainConfirmation:
         self.calls.append(f"retain:{segment.document_id}")
@@ -65,6 +73,24 @@ class _TimeoutThenSuccessClient(_FakeClient):
             finally:
                 self.cancelled.set()
         return {"query": query, "attempt": self.recall_attempts}
+
+
+class _NativeReflectClient(_FakeClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.reflect_timeouts: list[float] = []
+        self.failure_reason: str | None = None
+
+    async def reflect_with_timeout(self, query: str, *, timeout_seconds: float) -> object:
+        self.calls.append(f"reflect-native:{query}")
+        self.reflect_timeouts.append(timeout_seconds)
+        if self.failure_reason is not None:
+            raise HindsightClientError(
+                "reflect_failed",
+                "Better Hindsight reflection failed.",
+                reason=self.failure_reason,
+            )
+        return {"reflection": query}
 
 
 class _RecordingFactory:
@@ -535,6 +561,45 @@ def test_runtime_timeout_cancellation_has_no_pending_task_and_next_recall_succee
         return sum(not task.done() for task in asyncio.all_tasks())
 
     assert handle.call(lambda _client: pending_task_count(), timeout=1.0) == 1
+
+
+def test_runtime_and_handle_route_reflect_with_native_timeout_and_translate_timeout(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    factory = _RecordingFactory(_NativeReflectClient)
+    handle = acquire_process_runtime(config, client_factory=factory)
+
+    assert handle.reflect("reason across memory", timeout=0.5) == {
+        "reflection": "reason across memory"
+    }
+    client = factory.clients[0]
+    assert isinstance(client, _NativeReflectClient)
+    assert client.calls == ["reflect-native:reason across memory"]
+    assert len(client.reflect_timeouts) == 1
+    assert 0.0 < client.reflect_timeouts[0] < 0.5
+
+    client.failure_reason = "timeout"
+    with pytest.raises(
+        AsyncCallTimeoutError,
+        match="Better Hindsight operation exceeded its total deadline",
+    ):
+        handle.reflect("timeout reflection", timeout=0.5)
+
+    assert client.calls == [
+        "reflect-native:reason across memory",
+        "reflect-native:timeout reflection",
+    ]
+    assert len(client.reflect_timeouts) == 2
+
+    client.failure_reason = "server_status"
+    with pytest.raises(HindsightClientError) as caught:
+        handle.reflect("non-timeout reflection", timeout=0.5)
+
+    assert caught.value.reason == "server_status"
+    assert client.calls[-1] == "reflect-native:non-timeout reflection"
+    assert len(client.reflect_timeouts) == 3
+    assert all(0.0 < timeout < 0.5 for timeout in client.reflect_timeouts)
 
 
 def test_only_explicit_process_finalization_closes_client_once_on_owning_loop(

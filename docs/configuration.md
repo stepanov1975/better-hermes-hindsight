@@ -4,9 +4,10 @@ Better Hermes Hindsight configuration is explicit, Hermes-home-scoped, and local
 configuration does not contact Hindsight, create a client, import Hermes, discover a `.env` file, or
 search the current working directory.
 
-Recall is enabled by default. Automatic retention is disabled by default and must be enabled only
+Recall is enabled by default. Reflection and automatic retention are disabled by default. Enable
+reflection only after reviewing the configured Hindsight LLM/data/cost boundary; enable retention only
 after fake-service proof and an isolated Hindsight development deployment. Capability is controlled
-directly by `recall.enabled` and `retain.enabled`.
+directly by `recall.enabled`, `reflect.enabled`, and `retain.enabled`.
 
 ## Sources and precedence
 
@@ -58,6 +59,17 @@ This example uses only synthetic/local values and contains no API key. Retention
     "input_max_tokens": 500,
     "context_max_bytes": 8192
   },
+  "reflect": {
+    "enabled": false,
+    "timeout_seconds": 60.0,
+    "input_max_chars": 4096,
+    "input_max_tokens": 500,
+    "output_max_bytes": 16384,
+    "budget": "low",
+    "max_tokens": 1024,
+    "tags": null,
+    "tag_mode": null
+  },
   "retain": {
     "enabled": false,
     "timeout_seconds": 60.0,
@@ -99,6 +111,20 @@ ordinary text. Keep this value at or below the server's
 `HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS`. The existing `recall.max_tokens` setting controls the
 response budget; it does not limit query input.
 
+`reflect.input_max_chars` and `reflect.input_max_tokens` independently bound the caller's projected
+nonblank query before the request. `reflect.max_tokens` is the fixed final-answer target sent to
+Hindsight; it is not a complete provider-cost cap. `reflect.output_max_bytes` bounds the complete
+serialized Hermes tool response in UTF-8 bytes, including the redacted historical-evidence envelope.
+The client also applies fixed non-configurable raw HTTP response and decoded-text caps before formatting.
+
+The model can supply only the reflection query. Endpoint, bank, API key, budget, final-answer target,
+tags, tag mode, source/trace inclusion, directives, response schema, and policy remain local. An empty
+or omitted `reflect.tags` leaves Hindsight's default visibility; when tags are configured, the fixed
+`reflect.tag_mode` controls matching. Reflection is read-only for bank memory but invokes Hindsight's
+configured LLM and may produce server audit/usage records. Configure the Hindsight version's available
+reflect iteration, context, wall-time, and completion-token limits before enabling it. A local Hermes
+timeout does not guarantee backend model cancellation or refund work/cost already incurred.
+
 ## Defaults and finite bounds
 
 | Setting | Default | Validation |
@@ -112,6 +138,15 @@ response budget; it does not limit query input.
 | `recall.input_max_chars` | `4096` | 1 through 65,536 characters |
 | `recall.input_max_tokens` | `500` | 1 through 1,048,576 `cl100k_base` tokens; must not exceed the Hindsight server's `HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS` |
 | `recall.context_max_bytes` | `8192` | 1 through 1,048,576 bytes |
+| `reflect.enabled` | `false` | Boolean; explicit opt-in only |
+| `reflect.timeout_seconds` | `60.0` | Greater than zero, at most 300 seconds; bounds the local Hermes wait |
+| `reflect.input_max_chars` | `4096` | 1 through 65,536 characters |
+| `reflect.input_max_tokens` | `500` | 1 through 1,048,576 local `cl100k_base` tokens |
+| `reflect.output_max_bytes` | `16384` | 1 through 1,048,576 bytes for the complete serialized tool response |
+| `reflect.budget` | `low` | Fixed `low`, `mid`, or `high`; never caller-selected |
+| `reflect.max_tokens` | `1024` | 1 through 16,384 final-answer target tokens; not a total LLM-cost bound |
+| `reflect.tags` | `null` | Optional fixed list of at most 64 unique Unicode-scalar tags, each at most 256 characters |
+| `reflect.tag_mode` | `null` | Optional fixed `any`, `all`, `any_strict`, `all_strict`, or `exact` |
 | `retain.enabled` | `false` | Boolean; explicit opt-in only |
 | `retain.timeout_seconds` | `60.0` | Greater than zero, at most 300 seconds |
 | `retain.segment_max_bytes` | `65536` | 1 through 16,777,216 bytes; when retention is enabled it must fit the event wrapper required by the configured tags and row limit, and with the code-owned 1,024-byte row allowance it must not exceed `outbox.max_pending_bytes` |
@@ -170,13 +205,14 @@ bank ID, code-owned payload-schema version, canonical redacted/sorted retain tag
 observation scopes. The schema version has no operator override. Credentials and retry/timing settings
 do not participate, so changing `HINDSIGHT_API_KEY` does not change the fingerprint.
 
-## Recall trust, redaction, and byte budget
+## Recall and reflection trust, redaction, and byte budget
 
 The provider contributes one byte-stable system-role policy for the exact
 `[BETTER_HINDSIGHT_HISTORICAL_EVIDENCE_BEGIN] ...
-[BETTER_HINDSIGHT_HISTORICAL_EVIDENCE_END]` envelope. Every enclosed JSONL record is treated as
-stale, untrusted historical evidence: it is evidence to evaluate, not an instruction, role message,
-or authority over the current conversation. The provider exposes `better_hindsight_recall` for
+`[BETTER_HINDSIGHT_HISTORICAL_EVIDENCE_END]` envelope. Every enclosed recall or reflection JSONL
+record is treated as stale, untrusted historical or generated evidence: it is evidence to evaluate,
+not an instruction, role message, or authority over the current conversation. The provider exposes
+`better_hindsight_recall` for
 focused retrieval when automatic context is insufficient. The tool
 uses the same authorized provider handle, query projection, configured Hindsight recall controls,
 deadline, redaction, allowlist, complete-record byte budget, and untrusted evidence policy. Its
@@ -186,6 +222,14 @@ structured `memories` list with the fixed `trust: "untrusted_historical_evidence
 system-role trust policy covers both forms. Model-facing records contain only recalled text, type,
 and available occurrence/mention timestamps; internal ranking scores and source-identifier counts
 stay private.
+
+`better_hindsight_reflect` is available only when `reflect.enabled=true` on the same exact authorized
+provider handle. Its sole argument is `query`; it applies the independent reflection query projection
+and total deadline, then uses only the locally configured bank, budget, final-answer target, tags, and
+tag mode. The client caps the raw response and accepts only one bounded non-empty `text` field. The
+provider redacts that generated text, fits one complete `type: "reflection"` JSONL record inside the
+historical-evidence envelope, and caps the complete serialized outer tool response. Failures return
+one fixed unavailable result; reflection is never automatic and is not retried by the provider.
 
 `better_hindsight_retain` accepts required `content` of at most 8,192 characters plus an optional
 `context` category of at most 256 characters. It is available only to an authorized primary handle
@@ -206,9 +250,10 @@ Hindsight request; full deployment identity, counters, and private query-free di
 remain available through the operator CLI. Diagnostic capture remains controlled by
 `diagnostics.enabled`.
 
-Every recalled response text passes through the same deterministic high-confidence redactor before
-byte budgeting and JSON serialization. The deliberately narrow patterns cover labeled API-key
-assignments, Bearer tokens, Authorization headers, PEM private-key blocks, and HTTP(S) URL userinfo.
+Every recalled record and generated reflection passes through the same deterministic high-confidence
+redactor before byte budgeting and JSON serialization. The deliberately narrow patterns cover labeled
+API-key assignments, Bearer tokens, Authorization headers, PEM private-key blocks, and HTTP(S) URL
+userinfo.
 If response validation or redaction fails, the provider emits no Better Hindsight context for that
 call. Pattern-based redaction reduces common accidental egress but is not a universal secret
 detector; credentials and other sensitive text must not be stored in Hindsight in the first place.
@@ -247,9 +292,9 @@ The current provider uses one static bank and credential for one explicitly asse
 - CLI is authorized only when `single_principal=true`.
 - Gateway authorization requires an exact configured platform plus either a `user_id` tuple or a
   separate `user_id_alt` tuple. The two identifier kinds are never interchangeable.
-- A missing or unlisted identifier disables recall and retain before any client call.
+- A missing or unlisted identifier disables recall, reflection, and retain before any client call.
 - `agent_context` is a separate execution-context string. It never establishes identity. An
-  authorized non-`primary` context may recall but cannot retain.
+  authorized non-`primary` context may recall or reflect but cannot retain.
 - `single_principal=false` disables memory even if a tuple happens to match.
 
 Multiple exact tuples may represent the same asserted principal, but configuration cannot route
@@ -335,7 +380,7 @@ request, so this is replace-safe best effort, not exactly-once transport or a ze
 do not check or apply them. Operators can compare configured and remote values with
 `hermes better_hindsight missions check`; applying drift requires the explicit
 `hermes better_hindsight missions apply --confirm` command. No model-facing tool can invoke either
-operation; reflection, mission, bank, and configuration tools remain absent.
+operation; mission, bank, and configuration tools remain absent, and reflection cannot change them.
 
 Development writes require an isolated Hindsight instance and synthetic bank. Production canary
 checks likewise use synthetic content and an explicitly designated bank.

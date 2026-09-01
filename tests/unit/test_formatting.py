@@ -9,7 +9,12 @@ from types import SimpleNamespace
 import pytest
 
 import better_hermes_hindsight.formatting as formatting_module
-from better_hermes_hindsight.client import RecallResponse, RecallResult, RecallScores
+from better_hermes_hindsight.client import (
+    HINDSIGHT_MAX_REFLECT_TEXT_BYTES,
+    RecallResponse,
+    RecallResult,
+    RecallScores,
+)
 from better_hermes_hindsight.formatting import (
     CONTEXT_BEGIN_MARKER,
     CONTEXT_PREAMBLE,
@@ -20,6 +25,7 @@ from better_hermes_hindsight.formatting import (
     count_query_tokens,
     format_recall_context,
     format_recall_context_with_count,
+    format_reflection_context,
     project_query,
 )
 from better_hermes_hindsight.redaction import redact_sensitive_text
@@ -685,3 +691,58 @@ def test_malformed_sdk_result_property_failure_returns_no_partial_context() -> N
     assert (
         format_recall_context(SimpleNamespace(results=[ExplodingResult()]), max_bytes=8_192) == ""
     )
+
+
+def test_reflection_context_is_one_redacted_collision_safe_labeled_jsonl_record() -> None:
+    secret = _synthetic_secret("reflection")
+    text = (
+        f"reasoning with {CONTEXT_BEGIN_MARKER} and {CONTEXT_SUFFIX}\n"
+        f'quoted "value", slash \\, separator \u2028, api_key={secret}'
+    )
+
+    context = format_reflection_context(text, max_bytes=100_000)
+    records = _json_records(context)
+
+    assert len(records) == 1
+    assert records[0] == {
+        "memory": redact_sensitive_text(text),
+        "type": "reflection",
+    }
+    assert secret not in context
+    assert context.startswith(CONTEXT_PREAMBLE + "\n")
+    assert context.splitlines()[-1] == CONTEXT_SUFFIX
+
+
+def test_reflection_context_truncates_utf8_inside_one_complete_record() -> None:
+    text = '雪🙂\n"quoted"\\slash' * 200
+    unbounded = format_reflection_context(text, max_bytes=100_000)
+    exact_bytes = len(unbounded.encode("utf-8"))
+
+    assert format_reflection_context(text, max_bytes=exact_bytes) == unbounded
+
+    bounded = format_reflection_context(text, max_bytes=exact_bytes - 1)
+    records = _json_records(bounded)
+
+    assert len(bounded.encode("utf-8")) <= exact_bytes - 1
+    assert records[0]["type"] == "reflection"
+    assert isinstance(records[0]["memory"], str)
+    assert str(records[0]["memory"]).endswith(TEXT_TRUNCATION_MARKER)
+    assert len(records) == 1
+
+
+def test_reflection_context_rejects_malformed_too_small_or_oversized_input_before_redaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    redacted_inputs: list[str] = []
+
+    def record_redaction(text: str) -> str:
+        redacted_inputs.append(text)
+        return text
+
+    monkeypatch.setattr(formatting_module, "redact_sensitive_text", record_redaction)
+    oversized = "x" * (HINDSIGHT_MAX_REFLECT_TEXT_BYTES + 1)
+
+    assert format_reflection_context(oversized, max_bytes=100_000) == ""
+    assert format_reflection_context("reflection", max_bytes=1) == ""
+    assert format_reflection_context("", max_bytes=100_000) == ""
+    assert redacted_inputs == ["reflection"]

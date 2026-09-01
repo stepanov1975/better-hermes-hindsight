@@ -5,7 +5,8 @@
 Better Hermes Hindsight is an unofficial memory provider optimized for one practical deployment: a Linux Hermes installation using a supported external Hindsight service. It aims to improve recall timing and retention reliability without modifying Hermes core.
 
 “Better” is contextual, not universal. Bundled Hindsight remains preferable when embedded/cloud
-operation, model-facing reflection, dynamic routing, or minimum maintenance is more important.
+operation, broader caller-controlled reflection, dynamic routing, or minimum maintenance is more
+important.
 
 ## Goals
 
@@ -14,8 +15,8 @@ operation, model-facing reflection, dynamic routing, or minimum maintenance is m
 - Treat recalled content as potentially stale, untrusted historical evidence.
 - Keep automatic retention optional and off the remote network path of the Hermes callback.
 - Persist admitted retained turns locally and retry them after restart.
-- Keep model authority narrow: bounded recall, opt-in durable retention admission, and compact
-  passive queue status only.
+- Keep model authority narrow: bounded recall, default-off read-only reflection, opt-in durable
+  retention admission, and compact passive queue status only.
 - Keep destination and mission changes explicit and operator controlled.
 - Preserve straightforward rollback to bundled Hindsight.
 
@@ -24,7 +25,7 @@ operation, model-facing reflection, dynamic routing, or minimum maintenance is m
 - Embedded or cloud Hindsight lifecycle management.
 - Multi-user routing or dynamic bank templates.
 - Multiplexed multi-profile Better runtimes in one Hermes process.
-- Model-facing reflection, remote diagnostic replay, policy changes, or caller-selected banks/tags.
+- Remote diagnostic replay, policy changes, or caller-selected banks/tags/reflection controls.
 - Previous-query background recall.
 - Bank migration, pruning, deduplication, reconsolidation, or remote rewind.
 - Windows support, hot reload, or general process supervision.
@@ -49,6 +50,27 @@ operation, model-facing reflection, dynamic routing, or minimum maintenance is m
 The model-facing `better_hindsight_recall` tool reuses this configured path and returns structured
 records without internal ranking or source-count telemetry. It cannot select a different bank,
 destination, principal, or retention policy.
+
+### Reflection
+
+1. The model explicitly calls `better_hindsight_reflect`; reflection is never automatic and remains
+   disabled unless the operator opts in locally.
+2. The provider verifies the same exact principal policy and projects the query under independent
+   character and token limits.
+3. One deadline-bounded request uses the configured bank, budget, final-answer token target, tags, and
+   tag mode. The caller cannot select an endpoint, bank, mission, policy, trace, response schema, or
+   source payload.
+4. The client enforces a raw response-byte cap and accepts only one bounded non-empty text field.
+5. The formatter redacts the synthesis, keeps marker text inside one serialized JSONL record,
+   truncates only its text field, and returns that complete record inside the normal untrusted
+   historical-evidence envelope, while the serialized outer tool response has its own byte cap.
+6. Timeouts and malformed, empty, oversized, or exceptional responses become one sanitized unavailable
+   result; the provider does not retry agentic reflection automatically.
+
+Reflection is read-only with respect to Hindsight bank memory, but it invokes Hindsight's configured
+LLM and may create service-side audit/usage records. Better's local timeout and output limits do not
+bound all server-side model work or cost; deployments must configure the corresponding Hindsight
+iteration, context, wall-time, and completion-token limits.
 
 ### Retention
 
@@ -87,6 +109,9 @@ Durability begins only after admission commits. A network timeout may be ambiguo
 ## Safety boundary
 
 - API credentials come from the environment and are not part of destination fingerprints or persisted payload metadata.
+- Reflection is explicit, default-off, fixed to the configured destination/policy, and returned only as
+  untrusted generated evidence; its source records, traces, directives, and usage metadata are not
+  exposed to the model.
 - Outbox rows bind to a credential-free fingerprint of endpoint, bank, schema, tags, and observation scopes.
 - Rows for another destination remain blocked until an operator deliberately restores the old configuration or performs a separately reviewed recovery.
 - Status is passive: it uses SQLite read-only URI opens, performs no application-owned schema
@@ -103,8 +128,8 @@ Better configuration and runtime; another profile in that process fails open rat
 profile boundary. Its root entry points and
 `better_hermes_hindsight` implementation package are installed together by `hermes plugins
 install`; no second package installation or runtime environment is part of deployment. Better
-implements its narrow Hindsight 0.8.5/0.9.1/0.9.2 wire contract over `aiohttp`, uses `tiktoken` only
-to match those servers' recall input validation, and does not import the Hindsight Python SDK, so the
+implements its narrow Hindsight 0.8.5/0.9.1/0.9.2 wire contract over `aiohttp`, uses `tiktoken` for
+bounded recall and reflection query projection, and does not import the Hindsight Python SDK, so the
 untouched bundled provider remains available.
 
 The Git commit is the working identity. A tag or version bump is optional and does not define compatibility. Validation records the current Better and Hermes commits and tests behavior against that checkout.

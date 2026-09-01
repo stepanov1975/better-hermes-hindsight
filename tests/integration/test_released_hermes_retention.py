@@ -243,15 +243,20 @@ def _released_retention_harness(
         assert [registered.name for registered in manager.providers] == ["better_hindsight"]
         assert [schema["name"] for schema in provider.get_tool_schemas()] == [
             "better_hindsight_recall",
+            "better_hindsight_reflect",
             "better_hindsight_retain",
             "better_hindsight_status",
         ]
         assert manager.has_tool("better_hindsight_recall") is True
+        assert manager.has_tool("better_hindsight_reflect") is True
         assert manager.has_tool("better_hindsight_retain") is True
         assert manager.has_tool("better_hindsight_status") is True
         assert json.loads(
             manager.handle_tool_call("better_hindsight_recall", {"query": "fixture query"})
         ) == {"error": "Better Hindsight recall is unavailable."}
+        assert json.loads(
+            manager.handle_tool_call("better_hindsight_reflect", {"query": "fixture question"})
+        ) == {"error": "Better Hindsight reflection is unavailable."}
 
         yield _RetentionHarness(config=config, loop=loop, manager=manager, server=server)
     finally:
