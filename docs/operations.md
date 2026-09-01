@@ -62,6 +62,21 @@ attempts remain durable and are rescheduled with capped exponential backoff.
 
 A timeout may mean the server committed after the caller deadline. Stable replace-mode identity makes replay safe for the source document, but delivery is not exactly once.
 
+### At-rest deletion boundary
+
+The application-owned outbox uses SQLite's default `DELETE` rollback-journal mode, not WAL. Every
+writer connection enables `PRAGMA secure_delete=ON`, so SQLite overwrites deleted cell content in the
+live database when a strictly confirmed row is removed. Pending and retrying payloads remain redacted
+plaintext in the private mode-`0600` database until confirmation.
+
+This is application-level residue reduction, not cryptographic erasure. It does not retroactively
+scrub free space produced by older Better versions, guarantee erasure of a deleted rollback journal or
+sidecars created by external SQLite tooling, or cover filesystem snapshots, backups, flash translation
+layers, and storage-controller caches. Protect the Hermes home and its backups with filesystem or
+full-disk encryption when retained content is sensitive. Rebuilding or removing an old outbox is a
+separate destructive operation and is safe only after Hermes is stopped and the queue is confirmed
+empty; Better does not compact or delete it automatically.
+
 ## Structured diagnostics
 
 Recall, reflection, local retention admission, each internal HTTP operation, client lifecycle, remote
