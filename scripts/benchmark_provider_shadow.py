@@ -32,7 +32,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any, TypedDict
 
@@ -386,6 +386,8 @@ def validate_endpoint(api_url: str, allowed_endpoints: Sequence[str]) -> str:
     allowlisted = {_canonical_endpoint(item) for item in allowed_endpoints}
     if canonical not in allowlisted:
         raise BenchmarkInputError("non-loopback benchmark endpoint is not explicitly allowlisted")
+    if urllib.parse.urlsplit(canonical).scheme != "https":
+        raise BenchmarkInputError("non-loopback benchmark endpoint must use HTTPS")
     return canonical
 
 
@@ -459,7 +461,7 @@ def provider_config(
             "recall_max_input_chars": 4096,
             "recall_indicator": False,
             "retain_indicator": False,
-            "timeout": max(1, math.ceil(recall_timeout_seconds)),
+            "timeout": max(1, math.ceil(_RETAIN_TIMEOUT_SECONDS)),
             "bank_mission": missions.observations_mission,
             "bank_retain_mission": missions.retain_mission,
         }
@@ -762,6 +764,7 @@ def build_identity_payload(
     better: Mapping[str, object],
     hermes: Mapping[str, object],
     hindsight_version: str,
+    hindsight_client_version: str,
 ) -> dict[str, object]:
     """Capture exact source/model/policy identities without endpoint details."""
 
@@ -774,9 +777,13 @@ def build_identity_payload(
             "tree_state",
         }.issubset(identity):
             raise BenchmarkInputError(f"{identity_name} source identity is invalid")
+    hermes_identity = dict(hermes)
+    hermes_identity["hindsight_client_version"] = _require_nonempty_string(
+        hindsight_client_version, "hindsight_client_version"
+    )
     return {
         "better": dict(better),
-        "hermes": dict(hermes),
+        "hermes": hermes_identity,
         "hindsight": {
             "api_version": hindsight_version,
             "build_id": _require_nonempty_string(inputs.hindsight_build_id, "hindsight_build_id"),
@@ -812,15 +819,31 @@ def _public_provider_report(value: Mapping[str, object]) -> dict[str, object]:
     return copied
 
 
+def _report_keys(value: object) -> Iterator[str]:
+    if type(value) is dict:
+        for key, nested in value.items():
+            if type(key) is not str:
+                raise BenchmarkInputError("public report key is invalid")
+            yield key
+            yield from _report_keys(nested)
+    elif type(value) is list:
+        for nested in value:
+            yield from _report_keys(nested)
+
+
 def build_report(
     corpus: BenchmarkCorpus,
     identities: Mapping[str, object],
     provider_reports: Mapping[str, Mapping[str, object]],
+    *,
+    corpus_provenance: str = "checked_in_synthetic",
 ) -> dict[str, object]:
     """Build the only persistent artifact; provider text and labels are omitted."""
 
     if set(provider_reports) != set(_PROVIDER_NAMES):
         raise BenchmarkInputError("benchmark provider result set is incomplete")
+    if corpus_provenance not in {"checked_in_synthetic", "operator_supplied_synthetic"}:
+        raise BenchmarkInputError("benchmark corpus provenance is invalid")
     providers = {
         provider: _public_provider_report(provider_reports[provider])
         for provider in _PROVIDER_NAMES
@@ -829,7 +852,7 @@ def build_report(
         "schema_version": _REPORT_SCHEMA_VERSION,
         "result": "pass",
         "evidence": {
-            "corpus": "checked_in_synthetic",
+            "corpus": corpus_provenance,
             "execution_order": "counterbalanced_pair",
             "retrieval_quality": "live_provider_lifecycle",
         },
@@ -841,9 +864,11 @@ def build_report(
     forbidden_values = (*corpus.all_markers, *(case.prompt for case in corpus.cases))
     if any(value in serialized for value in forbidden_values):
         raise BenchmarkInputError("public report contains synthetic source text")
-    for forbidden_key in ('"query', '"markers', '"context', '"bank', '"api_url'):
-        if forbidden_key in serialized:
-            raise BenchmarkInputError("public report contains a forbidden field")
+    forbidden_key_prefixes = ("query", "markers", "context", "bank", "api_url")
+    if any(
+        key.startswith(prefix) for key in _report_keys(report) for prefix in forbidden_key_prefixes
+    ):
+        raise BenchmarkInputError("public report contains a forbidden field")
     return report
 
 
@@ -1193,6 +1218,8 @@ def _run_quality_child(
                 raise BenchmarkInputError("Hermes did not admit a synthetic benchmark turn")
         if provider_name == "better":
             _wait_for_better_delivery(home)
+        else:
+            provider._timeout = _RECALL_TIMEOUT_SECONDS
         _wait_for_visible_recall(manager, corpus, session_id)
         samples: list[dict[str, object]] = []
         for case in corpus.cases:
@@ -1523,6 +1550,26 @@ def _package_version(distribution: str) -> str:
         return "source-checkout"
 
 
+def _interpreter_package_version(executable: Path, distribution: str) -> str:
+    completed = subprocess.run(
+        [
+            os.fspath(executable),
+            "-c",
+            ("from importlib.metadata import version; import sys; print(version(sys.argv[1]))"),
+            distribution,
+        ],
+        check=False,
+        capture_output=True,
+        env={},
+        text=True,
+        timeout=10.0,
+    )
+    value = completed.stdout.strip()
+    if completed.returncode != 0 or _VERSION_RE.fullmatch(value) is None:
+        raise BenchmarkInputError("Hermes interpreter dependency identity is unavailable")
+    return value
+
+
 def _run_parent(arguments: argparse.Namespace) -> int:
     if os.environ.get("BETTER_HINDSIGHT_ALLOW_BENCHMARK_WRITES") != "1":
         raise BenchmarkInputError("benchmark writes require explicit opt-in")
@@ -1537,6 +1584,7 @@ def _run_parent(arguments: argparse.Namespace) -> int:
     hermes_python = selected_executable(arguments.hermes_python)
     if not hermes_python.is_file() or not os.access(hermes_python, os.X_OK):
         raise BenchmarkInputError("selected Hermes Python is not executable")
+    hindsight_client_version = _interpreter_package_version(hermes_python, "hindsight-client")
     hermes_source = arguments.hermes_source.resolve()
     actual_hermes_commit = _git_identity(hermes_source)
     if actual_hermes_commit != arguments.hermes_commit:
@@ -1548,6 +1596,11 @@ def _run_parent(arguments: argparse.Namespace) -> int:
     require_clean_tree(hermes_tree_state, "Hermes")
 
     source_corpus_path = arguments.corpus.resolve()
+    corpus_provenance = (
+        "checked_in_synthetic"
+        if source_corpus_path == DEFAULT_CORPUS.resolve()
+        else "operator_supplied_synthetic"
+    )
     corpus_bytes = source_corpus_path.read_bytes()
     corpus_sha256 = hashlib.sha256(corpus_bytes).hexdigest()
     with tempfile.TemporaryDirectory(prefix="bh27-provider-shadow-") as raw_temp:
@@ -1664,6 +1717,7 @@ def _run_parent(arguments: argparse.Namespace) -> int:
         better=better_identity,
         hermes=hermes_identity,
         hindsight_version=server_version,
+        hindsight_client_version=hindsight_client_version,
     )
     identities["policies"] = {
         provider: _sha256_json(
@@ -1678,7 +1732,12 @@ def _run_parent(arguments: argparse.Namespace) -> int:
         )
         for provider in _PROVIDER_NAMES
     }
-    report = build_report(corpus, identities, provider_reports)
+    report = build_report(
+        corpus,
+        identities,
+        provider_reports,
+        corpus_provenance=corpus_provenance,
+    )
     _write_public_report(arguments.output.resolve(), report)
     print(human_summary(report))
     return 0

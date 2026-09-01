@@ -24,16 +24,16 @@ For each provider, the public report includes:
 - first-call timeout/fail-open behavior plus the immediate retry;
 - explicit `unavailable` usage/cost telemetry when Hermes exposes none.
 
-The report pins the synthetic corpus, mission texts, clean Better and Hermes source identities, Hindsight API/build identity, model identity, and aligned policy hashes. Dirty source trees are rejected because untracked imports cannot be represented by a commit plus patch digest.
+The report pins the synthetic corpus, mission texts, clean Better and Hermes source identities, the bundled interpreter's `hindsight-client` version, Hindsight API/build identity, model identity, and aligned policy hashes. Dirty source trees are rejected because untracked imports cannot be represented by a commit plus patch digest.
 
 ## Safety boundary
 
 - Use an isolated non-production Hindsight service and datastore. Never point this benchmark at a service that contains real memory.
 - Writes require `BETTER_HINDSIGHT_ALLOW_BENCHMARK_WRITES=1`.
-- Loopback endpoints are allowed directly. A non-loopback origin must also be passed exactly with `--allow-endpoint`; URL paths, credentials, queries, fragments, and redirects are rejected.
+- Loopback endpoints are allowed directly. A non-loopback origin must use HTTPS and must also be passed exactly with `--allow-endpoint`; URL paths, credentials, queries, fragments, and redirects are rejected.
 - The API key is read only from `HINDSIGHT_API_KEY`; it is never accepted on the command line or written to config files.
 - Child processes receive a narrow environment and a private temporary Hermes home.
-- Each child verifies the parent-selected corpus digest before loading it, and the child deadline scales with the permitted sample count and operation budgets.
+- Each child verifies the parent-selected corpus digest before loading it, and the child deadline scales with the permitted sample count and operation budgets. Both providers receive the same 60-second retention allowance; recall measurements use the same five-second host deadline.
 - Each provider runs once in each position of a counterbalanced pair, using a fresh randomly named bank per run. All four banks are created before measurement so cleanup covers partial failures; deletion polls for delayed creation, revalidates ownership, and verifies absence.
 - The final JSON and human summary contain aggregate evidence only—no query text, recalled text, audit markers, endpoint, credentials, or bank identifiers.
 
@@ -45,7 +45,7 @@ The exact Python executable must be the Hermes interpreter under test. It must b
 uv pip install --python /path/to/hermes/python "hindsight-client>=0.6.1"
 ```
 
-Record the exact Hermes commit and the immutable Hindsight build identifier before running. For a container, use its digest rather than a mutable tag. Record the actual model provider, model ID, and model build/revision; these values are operator-declared because the provider lifecycle does not expose them.
+Record the exact Hermes commit and the immutable Hindsight build identifier before running. The benchmark reads and records the selected interpreter's installed `hindsight-client` version. For a container, use its digest rather than a mutable tag. Record the actual model provider, model ID, and model build/revision; these values are operator-declared because the provider lifecycle does not expose them.
 
 ## Run
 
@@ -79,6 +79,8 @@ For an explicitly isolated non-loopback service, add the same origin as an allow
 ```
 
 `--samples-per-case` accepts 1–20 per counterbalanced round, so model usage is twice the per-provider sample count. Use the same value, service build, model, missions, and source commits when comparing runs.
+
+When `--corpus` selects anything other than the checked-in default fixture, the report labels it `operator_supplied_synthetic` and retains its exact digest rather than claiming checked-in provenance.
 
 ## Interpreting results
 

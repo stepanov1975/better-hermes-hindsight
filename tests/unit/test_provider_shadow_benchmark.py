@@ -240,8 +240,11 @@ def test_report_shape_is_public_safe_and_contains_human_summary(tmp_path: Path) 
         better={"git_commit": "a" * 40, "package_version": "0.4.0", "tree_state": "dirty"},
         hermes={"git_commit": "b" * 40, "package_version": "0.20.6", "tree_state": "clean"},
         hindsight_version="0.9.2",
+        hindsight_client_version="0.6.1",
     )
 
+    model_identity = cast(dict[str, object], identities["model"])
+    model_identity["model_id"] = "context-large"
     report = build_report(corpus, identities, provider_reports)
     serialized = json.dumps(report, allow_nan=False, sort_keys=True)
 
@@ -262,10 +265,25 @@ def test_report_shape_is_public_safe_and_contains_human_summary(tmp_path: Path) 
     assert inputs.api_url not in serialized
     assert inputs.api_key not in serialized
     assert "generated-bank-id" not in serialized
-    assert "query" not in serialized
-    assert "markers" not in serialized
-    assert "context" not in serialized
+    assert '"query"' not in serialized
+    assert '"markers"' not in serialized
+    assert '"context"' not in serialized
+    assert "context-large" in serialized
     assert "samples" in serialized
+
+    custom_report = build_report(
+        corpus,
+        identities,
+        provider_reports,
+        corpus_provenance="operator_supplied_synthetic",
+    )
+    assert cast(dict[str, object], custom_report["evidence"])["corpus"] == (
+        "operator_supplied_synthetic"
+    )
+
+    provider_reports["better"]["context_leak"] = "not allowed as a key"
+    with pytest.raises(BenchmarkInputError, match="forbidden field"):
+        build_report(corpus, identities, provider_reports)
 
 
 def test_identity_capture_pins_all_required_surfaces(tmp_path: Path) -> None:
@@ -276,6 +294,7 @@ def test_identity_capture_pins_all_required_surfaces(tmp_path: Path) -> None:
         better={"git_commit": "a" * 40, "package_version": "0.4.0", "tree_state": "clean"},
         hermes={"git_commit": "b" * 40, "package_version": "0.20.6", "tree_state": "clean"},
         hindsight_version="0.9.2",
+        hindsight_client_version="0.6.1",
     )
 
     better_identity = cast(dict[str, object], identities["better"])
@@ -284,6 +303,7 @@ def test_identity_capture_pins_all_required_surfaces(tmp_path: Path) -> None:
     corpus_identity = cast(dict[str, object], identities["corpus"])
     assert better_identity["git_commit"] == "a" * 40
     assert hermes_identity["git_commit"] == "b" * 40
+    assert hermes_identity["hindsight_client_version"] == "0.6.1"
     assert identities["hindsight"] == {
         "api_version": "0.9.2",
         "build_id": "synthetic-hindsight-build",
@@ -333,6 +353,7 @@ def test_provider_configs_pin_equivalent_recall_and_retention_policies() -> None
     assert bundled["recall_types"] == ["world", "experience", "observation"]
     assert bundled["auto_retain"] is True
     assert bundled["retain_async"] is False
+    assert bundled["timeout"] == 60
     assert bundled["recall_sync"] is True
     assert bundled["bank_retain_mission"] == corpus.missions.retain_mission
     assert "apiKey" not in bundled
@@ -419,6 +440,9 @@ def test_endpoint_requires_exact_allowlist_only_for_non_loopback() -> None:
 
     with pytest.raises(BenchmarkInputError, match="explicitly allowlisted"):
         validate_endpoint(endpoint, ("https://synthetic-benchmark.invalid",))
+    insecure = "http://synthetic-benchmark.invalid:8443"
+    with pytest.raises(BenchmarkInputError, match="must use HTTPS"):
+        validate_endpoint(insecure, (insecure,))
     with pytest.raises(BenchmarkInputError, match="absolute HTTP"):
         validate_endpoint("http://user:secret@127.0.0.1:18888", ())
 
