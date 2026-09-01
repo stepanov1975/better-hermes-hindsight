@@ -1114,7 +1114,11 @@ def _wait_for_better_delivery(home: Path) -> None:
     config = config_module.load_config(home)
     deadline = time.monotonic() + _READINESS_TIMEOUT_SECONDS
     while True:
-        if _outbox_is_drained(outbox_module.inspect_outbox(config)):
+        try:
+            inspection = outbox_module.inspect_outbox(config)
+        except outbox_module.OutboxReadError:
+            inspection = None
+        if inspection is not None and _outbox_is_drained(inspection):
             return
         if time.monotonic() >= deadline:
             raise BenchmarkInputError("Better did not confirm the complete synthetic corpus")
