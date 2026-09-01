@@ -27,6 +27,9 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ### Fixed
 
+- Enable SQLite `secure_delete` on every outbox writer connection so confirmed-row deletion
+  overwrites payload cells in the live database, document the remaining storage and backup residue
+  boundary, and correct the outbox journal-mode description from WAL to the actual rollback journal.
 - Reduced model-facing output to actionable state: recall omits internal score and source-count
   metadata, explicit recall returns structured memories, retain returns one canonical local-admission
   outcome, and status no longer exposes operator-only diagnostic records or healthy-path internals.
