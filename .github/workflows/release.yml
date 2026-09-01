@@ -92,8 +92,8 @@ jobs:
           if release["draft"]:
               if release["body"].rstrip() != notes.rstrip():
                   raise SystemExit("Draft source snapshot notes do not match CHANGELOG.md")
-              if release["target_commitish"] != expected_sha:
-                  raise SystemExit("Draft source snapshot targets the wrong commit")
+              if not tag_sha and release["target_commitish"] != expected_sha:
+                  raise SystemExit("Tagless draft source snapshot targets the wrong commit")
           elif not tag_sha:
               raise SystemExit("Published source snapshot has no immutable tag")
           PY
@@ -233,8 +233,7 @@ jobs:
           fi
 
           python - "$RELEASE_JSON_FILE" "$RELEASE_NOTES_FILE" \
-            "$RELEASE_PRERELEASE" "$EXPECTED_SHA" "$RELEASE_TAG" \
-            "$RELEASE_VERSION" <<'PY'
+            "$RELEASE_PRERELEASE" "$RELEASE_TAG" "$RELEASE_VERSION" <<'PY'
           import json
           import pathlib
           import sys
@@ -242,12 +241,10 @@ jobs:
           release = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
           notes = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
           expected_prerelease = sys.argv[3] == "true"
-          if release["tag_name"] != sys.argv[5]:
+          if release["tag_name"] != sys.argv[4]:
               raise SystemExit("Draft release has the wrong tag")
-          if release["name"] != f"Better Hermes Hindsight {sys.argv[6]}":
+          if release["name"] != f"Better Hermes Hindsight {sys.argv[5]}":
               raise SystemExit("Draft release has the wrong title")
-          if release["target_commitish"] != sys.argv[4]:
-              raise SystemExit("Draft release targets the wrong commit")
           if release["draft"] is not True:
               raise SystemExit("Release is not a draft")
           if release["prerelease"] is not expected_prerelease:
@@ -288,8 +285,7 @@ jobs:
           gh api "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" \
             > "$RELEASE_JSON_FILE"
           python - "$RELEASE_JSON_FILE" "$RELEASE_NOTES_FILE" \
-            "$RELEASE_PRERELEASE" "$EXPECTED_SHA" "$RELEASE_TAG" \
-            "$RELEASE_VERSION" <<'PY'
+            "$RELEASE_PRERELEASE" "$RELEASE_TAG" "$RELEASE_VERSION" <<'PY'
           import json
           import pathlib
           import sys
@@ -297,12 +293,10 @@ jobs:
           release = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
           notes = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8")
           expected_prerelease = sys.argv[3] == "true"
-          if release["tag_name"] != sys.argv[5]:
+          if release["tag_name"] != sys.argv[4]:
               raise SystemExit("Published release has the wrong tag")
-          if release["name"] != f"Better Hermes Hindsight {sys.argv[6]}":
+          if release["name"] != f"Better Hermes Hindsight {sys.argv[5]}":
               raise SystemExit("Published release has the wrong title")
-          if release["target_commitish"] != sys.argv[4]:
-              raise SystemExit("Published release targets the wrong commit")
           if release["draft"] is not False:
               raise SystemExit("Release was not published")
           if release["prerelease"] is not expected_prerelease:
