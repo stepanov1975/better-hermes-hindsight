@@ -1,6 +1,6 @@
 # Bundled-vs-Better provider shadow benchmark
 
-Use this benchmark for a release-gated, end-to-end comparison of Hermes' bundled Hindsight memory provider and Better Hindsight. It retains the same synthetic corpus through each real provider lifecycle into separate disposable Hindsight banks, then runs the same current-query recall cases.
+Use this benchmark for a release-gated, end-to-end comparison of Hermes' bundled Hindsight memory provider and Better Hindsight. It runs both provider orders, retaining the same synthetic corpus through each real provider lifecycle into a fresh disposable Hindsight bank, then runs the same current-query recall cases.
 
 It is intentionally **not** a default CI job. A meaningful quality comparison needs an isolated live Hindsight service and a representative model, which can be nondeterministic and incur model cost. The deterministic Hindsight mock provider is useful only to prove the benchmark's mechanics.
 
@@ -34,7 +34,7 @@ The report pins the synthetic corpus, mission texts, clean Better and Hermes sou
 - The API key is read only from `HINDSIGHT_API_KEY`; it is never accepted on the command line or written to config files.
 - Child processes receive a narrow environment and a private temporary Hermes home.
 - Each child verifies the parent-selected corpus digest before loading it, and the child deadline scales with the permitted sample count and operation budgets.
-- Both providers use separate randomly named banks. Creation happens before either provider run so cleanup covers partial failures; deletion revalidates the ownership marker and verifies absence.
+- Each provider runs once in each position of a counterbalanced pair, using a fresh randomly named bank per run. All four banks are created before measurement so cleanup covers partial failures; deletion polls for delayed creation, revalidates ownership, and verifies absence.
 - The final JSON and human summary contain aggregate evidence only—no query text, recalled text, audit markers, endpoint, credentials, or bank identifiers.
 
 ## Prepare the selected Hermes interpreter
@@ -78,11 +78,11 @@ For an explicitly isolated non-loopback service, add the same origin as an allow
   --allow-endpoint https://isolated-hindsight.example.test
 ```
 
-`--samples-per-case` accepts 1–20. Use the same value, service build, model, missions, and source commits when comparing runs.
+`--samples-per-case` accepts 1–20 per counterbalanced round, so model usage is twice the per-provider sample count. Use the same value, service build, model, missions, and source commits when comparing runs.
 
 ## Interpreting results
 
-A successful run proves that both actual Hermes provider lifecycles could retain the complete corpus, recall, fail open under the bounded host timeout, retry without sending another backend request, and clean up owned test state. Quality scores remain descriptive evidence for the pinned corpus and model—not a universal claim that one provider is superior.
+A successful run proves that both actual Hermes provider lifecycles completed in both execution positions, could retain the complete corpus, recall, fail open under the bounded host timeout, retry without eventually sending another backend request, and clean up owned test state. Quality scores remain descriptive evidence for the pinned corpus and model—not a universal claim that one provider is superior.
 
 The mock provider can legitimately score zero when it does not preserve the fixture's audit labels. That is a model-quality result, not an orchestration failure, as long as both provider paths completed, fail-open probes passed, and cleanup verified.
 

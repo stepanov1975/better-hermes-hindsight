@@ -34,11 +34,15 @@ import urllib.request
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CORPUS = ROOT / "tests" / "fixtures" / "provider_shadow_benchmark.json"
 _PROVIDER_NAMES = ("better", "bundled")
+_EXECUTION_ORDERS = (
+    (_PROVIDER_NAMES[0], _PROVIDER_NAMES[1]),
+    (_PROVIDER_NAMES[1], _PROVIDER_NAMES[0]),
+)
 _REQUIRED_FEATURES = frozenset(
     {
         "timeless_fact",
@@ -61,12 +65,29 @@ _DEFAULT_MAX_TOKENS = 4096
 _RECALL_TIMEOUT_SECONDS = 5.0
 _RETAIN_TIMEOUT_SECONDS = 60.0
 _CHILD_MARGIN_SECONDS = 30.0
+_HTTP_TIMEOUT_SECONDS = 30.0
 _READINESS_TIMEOUT_SECONDS = 120.0
+_PROFILE_SETTLE_SECONDS = _HTTP_TIMEOUT_SECONDS
 _REPORT_SCHEMA_VERSION = 1
 
 
 class BenchmarkInputError(ValueError):
     """Raised for unsafe, malformed, or incomplete benchmark inputs."""
+
+
+class _BackendRequests(TypedDict):
+    first: int
+    retry: int
+
+
+class _ValidatedFailOpen(TypedDict):
+    backend_requests: _BackendRequests
+    deadline_ms: float
+    first_elapsed_ms: float
+    retry_elapsed_ms: float
+    retry_returned_empty: bool
+    returned_empty: bool
+    status: str
 
 
 @dataclasses.dataclass(frozen=True)
@@ -494,24 +515,28 @@ def collect_live_runs(
     bank_control: Any,
     runner: Callable[..., Mapping[str, object]],
     homes_root: Path,
-) -> dict[str, Mapping[str, object]]:
-    """Create both profiles first, run each provider, and always attempt cleanup."""
+) -> dict[str, list[Mapping[str, object]]]:
+    """Run counterbalanced provider pairs and always clean their owned profiles."""
 
     homes_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     homes_root.chmod(0o700)
     owned: list[OwnedBank] = []
-    results: dict[str, Mapping[str, object]] = {}
+    results: dict[str, list[Mapping[str, object]]] = {provider: [] for provider in _PROVIDER_NAMES}
     primary_error: BaseException | None = None
     try:
-        for provider in _PROVIDER_NAMES:
-            nonce = uuid.uuid4().hex
-            bank = OwnedBank(
-                provider=provider,
-                bank_id=f"bh27-{provider}-{nonce}",
-                ownership_name=(f"better-hindsight-shadow:{corpus.corpus_id}:{provider}:{nonce}"),
-            )
-            owned.append(bank)
-            bank_control.create(bank, corpus.missions)
+        for round_index, order in enumerate(_EXECUTION_ORDERS, start=1):
+            for provider in order:
+                nonce = uuid.uuid4().hex
+                bank = OwnedBank(
+                    provider=provider,
+                    bank_id=f"bh27-r{round_index}-{provider}-{nonce}",
+                    ownership_name=(
+                        f"better-hindsight-shadow:{corpus.corpus_id}:"
+                        f"r{round_index}:{provider}:{nonce}"
+                    ),
+                )
+                owned.append(bank)
+                bank_control.create(bank, corpus.missions)
         for bank in owned:
             config = provider_config(
                 bank.provider,
@@ -521,8 +546,9 @@ def collect_live_runs(
                 retention_enabled=True,
                 recall_timeout_seconds=_RECALL_TIMEOUT_SECONDS,
             )
-            home = homes_root / bank.provider
-            results[bank.provider] = runner(corpus, inputs, bank, home, config)
+            run_number = len(results[bank.provider]) + 1
+            home = homes_root / f"{run_number}-{bank.provider}"
+            results[bank.provider].append(runner(corpus, inputs, bank, home, config))
         return results
     except BaseException as exc:
         primary_error = exc
@@ -665,7 +691,7 @@ def evaluate_provider(
     }
 
 
-def validate_fail_open_probe(raw: Mapping[str, object], *, provider: str) -> dict[str, object]:
+def validate_fail_open_probe(raw: Mapping[str, object], *, provider: str) -> _ValidatedFailOpen:
     """Validate the exact two-call host timeout/fail-open evidence."""
 
     expected_keys = {"deadline_ms", "first", "mode", "provider", "retry", "status"}
@@ -804,6 +830,7 @@ def build_report(
         "result": "pass",
         "evidence": {
             "corpus": "checked_in_synthetic",
+            "execution_order": "counterbalanced_pair",
             "retrieval_quality": "live_provider_lifecycle",
         },
         "identities": dict(identities),
@@ -878,7 +905,7 @@ class BankControl:
             },
         )
         try:
-            with self._opener.open(request, timeout=30.0) as response:
+            with self._opener.open(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:
                 raw = response.read(_MAX_HTTP_BYTES + 1)
         except urllib.error.HTTPError as exc:
             exc.read(_MAX_HTTP_BYTES + 1)
@@ -950,7 +977,11 @@ class BankControl:
             raise
 
     def delete(self, bank: OwnedBank) -> None:
+        deadline = time.monotonic() + _PROFILE_SETTLE_SECONDS
         profile = self.get_profile(bank)
+        while profile is None and time.monotonic() < deadline:
+            time.sleep(0.1)
+            profile = self.get_profile(bank)
         if profile is None:
             return
         validate_owned_profile(profile, bank)
@@ -964,7 +995,7 @@ class _HangingHandler(http.server.BaseHTTPRequestHandler):
         server: Any = self.server
         with server.request_lock:
             server.request_count += 1
-        time.sleep(3.0)
+        time.sleep(1.0)
         with contextlib.suppress(OSError):
             self.send_response(504)
             self.end_headers()
@@ -1222,6 +1253,9 @@ def _run_fail_open_child(
         os.environ["HERMES_HOME"] = os.fspath(home)
         manager: Any | None = None
         provider: Any | None = None
+        measurements: list[dict[str, object]] = []
+        first_request_count = 0
+        probe_result: dict[str, object] | None = None
         try:
             manager, provider = _start_manager(
                 provider_name,
@@ -1231,8 +1265,6 @@ def _run_fail_open_child(
             )
             if manager is None or provider is None:
                 raise BenchmarkInputError("timeout probe provider did not initialize")
-            measurements: list[dict[str, object]] = []
-            first_request_count = 0
             for attempt in range(2):
                 started = time.monotonic()
                 context = manager.prefetch_all(
@@ -1254,7 +1286,7 @@ def _run_fail_open_child(
                         "requests": request_delta,
                     }
                 )
-            return {
+            probe_result = {
                 "deadline_ms": deadline_seconds * 1000.0,
                 "first": measurements[0],
                 "mode": "fail_open",
@@ -1262,6 +1294,10 @@ def _run_fail_open_child(
                 "retry": measurements[1],
                 "status": "ok",
             }
+            if probe_result is None or len(measurements) != 2:
+                raise BenchmarkInputError("fail-open probe did not complete")
+            time.sleep(1.25)
+            measurements[1]["requests"] = request_count() - first_request_count
         finally:
             if manager is not None and provider is not None:
                 _stop_manager(provider_name, manager, provider)
@@ -1269,6 +1305,9 @@ def _run_fail_open_child(
                 os.environ.pop("HERMES_HOME", None)
             else:
                 os.environ["HERMES_HOME"] = old_home
+        time.sleep(0.25)
+        measurements[1]["requests"] = request_count() - first_request_count
+        return probe_result
 
 
 def _child_main(control_path: Path, output_path: Path) -> int:
@@ -1461,6 +1500,15 @@ def _tree_identity(path: Path) -> str:
     return "clean" if not completed.stdout else "dirty"
 
 
+def revalidate_source_identity(
+    path: Path, *, expected_commit: str, expected_tree_state: str, source_name: str
+) -> None:
+    """Reject source mutations that occurred while child runs were in flight."""
+
+    if _git_identity(path) != expected_commit or _tree_identity(path) != expected_tree_state:
+        raise BenchmarkInputError(f"{source_name} source identity changed during benchmark")
+
+
 def require_clean_tree(tree_state: str, source_name: str) -> None:
     """Require immutable source inputs rather than incomplete dirty-tree digests."""
 
@@ -1546,20 +1594,57 @@ def _run_parent(arguments: argparse.Namespace) -> int:
 
         raw_runs = collect_live_runs(corpus, inputs, control, runner, homes_root)
 
+    revalidate_source_identity(
+        ROOT,
+        expected_commit=better_commit,
+        expected_tree_state=better_tree_state,
+        source_name="Better",
+    )
+    revalidate_source_identity(
+        hermes_source,
+        expected_commit=actual_hermes_commit,
+        expected_tree_state=hermes_tree_state,
+        source_name="Hermes",
+    )
+
     provider_reports: dict[str, Mapping[str, object]] = {}
     for provider in _PROVIDER_NAMES:
-        run = raw_runs.get(provider)
-        if type(run) is not dict or type(run.get("samples")) is not list:
+        runs = raw_runs.get(provider)
+        if type(runs) is not list or len(runs) != len(_EXECUTION_ORDERS):
             raise BenchmarkInputError("provider shadow child output was invalid")
-        probe = run.get("fail_open")
-        if type(probe) is not dict:
-            raise BenchmarkInputError("provider shadow child output was invalid")
-        provider_reports[provider] = evaluate_provider(
+        samples: list[Mapping[str, object]] = []
+        raw_probes: list[Mapping[str, object]] = []
+        validated_probes: list[_ValidatedFailOpen] = []
+        for run in runs:
+            if type(run) is not dict or type(run.get("samples")) is not list:
+                raise BenchmarkInputError("provider shadow child output was invalid")
+            probe = run.get("fail_open")
+            if type(probe) is not dict:
+                raise BenchmarkInputError("provider shadow child output was invalid")
+            samples.extend(run["samples"])
+            raw_probes.append(probe)
+            validated_probes.append(validate_fail_open_probe(probe, provider=provider))
+        evaluated = evaluate_provider(
             corpus,
-            run["samples"],
-            probe,
+            samples,
+            raw_probes[0],
             provider=provider,
         )
+        evaluated["counterbalanced_runs"] = len(runs)
+        evaluated["fail_open"] = {
+            "backend_requests": {
+                "first": sum(int(probe["backend_requests"]["first"]) for probe in validated_probes),
+                "retry": sum(int(probe["backend_requests"]["retry"]) for probe in validated_probes),
+            },
+            "max_first_elapsed_ms": max(probe["first_elapsed_ms"] for probe in validated_probes),
+            "max_retry_elapsed_ms": max(probe["retry_elapsed_ms"] for probe in validated_probes),
+            "retry_returned_empty": all(
+                probe["retry_returned_empty"] is True for probe in validated_probes
+            ),
+            "rounds_checked": len(validated_probes),
+            "status": "pass",
+        }
+        provider_reports[provider] = evaluated
 
     better_identity = {
         "git_commit": better_commit,

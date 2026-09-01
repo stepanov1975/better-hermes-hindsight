@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,7 +10,9 @@ from typing import Any, cast
 
 import pytest
 
+import scripts.benchmark_provider_shadow as benchmark
 from scripts.benchmark_provider_shadow import (
+    BankControl,
     BenchmarkInputError,
     LiveInputs,
     OwnedBank,
@@ -24,6 +27,7 @@ from scripts.benchmark_provider_shadow import (
     load_corpus,
     provider_config,
     require_clean_tree,
+    revalidate_source_identity,
     selected_executable,
     validate_corpus_digest,
     validate_endpoint,
@@ -251,6 +255,7 @@ def test_report_shape_is_public_safe_and_contains_human_summary(tmp_path: Path) 
     }
     assert report["evidence"] == {
         "corpus": "checked_in_synthetic",
+        "execution_order": "counterbalanced_pair",
         "retrieval_quality": "live_provider_lifecycle",
     }
     assert "better factual=" in cast(str, report["human_summary"])
@@ -361,9 +366,33 @@ def test_live_collection_cleans_every_owned_bank_when_child_fails(tmp_path: Path
             corpus, _live_inputs(tmp_path), control, failing_child, tmp_path / "homes"
         )
 
-    assert len(control.created) == 2
+    assert len(control.created) == 4
     assert control.deleted == list(reversed(control.created))
     assert {bank.provider for bank in control.created} == {"better", "bundled"}
+
+
+def test_live_collection_counterbalances_provider_order(tmp_path: Path) -> None:
+    corpus = load_corpus(FIXTURE)
+    control = _FakeBankControl()
+    observed: list[str] = []
+
+    def child(
+        _corpus: object,
+        _inputs: object,
+        bank: OwnedBank,
+        _home: object,
+        _config: object,
+    ) -> dict[str, object]:
+        observed.append(bank.provider)
+        return {}
+
+    results = collect_live_runs(corpus, _live_inputs(tmp_path), control, child, tmp_path / "homes")
+
+    assert observed == ["better", "bundled", "bundled", "better"]
+    assert len(results["better"]) == 2
+    assert len(results["bundled"]) == 2
+    assert len(control.created) == 4
+    assert control.deleted == list(reversed(control.created))
 
 
 def test_live_collection_attempts_cleanup_when_create_result_is_uncertain(tmp_path: Path) -> None:
@@ -420,6 +449,41 @@ def test_child_environment_drops_unrelated_credentials(tmp_path: Path) -> None:
     assert environment["HINDSIGHT_API_KEY"] == inputs.api_key
     assert environment["PATH"] == "/synthetic/bin"
     assert environment["HERMES_HOME"] == str(tmp_path / "home")
+
+
+def test_cleanup_polls_for_delayed_owned_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bank = OwnedBank(
+        provider="better",
+        bank_id="generated-bank-id",
+        ownership_name="exact generated ownership name",
+    )
+    control = object.__new__(BankControl)
+    control._inputs = _live_inputs(tmp_path)
+    calls = 0
+
+    def get_profile(_bank: OwnedBank) -> object:
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            return None
+        if calls == 3:
+            return {"bank_id": bank.bank_id, "name": bank.ownership_name}
+        return None
+
+    requests: list[str] = []
+    monkeypatch.setattr(control, "get_profile", get_profile)
+    monkeypatch.setattr(control, "_request", lambda method, *_args: requests.append(method))
+    ticks = iter((0.0, 0.01, 0.02, 0.03))
+    monkeypatch.setattr(time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(benchmark, "_PROFILE_SETTLE_SECONDS", 0.05)
+
+    control.delete(bank)
+
+    assert requests == ["DELETE"]
+    assert calls == 4
 
 
 def test_owned_bank_readback_requires_exact_random_identity() -> None:
@@ -487,6 +551,28 @@ def test_source_identity_requires_clean_trees() -> None:
     require_clean_tree("clean", "Better")
     with pytest.raises(BenchmarkInputError, match="must be clean"):
         require_clean_tree("dirty", "Better")
+
+
+def test_source_identity_is_revalidated_after_children(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(benchmark, "_git_identity", lambda _path: "expected-commit")
+    monkeypatch.setattr(benchmark, "_tree_identity", lambda _path: "clean")
+    revalidate_source_identity(
+        tmp_path,
+        expected_commit="expected-commit",
+        expected_tree_state="clean",
+        source_name="Better",
+    )
+
+    monkeypatch.setattr(benchmark, "_tree_identity", lambda _path: "dirty")
+    with pytest.raises(BenchmarkInputError, match="changed during benchmark"):
+        revalidate_source_identity(
+            tmp_path,
+            expected_commit="expected-commit",
+            expected_tree_state="clean",
+            source_name="Better",
+        )
 
 
 def test_child_deadline_scales_to_the_permitted_sample_maximum() -> None:
