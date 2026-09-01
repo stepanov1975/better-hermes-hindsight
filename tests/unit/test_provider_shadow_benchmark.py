@@ -129,6 +129,14 @@ def test_fixture_validation_rejects_missing_feature_and_marker_in_query(tmp_path
     with pytest.raises(BenchmarkInputError, match="queries must not contain audit markers"):
         load_corpus(marker_in_query)
 
+    payload = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    payload["turns"][0]["assistant"] += " BH27-TIMELESS"
+    overlapping = tmp_path / "overlapping-marker.json"
+    overlapping.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(BenchmarkInputError, match="prefix overlap"):
+        load_corpus(overlapping)
+
 
 def test_fixture_validation_rejects_unknown_fields_and_duplicate_json_keys(tmp_path: Path) -> None:
     payload = json.loads(FIXTURE.read_text(encoding="utf-8"))

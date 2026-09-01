@@ -335,6 +335,10 @@ def load_corpus(path: Path) -> BenchmarkCorpus:
                 forbidden_markers=forbidden,
             )
         )
+    ordered_markers = sorted(markers_seen, key=len)
+    for index, marker in enumerate(ordered_markers):
+        if any(other.startswith(marker) for other in ordered_markers[index + 1 :]):
+            raise BenchmarkInputError("audit markers must not have prefix overlap")
     if readiness.expected_marker not in markers_seen:
         raise BenchmarkInputError("readiness label is not present in the corpus")
     return BenchmarkCorpus(
@@ -1254,7 +1258,7 @@ def _run_quality_child(
                     {"role": "assistant", "content": turn.assistant},
                 ],
             )
-            if manager.flush_pending(timeout=10.0) is not True:
+            if manager.flush_pending(timeout=_RETAIN_TIMEOUT_SECONDS) is not True:
                 raise BenchmarkInputError("Hermes did not admit a synthetic benchmark turn")
         if provider_name == "better":
             _wait_for_better_delivery(home)
