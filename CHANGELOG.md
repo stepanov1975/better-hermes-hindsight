@@ -6,6 +6,10 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ### Added
 
+- Added a weekly and manually dispatchable isolated live CI proof against the digest-pinned Hindsight
+  0.9.2 release image and current Hermes `main`, using an ephemeral datastore and deterministic mock LLM
+  while recording exact Better, Hermes, and Hindsight identities and exercising mission round-trip and
+  real-service error mapping alongside retain, restart recovery, recall, and cleanup.
 - Added default-off `better_hindsight_reflect`, a fixed-bank, principal-authorized, read-only model
   tool with independent query, deadline, raw-response, decoded-text, and serialized-output bounds.
   It returns only redacted Hindsight synthesis inside the existing untrusted historical-evidence

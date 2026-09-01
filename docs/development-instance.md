@@ -49,3 +49,19 @@ The test uses ordinary `try/finally` cleanup. If deletion or absence confirmatio
 ```
 
 When `BETTER_HINDSIGHT_REQUIRE_LIVE_PROOF=1`, a missing opt-in input is a failure rather than a skip. Otherwise the live test skips so normal deterministic development remains offline.
+
+## Automated compatibility proof
+
+The scheduled and manually dispatchable `Python 3.13 / Hindsight 0.9.2 live` CI job runs this same
+test against the release image pinned by digest in `.github/workflows/ci.yml`. The job uses Hindsight's
+real API, embedded PostgreSQL, local embeddings, and local reranker with its deterministic mock LLM,
+so it needs no third-party credentials. It checks out current Hermes `main` and records the exact
+Better commit, Hermes commit, Hindsight version response, and Hindsight image digest before testing.
+
+GitHub Actions owns the disposable service-container lifecycle. The test still creates and
+ownership-checks a random bank, deletes it in `finally`, and verifies absence; job teardown then removes
+the complete container and embedded datastore even when a test fails. This proves transport, schema,
+provider discovery, durable admission, restart recovery, remote convergence, current-query recall, and
+cleanup against the supported server release. It also verifies mission drift, confirmed apply, exact
+readback, and fixed adapter mapping for a real service-generated 404. It does not measure hosted-LLM
+quality, cost, or provider credentials.
