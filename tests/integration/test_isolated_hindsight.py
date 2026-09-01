@@ -1,9 +1,9 @@
 """Opt-in smoke test against an exact supported Hindsight environment.
 
-The test intentionally proves only the deployment's useful path: current Hermes
-discovers the provider, pending rows preserve their identities across a provider restart,
-delivery reaches a disposable bank, repeated turns get distinct identities, and current-query
-recall is useful. Unit and fake-service tests cover adversarial failure detail.
+The test proves the deployment's useful path plus the live mission and fixed error-mapping seams:
+current Hermes discovers the provider, pending rows preserve identity across a provider restart,
+delivery reaches a disposable bank, repeated turns get distinct identities, current-query recall is
+useful, mission updates get exact readback, and a real 404 maps to the fixed adapter category.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import sys
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote, urlsplit
@@ -26,7 +26,9 @@ import pytest
 from aiohttp import ClientSession, ClientTimeout
 
 from better_hermes_hindsight.canary import SUPPORTED_HINDSIGHT_API_VERSIONS
+from better_hermes_hindsight.client import HindsightClientError, create_hindsight_client
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
+from better_hermes_hindsight.management import apply_missions, check_missions
 from better_hermes_hindsight.outbox import OutboxRow, ProfileLockOwner, SQLiteOutbox
 from better_hermes_hindsight.retention import RetainedSegment, build_retained_segments
 from tests.integration.helpers import materialize_standard_plugin, write_host_selection
@@ -36,6 +38,8 @@ _RETAIN_TAGS = ("better-hindsight-live",)
 _SEGMENT_MAX_BYTES = 1024
 _DRAIN_TIMEOUT_SECONDS = 45.0
 _CHILD_TIMEOUT_SECONDS = 150.0
+_RETAIN_MISSION = "Retain only durable facts from this synthetic compatibility proof."
+_OBSERVATIONS_MISSION = "Consolidate only synthetic compatibility-proof facts."
 
 _LIVE_CHILD_SCRIPT = r"""
 import sys
@@ -250,6 +254,10 @@ def _profile_document(inputs: DevelopmentInputs) -> dict[str, Any]:
             "segment_max_bytes": _SEGMENT_MAX_BYTES,
             "tags": list(_RETAIN_TAGS),
         },
+        "missions": {
+            "retain_mission": _RETAIN_MISSION,
+            "observations_mission": _OBSERVATIONS_MISSION,
+        },
         "outbox": {
             "max_pending_rows": 100,
             "max_pending_bytes": 1_000_000,
@@ -272,6 +280,52 @@ def _prepare_home(inputs: DevelopmentInputs) -> tuple[Path, BetterHindsightConfi
     materialize_standard_plugin(source=ROOT, hermes_home=home)
     config = load_config(home, environ={"HINDSIGHT_API_KEY": inputs.api_key})
     return home, config
+
+
+def _assert_live_mission_round_trip(config: BetterHindsightConfig) -> None:
+    before = check_missions(config)
+    if before.exit_code != 1 or before.payload.get("result") not in {"missing", "drift"}:
+        raise AssertionError("new live-test bank did not report mission drift")
+
+    applied = apply_missions(config, confirmed=True)
+    if applied.exit_code != 0 or applied.payload != {
+        "command": "missions_apply",
+        "outcome": "verified_success",
+        "result": "ok",
+    }:
+        raise AssertionError("live mission apply did not return verified success")
+
+    after = check_missions(config)
+    if after.exit_code != 0 or after.payload != {
+        "command": "missions_check",
+        "observations_mission": "equal",
+        "result": "equal",
+        "retain_mission": "equal",
+    }:
+        raise AssertionError("live mission readback was not exactly equal")
+
+
+def _assert_live_error_mapping(config: BetterHindsightConfig) -> None:
+    async def probe() -> None:
+        error_config = replace(
+            config,
+            api_url=f"{config.api_url}/better-hindsight-live-error-probe",
+        )
+        client = create_hindsight_client(error_config)
+        try:
+            try:
+                await client.recall("synthetic live error-mapping probe")
+            except HindsightClientError as error:
+                if error.category != "recall_failed" or error.reason != "endpoint_not_found":
+                    raise AssertionError(
+                        "live service error mapped to an unexpected category"
+                    ) from None
+            else:
+                raise AssertionError("live service error probe unexpectedly succeeded")
+        finally:
+            await client.close()
+
+    asyncio.run(probe())
 
 
 def _start_manager(home: Path) -> tuple[Any, Any]:
@@ -471,6 +525,7 @@ def _run_live_child() -> int:
     barrier: ProfileLockOwner | None = None
     try:
         home, config = _prepare_home(inputs)
+        _assert_live_error_mapping(config)
         expected_count = _expected_segment_count((_SHORT_TURN, _LONG_TURN))
         repeated_short_count = _expected_segment_count((_SHORT_TURN,))
 
@@ -502,6 +557,7 @@ def _run_live_child() -> int:
         if len(replayed) != len(documents) + repeated_short_count:
             raise AssertionError("repeated completed turn created an unexpected document count")
 
+        _assert_live_mission_round_trip(config)
         result = {
             "documents": len(documents),
             "segments": len(expected),
