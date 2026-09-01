@@ -58,7 +58,9 @@ _DEFAULT_TAGS = ("better-hindsight-provider-shadow", "synthetic-only")
 _DEFAULT_TYPES = ("world", "experience", "observation")
 _DEFAULT_BUDGET = "high"
 _DEFAULT_MAX_TOKENS = 4096
-_CHILD_TIMEOUT_SECONDS = 900.0
+_RECALL_TIMEOUT_SECONDS = 5.0
+_RETAIN_TIMEOUT_SECONDS = 60.0
+_CHILD_MARGIN_SECONDS = 30.0
 _READINESS_TIMEOUT_SECONDS = 120.0
 _REPORT_SCHEMA_VERSION = 1
 
@@ -119,6 +121,7 @@ class LiveInputs:
     model_provider: str = ""
     model_id: str = ""
     model_build_id: str = ""
+    corpus_sha256: str = ""
     allowed_endpoints: tuple[str, ...] = ()
     samples_per_case: int = 1
 
@@ -170,6 +173,16 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, ob
             raise BenchmarkInputError("fixture contains a duplicate JSON key")
         result[key] = value
     return result
+
+
+def validate_corpus_digest(path: Path, expected_sha256: str) -> None:
+    """Bind a child process to the exact corpus bytes selected by its parent."""
+
+    if re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
+        raise BenchmarkInputError("parent corpus digest is invalid")
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual != expected_sha256:
+        raise BenchmarkInputError("corpus changed after the parent validated it")
 
 
 def load_corpus(path: Path) -> BenchmarkCorpus:
@@ -388,7 +401,7 @@ def provider_config(
             },
             "retain": {
                 "enabled": retention_enabled,
-                "timeout_seconds": 60.0,
+                "timeout_seconds": _RETAIN_TIMEOUT_SECONDS,
                 "segment_max_bytes": 65536,
                 "tags": list(_DEFAULT_TAGS),
             },
@@ -506,7 +519,7 @@ def collect_live_runs(
                 bank_id=bank.bank_id,
                 missions=corpus.missions,
                 retention_enabled=True,
-                recall_timeout_seconds=5.0,
+                recall_timeout_seconds=_RECALL_TIMEOUT_SECONDS,
             )
             home = homes_root / bank.provider
             results[bank.provider] = runner(corpus, inputs, bank, home, config)
@@ -565,6 +578,7 @@ def evaluate_provider(
     latencies: list[float] = []
     returned_bytes = 0
     samples_with_noise = 0
+    marker_free_output_samples = 0
     unexpected_hits = 0
     duplicate_hits = 0
 
@@ -595,17 +609,19 @@ def evaluate_provider(
         present = set(markers)
         expected = set(case.expected_markers)
         forbidden = set(case.forbidden_markers)
+        marker_free_output = context_bytes > 0 and not present
         if case.kind == "negative":
-            correct = not present
+            correct = not present and context_bytes == 0
             unexpected = len(markers)
         else:
             correct = expected.issubset(present) and not (forbidden & present)
             unexpected = sum(1 for marker in markers if marker not in expected)
         check_counts[case.kind] += 1
         correct_counts[case.kind] += int(correct)
-        if unexpected:
+        if unexpected or marker_free_output:
             samples_with_noise += 1
-            unexpected_hits += unexpected
+        marker_free_output_samples += int(marker_free_output)
+        unexpected_hits += unexpected
         duplicate_hits += max(0, len(markers) - len(present))
         returned_bytes += context_bytes
         latencies.append(elapsed_value)
@@ -632,6 +648,7 @@ def evaluate_provider(
             "samples": len(latencies),
         },
         "noise": {
+            "marker_free_output_samples": marker_free_output_samples,
             "returned_context_bytes": returned_bytes,
             "samples_with_noise": samples_with_noise,
             "unexpected_marker_hits": unexpected_hits,
@@ -664,18 +681,23 @@ def validate_fail_open_probe(raw: Mapping[str, object], *, provider: str) -> dic
     deadline_value = float(deadline)
     if deadline_value <= 0 or type(first) is not dict or type(retry) is not dict:
         raise BenchmarkInputError("fail-open probe shape is invalid")
-    if set(first) != {"context_empty", "elapsed_ms"} or set(retry) != {
+    if set(first) != {"context_empty", "elapsed_ms", "requests"} or set(retry) != {
         "context_empty",
         "elapsed_ms",
+        "requests",
     }:
         raise BenchmarkInputError("fail-open probe shape is invalid")
     first_elapsed = first.get("elapsed_ms")
     retry_elapsed = retry.get("elapsed_ms")
+    first_requests = first.get("requests")
+    retry_requests = retry.get("requests")
     if (
         not isinstance(first_elapsed, (int, float))
         or isinstance(first_elapsed, bool)
         or not isinstance(retry_elapsed, (int, float))
         or isinstance(retry_elapsed, bool)
+        or type(first_requests) is not int
+        or type(retry_requests) is not int
     ):
         raise BenchmarkInputError("fail-open probe did not return empty")
     first_value = float(first_elapsed)
@@ -683,6 +705,8 @@ def validate_fail_open_probe(raw: Mapping[str, object], *, provider: str) -> dic
     if (
         first.get("context_empty") is not True
         or retry.get("context_empty") is not True
+        or first_requests != 1
+        or retry_requests != 0
         or first_value < 0
         or retry_value < 0
     ):
@@ -696,6 +720,7 @@ def validate_fail_open_probe(raw: Mapping[str, object], *, provider: str) -> dic
         "deadline_ms": round(deadline_value, 3),
         "first_elapsed_ms": round(first_value, 3),
         "retry_elapsed_ms": round(retry_value, 3),
+        "backend_requests": {"first": first_requests, "retry": retry_requests},
     }
 
 
@@ -747,7 +772,7 @@ def build_identity_payload(
         },
         "corpus": {
             "id": corpus.corpus_id,
-            "sha256": _sha256_json(dataclasses.asdict(corpus)),
+            "sha256": inputs.corpus_sha256 or _sha256_json(dataclasses.asdict(corpus)),
         },
     }
 
@@ -936,6 +961,9 @@ class BankControl:
 
 class _HangingHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
+        server: Any = self.server
+        with server.request_lock:
+            server.request_count += 1
         time.sleep(3.0)
         with contextlib.suppress(OSError):
             self.send_response(504)
@@ -945,34 +973,50 @@ class _HangingHandler(http.server.BaseHTTPRequestHandler):
         del format, args
 
 
+class _CountingHangingServer(http.server.ThreadingHTTPServer):
+    def __init__(self) -> None:
+        super().__init__(("127.0.0.1", 0), _HangingHandler)
+        self.request_lock = threading.Lock()
+        self.request_count = 0
+
+
 @contextlib.contextmanager
 def _hanging_origin() -> Any:
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _HangingHandler)
+    server = _CountingHangingServer()
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     host_value, port = server.server_address[:2]
     host = host_value.decode("ascii") if isinstance(host_value, bytes) else host_value
+
+    def request_count() -> int:
+        with server.request_lock:
+            return server.request_count
+
     try:
-        yield f"http://{host}:{port}"
+        yield f"http://{host}:{port}", request_count
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5.0)
 
 
-def _write_private_json(path: Path, value: object) -> None:
+def _write_private_bytes(path: Path, encoded: bytes) -> None:
     parent_missing = not path.parent.exists()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if parent_missing:
         path.parent.chmod(0o700)
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
     descriptor = os.open(path, flags, 0o600)
     try:
-        os.write(descriptor, encoded.encode("utf-8"))
+        os.write(descriptor, encoded)
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _write_private_json(path: Path, value: object) -> None:
+    encoded = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    _write_private_bytes(path, encoded)
 
 
 def _load_control(path: Path) -> dict[str, object]:
@@ -1052,6 +1096,31 @@ def _stop_manager(provider_name: str, manager: Any, provider: Any) -> None:
         raise BenchmarkInputError("provider did not shut down cleanly") from failure
 
 
+def _outbox_is_drained(inspection: object) -> bool:
+    return bool(
+        getattr(inspection, "outbox", None) == "ready"
+        and getattr(inspection, "mismatch_count", -1) == 0
+        and getattr(inspection, "pending_count", -1) == 0
+        and getattr(inspection, "retry_count", -1) == 0
+        and getattr(inspection, "sending_count", -1) == 0
+    )
+
+
+def _wait_for_better_delivery(home: Path) -> None:
+    """Wait until every admitted Better segment has confirmed remote delivery."""
+
+    config_module = importlib.import_module("better_hermes_hindsight.config")
+    outbox_module = importlib.import_module("better_hermes_hindsight.outbox")
+    config = config_module.load_config(home)
+    deadline = time.monotonic() + _READINESS_TIMEOUT_SECONDS
+    while True:
+        if _outbox_is_drained(outbox_module.inspect_outbox(config)):
+            return
+        if time.monotonic() >= deadline:
+            raise BenchmarkInputError("Better did not confirm the complete synthetic corpus")
+        time.sleep(0.1)
+
+
 def _wait_for_visible_recall(manager: Any, corpus: BenchmarkCorpus, session_id: str) -> None:
     deadline = time.monotonic() + _READINESS_TIMEOUT_SECONDS
     while True:
@@ -1087,6 +1156,8 @@ def _run_quality_child(
             )
             if manager.flush_pending(timeout=10.0) is not True:
                 raise BenchmarkInputError("Hermes did not admit a synthetic benchmark turn")
+        if provider_name == "better":
+            _wait_for_better_delivery(home)
         _wait_for_visible_recall(manager, corpus, session_id)
         samples: list[dict[str, object]] = []
         for case in corpus.cases:
@@ -1126,10 +1197,10 @@ def _timeout_config(
         retain = config.get("retain")
         if type(recall) is not dict or type(retain) is not dict:
             raise BenchmarkInputError("Better timeout policy is invalid")
-        recall["timeout_seconds"] = 5.0
+        recall["timeout_seconds"] = _RECALL_TIMEOUT_SECONDS
         retain["enabled"] = False
     else:
-        config["timeout"] = 5
+        config["timeout"] = math.ceil(_RECALL_TIMEOUT_SECONDS)
         config["auto_retain"] = False
     return config
 
@@ -1138,7 +1209,7 @@ def _run_fail_open_child(
     provider_name: str, root: Path, base_config: Mapping[str, object]
 ) -> dict[str, object]:
     deadline_seconds = 0.25
-    with _hanging_origin() as origin:
+    with _hanging_origin() as (origin, request_count):
         home = root / "fail-open"
         home.mkdir(parents=True, mode=0o700)
         config = _timeout_config(provider_name, base_config, origin)
@@ -1157,16 +1228,26 @@ def _run_fail_open_child(
             if manager is None or provider is None:
                 raise BenchmarkInputError("timeout probe provider did not initialize")
             measurements: list[dict[str, object]] = []
-            for _attempt in range(2):
+            first_request_count = 0
+            for attempt in range(2):
                 started = time.monotonic()
                 context = manager.prefetch_all(
                     "Synthetic timeout probe with no retained data.",
                     session_id="timeout-probe",
                 )
+                if attempt == 1:
+                    time.sleep(0.05)
+                observed = request_count()
+                if attempt == 0:
+                    request_delta = observed
+                    first_request_count = observed
+                else:
+                    request_delta = observed - first_request_count
                 measurements.append(
                     {
                         "context_empty": context == "",
                         "elapsed_ms": (time.monotonic() - started) * 1000.0,
+                        "requests": request_delta,
                     }
                 )
             return {
@@ -1196,6 +1277,10 @@ def _child_main(control_path: Path, output_path: Path) -> int:
         config = control.get("config")
         if type(config) is not dict:
             raise BenchmarkInputError("child provider policy is invalid")
+        expected_corpus_sha256 = _require_nonempty_string(
+            os.environ.get("BH27_CORPUS_SHA256"), "corpus_sha256"
+        )
+        validate_corpus_digest(corpus_path, expected_corpus_sha256)
         corpus = load_corpus(corpus_path)
         samples_per_case = control.get("samples_per_case")
         if type(samples_per_case) is not int or not 1 <= samples_per_case <= 20:
@@ -1225,6 +1310,20 @@ def _child_main(control_path: Path, output_path: Path) -> int:
         return 1
 
 
+def _child_timeout_seconds(corpus: BenchmarkCorpus, samples_per_case: int) -> float:
+    """Bound a child from the permitted retain/recall operation budgets."""
+
+    retain_budget = len(corpus.turns) * _RETAIN_TIMEOUT_SECONDS
+    recall_budget = len(corpus.cases) * samples_per_case * _RECALL_TIMEOUT_SECONDS
+    return (
+        (2.0 * _READINESS_TIMEOUT_SECONDS)
+        + retain_budget
+        + recall_budget
+        + 15.0
+        + _CHILD_MARGIN_SECONDS
+    )
+
+
 def _subprocess_runner(
     corpus: BenchmarkCorpus,
     inputs: LiveInputs,
@@ -1247,12 +1346,13 @@ def _subprocess_runner(
             "samples_per_case": inputs.samples_per_case,
         },
     )
+    validate_corpus_digest(corpus_path, inputs.corpus_sha256)
     environment = clean_child_environment(
         inputs,
         bank,
         home,
         corpus_path=corpus_path,
-        corpus_sha256=hashlib.sha256(corpus_path.read_bytes()).hexdigest(),
+        corpus_sha256=inputs.corpus_sha256,
         inherited=os.environ,
     )
     completed = subprocess.run(
@@ -1268,7 +1368,7 @@ def _subprocess_runner(
         stdin=subprocess.DEVNULL,
         capture_output=True,
         text=True,
-        timeout=_CHILD_TIMEOUT_SECONDS,
+        timeout=_child_timeout_seconds(corpus, inputs.samples_per_case),
         check=False,
     )
     if completed.returncode != 0 or not output.is_file():
@@ -1357,6 +1457,13 @@ def _tree_identity(path: Path) -> str:
     return "clean" if not completed.stdout else "dirty"
 
 
+def require_clean_tree(tree_state: str, source_name: str) -> None:
+    """Require immutable source inputs rather than incomplete dirty-tree digests."""
+
+    if tree_state != "clean":
+        raise BenchmarkInputError(f"{source_name} source tree must be clean")
+
+
 def _package_version(distribution: str) -> str:
     try:
         return importlib.metadata.version(distribution)
@@ -1382,44 +1489,57 @@ def _run_parent(arguments: argparse.Namespace) -> int:
     actual_hermes_commit = _git_identity(hermes_source)
     if actual_hermes_commit != arguments.hermes_commit:
         raise BenchmarkInputError("Hermes source commit does not match the opt-in")
+    better_commit = _git_identity(ROOT)
+    better_tree_state = _tree_identity(ROOT)
+    hermes_tree_state = _tree_identity(hermes_source)
+    require_clean_tree(better_tree_state, "Better")
+    require_clean_tree(hermes_tree_state, "Hermes")
 
-    corpus_path = arguments.corpus.resolve()
-    corpus = load_corpus(corpus_path)
-    inputs = LiveInputs(
-        api_url=api_url,
-        api_key=api_key,
-        expected_hindsight_version=arguments.expected_version,
-        hermes_python=hermes_python,
-        hermes_source=hermes_source,
-        hindsight_build_id=_require_nonempty_string(arguments.hindsight_build, "hindsight_build"),
-        model_provider=_require_nonempty_string(arguments.model_provider, "model_provider"),
-        model_id=_require_nonempty_string(arguments.model_id, "model_id"),
-        model_build_id=_require_nonempty_string(arguments.model_build, "model_build"),
-        allowed_endpoints=tuple(arguments.allow_endpoint),
-        samples_per_case=arguments.samples_per_case,
-    )
-    control = BankControl(inputs)
-    server_version = control.verify_version()
-
-    def runner(
-        loaded: BenchmarkCorpus,
-        current_inputs: LiveInputs,
-        bank: OwnedBank,
-        home: Path,
-        config: Mapping[str, object],
-    ) -> Mapping[str, object]:
-        return _subprocess_runner(
-            loaded,
-            current_inputs,
-            bank,
-            home,
-            config,
-            corpus_path=corpus_path,
-        )
-
+    source_corpus_path = arguments.corpus.resolve()
+    corpus_bytes = source_corpus_path.read_bytes()
+    corpus_sha256 = hashlib.sha256(corpus_bytes).hexdigest()
     with tempfile.TemporaryDirectory(prefix="bh27-provider-shadow-") as raw_temp:
         homes_root = Path(raw_temp)
         homes_root.chmod(0o700)
+        corpus_path = homes_root / "corpus.json"
+        _write_private_bytes(corpus_path, corpus_bytes)
+        validate_corpus_digest(corpus_path, corpus_sha256)
+        corpus = load_corpus(corpus_path)
+        inputs = LiveInputs(
+            api_url=api_url,
+            api_key=api_key,
+            expected_hindsight_version=arguments.expected_version,
+            hermes_python=hermes_python,
+            hermes_source=hermes_source,
+            hindsight_build_id=_require_nonempty_string(
+                arguments.hindsight_build, "hindsight_build"
+            ),
+            model_provider=_require_nonempty_string(arguments.model_provider, "model_provider"),
+            model_id=_require_nonempty_string(arguments.model_id, "model_id"),
+            model_build_id=_require_nonempty_string(arguments.model_build, "model_build"),
+            corpus_sha256=corpus_sha256,
+            allowed_endpoints=tuple(arguments.allow_endpoint),
+            samples_per_case=arguments.samples_per_case,
+        )
+        control = BankControl(inputs)
+        server_version = control.verify_version()
+
+        def runner(
+            loaded: BenchmarkCorpus,
+            current_inputs: LiveInputs,
+            bank: OwnedBank,
+            home: Path,
+            config: Mapping[str, object],
+        ) -> Mapping[str, object]:
+            return _subprocess_runner(
+                loaded,
+                current_inputs,
+                bank,
+                home,
+                config,
+                corpus_path=corpus_path,
+            )
+
         raw_runs = collect_live_runs(corpus, inputs, control, runner, homes_root)
 
     provider_reports: dict[str, Mapping[str, object]] = {}
@@ -1438,16 +1558,16 @@ def _run_parent(arguments: argparse.Namespace) -> int:
         )
 
     better_identity = {
-        "git_commit": _git_identity(ROOT),
+        "git_commit": better_commit,
         "package_version": _package_version("better-hermes-hindsight"),
         "patch_sha256": _patch_identity(ROOT),
-        "tree_state": _tree_identity(ROOT),
+        "tree_state": better_tree_state,
     }
     hermes_identity = {
         "git_commit": actual_hermes_commit,
         "package_version": _package_version("hermes-agent"),
         "patch_sha256": _patch_identity(hermes_source),
-        "tree_state": _tree_identity(hermes_source),
+        "tree_state": hermes_tree_state,
     }
     identities = build_identity_payload(
         corpus,
@@ -1464,7 +1584,7 @@ def _run_parent(arguments: argparse.Namespace) -> int:
                 "redacted-profile",
                 corpus.missions,
                 retention_enabled=True,
-                recall_timeout_seconds=5.0,
+                recall_timeout_seconds=_RECALL_TIMEOUT_SECONDS,
             )
         )
         for provider in _PROVIDER_NAMES

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -11,6 +13,8 @@ from scripts.benchmark_provider_shadow import (
     BenchmarkInputError,
     LiveInputs,
     OwnedBank,
+    _child_timeout_seconds,
+    _outbox_is_drained,
     _write_public_report,
     build_identity_payload,
     build_report,
@@ -19,7 +23,9 @@ from scripts.benchmark_provider_shadow import (
     evaluate_provider,
     load_corpus,
     provider_config,
+    require_clean_tree,
     selected_executable,
+    validate_corpus_digest,
     validate_endpoint,
     validate_fail_open_probe,
     validate_owned_profile,
@@ -63,7 +69,7 @@ def _successful_samples(corpus: Any) -> list[dict[str, object]]:
         samples.append(
             {
                 "case_id": case.case_id,
-                "context_bytes": 100 + index,
+                "context_bytes": 0 if case.kind == "negative" else 100 + index,
                 "elapsed_ms": float(index),
                 "markers": markers,
             }
@@ -74,10 +80,10 @@ def _successful_samples(corpus: Any) -> list[dict[str, object]]:
 def _probe(provider: str) -> dict[str, object]:
     return {
         "deadline_ms": 250.0,
-        "first": {"context_empty": True, "elapsed_ms": 260.0},
+        "first": {"context_empty": True, "elapsed_ms": 260.0, "requests": 1},
         "mode": "fail_open",
         "provider": provider,
-        "retry": {"context_empty": True, "elapsed_ms": 1.0},
+        "retry": {"context_empty": True, "elapsed_ms": 1.0, "requests": 0},
         "status": "ok",
     }
 
@@ -157,7 +163,8 @@ def test_metrics_include_correctness_noise_and_nearest_rank_percentiles() -> Non
     }
     assert metrics["latency_ms"] == {"p50": 4.0, "p95": 8.0, "samples": 8}
     assert metrics["noise"] == {
-        "returned_context_bytes": 836,
+        "marker_free_output_samples": 0,
+        "returned_context_bytes": 728,
         "samples_with_noise": 2,
         "unexpected_marker_hits": 2,
     }
@@ -172,6 +179,23 @@ def test_metrics_include_correctness_noise_and_nearest_rank_percentiles() -> Non
     }
 
 
+def test_negative_case_rejects_marker_free_recalled_output() -> None:
+    corpus = load_corpus(FIXTURE)
+    samples = _successful_samples(corpus)
+    negative = next(sample for sample in samples if sample["case_id"] == "negative-lighthouse")
+    negative["markers"] = []
+    negative["context_bytes"] = 42
+
+    metrics = evaluate_provider(corpus, samples, _probe("better"), provider="better")
+
+    correctness = cast(dict[str, object], metrics["correctness"])
+    negative_correctness = cast(dict[str, object], correctness["negative"])
+    noise = cast(dict[str, object], metrics["noise"])
+    assert negative_correctness["correct"] == 0
+    assert negative_correctness["accuracy"] == 0.0
+    assert noise["marker_free_output_samples"] == 1
+
+
 def test_fail_open_probe_contract_is_exact_and_bounded() -> None:
     validated = validate_fail_open_probe(_probe("bundled"), provider="bundled")
     assert validated["status"] == "pass"
@@ -179,7 +203,7 @@ def test_fail_open_probe_contract_is_exact_and_bounded() -> None:
     assert validated["retry_returned_empty"] is True
 
     late = _probe("bundled")
-    late["first"] = {"context_empty": True, "elapsed_ms": 751.0}
+    late["first"] = {"context_empty": True, "elapsed_ms": 751.0, "requests": 1}
     with pytest.raises(BenchmarkInputError, match="fail-open probe exceeded its bound"):
         validate_fail_open_probe(late, provider="bundled")
 
@@ -187,6 +211,11 @@ def test_fail_open_probe_contract_is_exact_and_bounded() -> None:
     extra["endpoint"] = "https://private.invalid"
     with pytest.raises(BenchmarkInputError, match="fail-open probe shape is invalid"):
         validate_fail_open_probe(extra, provider="bundled")
+
+    repeated_request = _probe("bundled")
+    repeated_request["retry"] = {"context_empty": True, "elapsed_ms": 1.0, "requests": 1}
+    with pytest.raises(BenchmarkInputError, match="fail-open probe did not return empty"):
+        validate_fail_open_probe(repeated_request, provider="bundled")
 
 
 def test_report_shape_is_public_safe_and_contains_human_summary(tmp_path: Path) -> None:
@@ -440,3 +469,47 @@ def test_public_report_does_not_repermission_existing_parent(tmp_path: Path) -> 
 
     assert parent.stat().st_mode & 0o777 == 0o755
     assert output.stat().st_mode & 0o777 == 0o600
+
+
+def test_child_validates_parent_corpus_digest(tmp_path: Path) -> None:
+    corpus = tmp_path / "corpus.json"
+    corpus.write_bytes(FIXTURE.read_bytes())
+    digest = hashlib.sha256(corpus.read_bytes()).hexdigest()
+
+    validate_corpus_digest(corpus, digest)
+    corpus.write_text("{}", encoding="utf-8")
+
+    with pytest.raises(BenchmarkInputError, match="corpus changed"):
+        validate_corpus_digest(corpus, digest)
+
+
+def test_source_identity_requires_clean_trees() -> None:
+    require_clean_tree("clean", "Better")
+    with pytest.raises(BenchmarkInputError, match="must be clean"):
+        require_clean_tree("dirty", "Better")
+
+
+def test_child_deadline_scales_to_the_permitted_sample_maximum() -> None:
+    corpus = load_corpus(FIXTURE)
+    assert _child_timeout_seconds(corpus, 20) > 1_600.0
+    assert _child_timeout_seconds(corpus, 20) > _child_timeout_seconds(corpus, 1)
+
+
+def test_better_outbox_drain_requires_every_state_to_be_empty() -> None:
+    drained = SimpleNamespace(
+        outbox="ready",
+        mismatch_count=0,
+        pending_count=0,
+        retry_count=0,
+        sending_count=0,
+    )
+    sending = SimpleNamespace(
+        outbox="ready",
+        mismatch_count=0,
+        pending_count=0,
+        retry_count=0,
+        sending_count=1,
+    )
+
+    assert _outbox_is_drained(drained) is True
+    assert _outbox_is_drained(sending) is False

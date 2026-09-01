@@ -24,7 +24,7 @@ For each provider, the public report includes:
 - first-call timeout/fail-open behavior plus the immediate retry;
 - explicit `unavailable` usage/cost telemetry when Hermes exposes none.
 
-The report pins the synthetic corpus, mission texts, Better and Hermes source identities, Hindsight API/build identity, model identity, and aligned policy hashes.
+The report pins the synthetic corpus, mission texts, clean Better and Hermes source identities, Hindsight API/build identity, model identity, and aligned policy hashes. Dirty source trees are rejected because untracked imports cannot be represented by a commit plus patch digest.
 
 ## Safety boundary
 
@@ -33,6 +33,7 @@ The report pins the synthetic corpus, mission texts, Better and Hermes source id
 - Loopback endpoints are allowed directly. A non-loopback origin must also be passed exactly with `--allow-endpoint`; URL paths, credentials, queries, fragments, and redirects are rejected.
 - The API key is read only from `HINDSIGHT_API_KEY`; it is never accepted on the command line or written to config files.
 - Child processes receive a narrow environment and a private temporary Hermes home.
+- Each child verifies the parent-selected corpus digest before loading it, and the child deadline scales with the permitted sample count and operation budgets.
 - Both providers use separate randomly named banks. Creation happens before either provider run so cleanup covers partial failures; deletion revalidates the ownership marker and verifies absence.
 - The final JSON and human summary contain aggregate evidence only—no query text, recalled text, audit markers, endpoint, credentials, or bank identifiers.
 
@@ -81,7 +82,7 @@ For an explicitly isolated non-loopback service, add the same origin as an allow
 
 ## Interpreting results
 
-A successful run proves that both actual Hermes provider lifecycles could retain, recall, fail open under the bounded host timeout, retry without queueing another blocked call, and clean up owned test state. Quality scores remain descriptive evidence for the pinned corpus and model—not a universal claim that one provider is superior.
+A successful run proves that both actual Hermes provider lifecycles could retain the complete corpus, recall, fail open under the bounded host timeout, retry without sending another backend request, and clean up owned test state. Quality scores remain descriptive evidence for the pinned corpus and model—not a universal claim that one provider is superior.
 
 The mock provider can legitimately score zero when it does not preserve the fixture's audit labels. That is a model-quality result, not an orchestration failure, as long as both provider paths completed, fail-open probes passed, and cleanup verified.
 
