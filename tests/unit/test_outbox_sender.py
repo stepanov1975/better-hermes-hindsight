@@ -796,6 +796,42 @@ def test_guarded_completion_deletes_only_the_exact_sending_attempt(tmp_path: Pat
     assert rows == ()
 
 
+def test_confirmed_completion_overwrites_payload_bytes_in_the_outbox_database(
+    tmp_path: Path,
+) -> None:
+    marker = "better-hindsight-secure-delete-probe-91c90e7b"
+    config = _config(tmp_path, segment_max_bytes=65_536)
+    segments = build_retained_segments(
+        session_id="secure-delete-probe",
+        user_content=(marker + " synthetic payload ") * 120,
+        assistant_content="synthetic acknowledgement",
+        tags=("project:synthetic",),
+        segment_max_bytes=65_536,
+    )
+    assert len(segments) == 1
+    outbox = SQLiteOutbox.open(config)
+    try:
+        assert outbox.admit(segments).accepted
+        marker_bytes = marker.encode("utf-8")
+        assert marker_bytes in config.outbox.path.read_bytes()
+        owner = _acquire(outbox)
+        try:
+            claim = outbox.claim_due(owner, now=time.time() + 1.0)
+            assert claim.row is not None
+            completed = outbox.complete_claim(
+                owner,
+                document_id=claim.row.document_id,
+                attempt_count=claim.row.attempt_count,
+            )
+        finally:
+            owner.release()
+    finally:
+        outbox.close()
+
+    assert completed.status is outbox_module.OutboxTransitionStatus.APPLIED
+    assert marker_bytes not in config.outbox.path.read_bytes()
+
+
 def test_guarded_failure_reschedule_uses_fixed_category_and_due_deadline(tmp_path: Path) -> None:
     config = _config(tmp_path)
     segment = _single_segment("retry")

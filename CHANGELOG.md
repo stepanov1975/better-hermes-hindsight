@@ -22,12 +22,18 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
   `resolve_entities` field.
 - Added a strict privacy-preserving recall-quality evaluator with a synthetic regression fixture and a
   read-only comparison mode that changes only `prefer_observations`.
+- Added a release-gated, public-safe bundled-vs-Better provider shadow benchmark with separate owned
+  disposable banks, aligned synthetic corpus/missions/policies, aggregate quality and latency metrics,
+  bounded host fail-open evidence, immutable source/model/build identities, and verified cleanup.
 - Added an owner-only historical-query collector and private live-response capture so real-bank
   evaluations can be labeled and scored without committing or printing queries, recalled text, IDs,
   or labels.
 
 ### Fixed
 
+- Enable SQLite `secure_delete` on every outbox writer connection so confirmed-row deletion
+  overwrites payload cells in the live database, document the remaining storage and backup residue
+  boundary, and correct the outbox journal-mode description from WAL to the actual rollback journal.
 - Reduced model-facing output to actionable state: recall omits internal score and source-count
   metadata, explicit recall returns structured memories, retain returns one canonical local-admission
   outcome, and status no longer exposes operator-only diagnostic records or healthy-path internals.

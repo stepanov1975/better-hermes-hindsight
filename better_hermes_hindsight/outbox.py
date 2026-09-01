@@ -351,6 +351,7 @@ class SQLiteOutbox:
                 database_identity,
             )
             connection.execute(f"PRAGMA busy_timeout = {config.outbox.busy_timeout_ms}")
+            _enable_secure_delete(connection)
             _initialize_schema(connection)
             _revalidate_open_paths(
                 config.hermes_home,
@@ -1347,6 +1348,14 @@ def _connect_existing_database(
         isolation_level=None,
         check_same_thread=False,
     )
+
+
+def _enable_secure_delete(connection: sqlite3.Connection) -> None:
+    """Overwrite deleted outbox cells on this writer connection when SQLite supports it."""
+
+    row = connection.execute("PRAGMA secure_delete = ON").fetchone()
+    if row != (1,):
+        raise OSError
 
 
 def _set_private_file_mode(path: Path) -> None:

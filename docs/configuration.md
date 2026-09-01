@@ -341,10 +341,12 @@ finalization, or another local failure fails open for the conversation and emits
 `Better Hindsight local retention admission was rejected.` The warning contains no turn payload,
 session identifier, endpoint, bank, credential, or path.
 
-The Hermes-home-local outbox uses private SQLite schema version 1. A new/version-0 database is initialized
-to v1, reopening v1 is idempotent, and unknown nonzero versions are rejected without an invented
-legacy migration. On the sender/write path, the configured path is revalidated inside `hermes_home`
-when opened, including symlink escapes. The pre-created database is opened existing-only, and its
+The Hermes-home-local outbox uses private SQLite schema version 1 with SQLite's default `DELETE`
+rollback journal and `secure_delete=ON` on every application writer connection. A new/version-0
+database is initialized to v1, reopening v1 is idempotent, and unknown nonzero versions are rejected
+without an invented legacy migration. On the sender/write path, the configured path is revalidated
+inside `hermes_home` when opened, including symlink escapes. The pre-created database is opened
+existing-only, and its
 no-follow device/inode identity is checked immediately after connection but before schema writes and
 again after initialization. Newly created outbox directories use mode `0700` on POSIX; the database
 and reserved ownership lock file use `0600`. Pre-existing parent-directory modes are not changed, and

@@ -106,7 +106,7 @@ or retrieval quality.
 | Installation target | Standard Git plugin for a supported external Hindsight 0.8.5, 0.9.1, or 0.9.2 service | Included with Hermes; interactive setup supports Hindsight Cloud, a local embedded service, or an external service |
 | Automatic recall | When enabled, recalls against the current user query, synchronously under character, token, response-size, and total-time bounds | Background previous-query recall by default; optional synchronous current-query recall |
 | Recalled context | Complete byte-bounded JSONL records with available type and time metadata; redacted and explicitly framed as stale, untrusted evidence | Formatted memory text or a reflect synthesis with configurable preamble, token budget, types, and tags |
-| Automatic retention | Opt-in; authorized, eligible turns are admitted all-or-none to a bounded SQLite WAL outbox before asynchronous delivery | Enabled by default; completed turns enter a process-local FIFO writer and then optional server-side async processing |
+| Automatic retention | Opt-in; authorized, eligible turns are admitted all-or-none to a bounded private SQLite rollback-journal outbox before asynchronous delivery | Enabled by default; completed turns enter a process-local FIFO writer and then optional server-side async processing |
 | Retained payload | Pattern-redacted, independently decodable event records with a per-admission event ID and occurrence time, hashed session identity, and bounded provenance | Labeled user/assistant transcripts with richer session, platform, user, chat, and lineage metadata |
 | Crash behavior before remote delivery | Committed outbox rows survive process restart and are retried | Locally queued writer jobs are not persistent; shutdown drains them only within a bounded wait |
 | Retry/document strategy | Stable IDs for every admitted occurrence segment, `update_mode="replace"`, destination binding, and bounded retry backoff | Session-scoped `update_mode="append"` where supported, with a process-unique document fallback for older APIs |
@@ -245,6 +245,10 @@ Use the [recall-quality evaluator](docs/recall-quality-evaluation.md) for synthe
 or an owner-only historical-query capture and read-only comparison of the configured real bank with
 `prefer_observations=true`. Reusable collection and capture code is tracked; private queries,
 responses, IDs, and labels remain under the ignored `.hermes/` directory.
+
+Use the [provider shadow benchmark](docs/provider-shadow-benchmark.md) for a release-gated,
+public-safe comparison of the actual bundled and Better provider lifecycles against separate
+disposable banks and the same synthetic corpus.
 
 See [implementation status](IMPLEMENTATION.md), [design](DESIGN.md), [contributing](CONTRIBUTING.md),
 and [GitHub security](docs/github-security.md).
