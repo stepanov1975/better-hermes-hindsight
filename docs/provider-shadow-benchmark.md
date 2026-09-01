@@ -1,0 +1,88 @@
+# Bundled-vs-Better provider shadow benchmark
+
+Use this benchmark for a release-gated, end-to-end comparison of Hermes' bundled Hindsight memory provider and Better Hindsight. It retains the same synthetic corpus through each real provider lifecycle into separate disposable Hindsight banks, then runs the same current-query recall cases.
+
+It is intentionally **not** a default CI job. A meaningful quality comparison needs an isolated live Hindsight service and a representative model, which can be nondeterministic and incur model cost. The deterministic Hindsight mock provider is useful only to prove the benchmark's mechanics.
+
+## What it measures
+
+The versioned fixture at `tests/fixtures/provider_shadow_benchmark.json` covers:
+
+- timeless facts and explicitly dated events;
+- relative-time phrasing;
+- repeated identical events;
+- cross-turn pronouns;
+- stale facts followed by updates;
+- prompt-injection-like text retained only as untrusted synthetic data;
+- a negative case with no matching memory.
+
+For each provider, the public report includes:
+
+- factual, temporal, and negative-case accuracy;
+- p50 and p95 recall latency;
+- aggregate irrelevant-result and duplicate-result counts;
+- first-call timeout/fail-open behavior plus the immediate retry;
+- explicit `unavailable` usage/cost telemetry when Hermes exposes none.
+
+The report pins the synthetic corpus, mission texts, Better and Hermes source identities, Hindsight API/build identity, model identity, and aligned policy hashes.
+
+## Safety boundary
+
+- Use an isolated non-production Hindsight service and datastore. Never point this benchmark at a service that contains real memory.
+- Writes require `BETTER_HINDSIGHT_ALLOW_BENCHMARK_WRITES=1`.
+- Loopback endpoints are allowed directly. A non-loopback origin must also be passed exactly with `--allow-endpoint`; URL paths, credentials, queries, fragments, and redirects are rejected.
+- The API key is read only from `HINDSIGHT_API_KEY`; it is never accepted on the command line or written to config files.
+- Child processes receive a narrow environment and a private temporary Hermes home.
+- Both providers use separate randomly named banks. Creation happens before either provider run so cleanup covers partial failures; deletion revalidates the ownership marker and verifies absence.
+- The final JSON and human summary contain aggregate evidence only—no query text, recalled text, audit markers, endpoint, credentials, or bank identifiers.
+
+## Prepare the selected Hermes interpreter
+
+The exact Python executable must be the Hermes interpreter under test. It must be able to import this Better Hindsight checkout, the selected Hermes source tree, and the bundled provider's declared client dependency:
+
+```bash
+uv pip install --python /path/to/hermes/python "hindsight-client>=0.6.1"
+```
+
+Record the exact Hermes commit and the immutable Hindsight build identifier before running. For a container, use its digest rather than a mutable tag. Record the actual model provider, model ID, and model build/revision; these values are operator-declared because the provider lifecycle does not expose them.
+
+## Run
+
+```bash
+export HINDSIGHT_API_KEY='[REDACTED]'
+export BETTER_HINDSIGHT_ALLOW_BENCHMARK_WRITES=1
+
+HERMES_SOURCE=/path/to/hermes-agent
+HERMES_PYTHON=/path/to/hermes/python
+HERMES_COMMIT="$(git -C "$HERMES_SOURCE" rev-parse HEAD)"
+
+"$HERMES_PYTHON" scripts/benchmark_provider_shadow.py \
+  --api-url http://127.0.0.1:8888 \
+  --expected-version 0.9.2 \
+  --hermes-python "$HERMES_PYTHON" \
+  --hermes-source "$HERMES_SOURCE" \
+  --hermes-commit "$HERMES_COMMIT" \
+  --hindsight-build 'sha256:<immutable-image-digest>' \
+  --model-provider '<provider>' \
+  --model-id '<model>' \
+  --model-build '<revision>' \
+  --samples-per-case 3 \
+  --output /tmp/provider-shadow-report.json
+```
+
+For an explicitly isolated non-loopback service, add the same origin as an allowlist entry:
+
+```bash
+  --api-url https://isolated-hindsight.example.test \
+  --allow-endpoint https://isolated-hindsight.example.test
+```
+
+`--samples-per-case` accepts 1–20. Use the same value, service build, model, missions, and source commits when comparing runs.
+
+## Interpreting results
+
+A successful run proves that both actual Hermes provider lifecycles could retain, recall, fail open under the bounded host timeout, retry without queueing another blocked call, and clean up owned test state. Quality scores remain descriptive evidence for the pinned corpus and model—not a universal claim that one provider is superior.
+
+The mock provider can legitimately score zero when it does not preserve the fixture's audit labels. That is a model-quality result, not an orchestration failure, as long as both provider paths completed, fail-open probes passed, and cleanup verified.
+
+The benchmark reports usage/cost as unavailable unless provider interfaces expose attributable telemetry. It never estimates or fabricates model cost.

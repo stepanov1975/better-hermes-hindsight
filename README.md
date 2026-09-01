@@ -246,6 +246,10 @@ or an owner-only historical-query capture and read-only comparison of the config
 `prefer_observations=true`. Reusable collection and capture code is tracked; private queries,
 responses, IDs, and labels remain under the ignored `.hermes/` directory.
 
+Use the [provider shadow benchmark](docs/provider-shadow-benchmark.md) for a release-gated,
+public-safe comparison of the actual bundled and Better provider lifecycles against separate
+disposable banks and the same synthetic corpus.
+
 See [implementation status](IMPLEMENTATION.md), [design](DESIGN.md), [contributing](CONTRIBUTING.md),
 and [GitHub security](docs/github-security.md).
 
