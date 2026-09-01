@@ -271,6 +271,13 @@ def test_report_shape_is_public_safe_and_contains_human_summary(tmp_path: Path) 
     assert "context-large" in serialized
     assert "samples" in serialized
 
+    short_query_corpus = replace(
+        corpus,
+        cases=(replace(corpus.cases[0], prompt="pass"), *corpus.cases[1:]),
+    )
+    short_query_report = build_report(short_query_corpus, identities, provider_reports)
+    assert short_query_report["result"] == "pass"
+
     custom_report = build_report(
         corpus,
         identities,
@@ -557,6 +564,18 @@ def test_public_report_does_not_repermission_existing_parent(tmp_path: Path) -> 
 
     assert parent.stat().st_mode & 0o777 == 0o755
     assert output.stat().st_mode & 0o777 == 0o600
+
+
+def test_public_report_refuses_symlink_destination(tmp_path: Path) -> None:
+    target = tmp_path / "protected.json"
+    target.write_text("protected", encoding="utf-8")
+    output = tmp_path / "report.json"
+    output.symlink_to(target)
+
+    with pytest.raises(BenchmarkInputError, match="not a regular file"):
+        _write_public_report(output, {"schema_version": 1, "result": "pass"})
+
+    assert target.read_text(encoding="utf-8") == "protected"
 
 
 def test_child_validates_parent_corpus_digest(tmp_path: Path) -> None:

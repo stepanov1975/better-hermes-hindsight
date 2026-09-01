@@ -17,12 +17,12 @@ import dataclasses
 import hashlib
 import http.server
 import importlib
-import importlib.metadata
 import ipaddress
 import json
 import math
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -861,7 +861,7 @@ def build_report(
     }
     report["human_summary"] = human_summary(report)
     serialized = json.dumps(report, allow_nan=False, sort_keys=True)
-    forbidden_values = (*corpus.all_markers, *(case.prompt for case in corpus.cases))
+    forbidden_values = corpus.all_markers
     if any(value in serialized for value in forbidden_values):
         raise BenchmarkInputError("public report contains synthetic source text")
     forbidden_key_prefixes = ("query", "markers", "context", "bank", "api_url")
@@ -1061,13 +1061,53 @@ def _write_private_bytes(path: Path, encoded: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if parent_missing:
         path.parent.chmod(0o700)
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    descriptor = os.open(path, flags, 0o600)
+    if not path.name:
+        raise BenchmarkInputError("private output path is invalid")
+
+    parent_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        os.write(descriptor, encoded)
-        os.fsync(descriptor)
+        parent_descriptor = os.open(path.parent, parent_flags)
+    except OSError as exc:
+        raise BenchmarkInputError("private output parent is unsafe") from exc
+
+    temporary_name = f".{path.name}.{uuid.uuid4().hex}.tmp"
+    temporary_created = False
+    try:
+        try:
+            existing = os.stat(path.name, dir_fd=parent_descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            if not stat.S_ISREG(existing.st_mode):
+                raise BenchmarkInputError("private output path is not a regular file")
+
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(temporary_name, flags, 0o600, dir_fd=parent_descriptor)
+        temporary_created = True
+        try:
+            os.fchmod(descriptor, 0o600)
+            remaining = memoryview(encoded)
+            while remaining:
+                written = os.write(descriptor, remaining)
+                if written <= 0:
+                    raise OSError("private output write made no progress")
+                remaining = remaining[written:]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.replace(
+            temporary_name,
+            path.name,
+            src_dir_fd=parent_descriptor,
+            dst_dir_fd=parent_descriptor,
+        )
+        temporary_created = False
+        os.fsync(parent_descriptor)
     finally:
-        os.close(descriptor)
+        if temporary_created:
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(temporary_name, dir_fd=parent_descriptor)
+        os.close(parent_descriptor)
 
 
 def _write_private_json(path: Path, value: object) -> None:
@@ -1543,13 +1583,6 @@ def require_clean_tree(tree_state: str, source_name: str) -> None:
         raise BenchmarkInputError(f"{source_name} source tree must be clean")
 
 
-def _package_version(distribution: str) -> str:
-    try:
-        return importlib.metadata.version(distribution)
-    except importlib.metadata.PackageNotFoundError:
-        return "source-checkout"
-
-
 def _interpreter_package_version(executable: Path, distribution: str) -> str:
     completed = subprocess.run(
         [
@@ -1585,6 +1618,8 @@ def _run_parent(arguments: argparse.Namespace) -> int:
     if not hermes_python.is_file() or not os.access(hermes_python, os.X_OK):
         raise BenchmarkInputError("selected Hermes Python is not executable")
     hindsight_client_version = _interpreter_package_version(hermes_python, "hindsight-client")
+    better_package_version = _interpreter_package_version(hermes_python, "better-hermes-hindsight")
+    hermes_package_version = _interpreter_package_version(hermes_python, "hermes-agent")
     hermes_source = arguments.hermes_source.resolve()
     actual_hermes_commit = _git_identity(hermes_source)
     if actual_hermes_commit != arguments.hermes_commit:
@@ -1701,13 +1736,13 @@ def _run_parent(arguments: argparse.Namespace) -> int:
 
     better_identity = {
         "git_commit": better_commit,
-        "package_version": _package_version("better-hermes-hindsight"),
+        "package_version": better_package_version,
         "patch_sha256": _patch_identity(ROOT),
         "tree_state": better_tree_state,
     }
     hermes_identity = {
         "git_commit": actual_hermes_commit,
-        "package_version": _package_version("hermes-agent"),
+        "package_version": hermes_package_version,
         "patch_sha256": _patch_identity(hermes_source),
         "tree_state": hermes_tree_state,
     }
@@ -1738,7 +1773,7 @@ def _run_parent(arguments: argparse.Namespace) -> int:
         provider_reports,
         corpus_provenance=corpus_provenance,
     )
-    _write_public_report(arguments.output.resolve(), report)
+    _write_public_report(arguments.output.expanduser().absolute(), report)
     print(human_summary(report))
     return 0
 

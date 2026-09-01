@@ -24,7 +24,7 @@ For each provider, the public report includes:
 - first-call timeout/fail-open behavior plus the immediate retry;
 - explicit `unavailable` usage/cost telemetry when Hermes exposes none.
 
-The report pins the synthetic corpus, mission texts, clean Better and Hermes source identities, the bundled interpreter's `hindsight-client` version, Hindsight API/build identity, model identity, and aligned policy hashes. Dirty source trees are rejected because untracked imports cannot be represented by a commit plus patch digest.
+The report pins the synthetic corpus, mission texts, clean Better and Hermes source identities and selected-interpreter package versions, the bundled interpreter's `hindsight-client` version, Hindsight API/build identity, model identity, and aligned policy hashes. Dirty source trees are rejected because untracked imports cannot be represented by a commit plus patch digest.
 
 ## Safety boundary
 
@@ -36,6 +36,7 @@ The report pins the synthetic corpus, mission texts, clean Better and Hermes sou
 - Each child verifies the parent-selected corpus digest before loading it, and the child deadline scales with the permitted sample count and operation budgets. Both providers receive the same 60-second retention allowance; recall measurements use the same five-second host deadline.
 - Each provider runs once in each position of a counterbalanced pair, using a fresh randomly named bank per run. All four banks are created before measurement so cleanup covers partial failures; deletion polls for delayed creation, revalidates ownership, and verifies absence.
 - The final JSON and human summary contain aggregate evidence only—no query text, recalled text, audit markers, endpoint, credentials, or bank identifiers.
+- Report publication is private and atomic, and refuses symlinked destinations instead of following or truncating their targets.
 
 ## Prepare the selected Hermes interpreter
 
