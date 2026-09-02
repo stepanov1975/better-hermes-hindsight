@@ -105,7 +105,7 @@ or retrieval quality.
 | --- | --- | --- |
 | Installation target | Standard Git plugin for a supported external Hindsight 0.8.5, 0.9.1, or 0.9.2 service | Included with Hermes; interactive setup supports Hindsight Cloud, a local embedded service, or an external service |
 | Automatic recall | When enabled, recalls against the current user query, synchronously under character, token, response-size, and total-time bounds | Background previous-query recall by default; optional synchronous current-query recall |
-| Recalled context | Complete byte-bounded JSONL records with available type and time metadata; redacted and explicitly framed as stale, untrusted evidence | Formatted memory text or a reflect synthesis with configurable preamble, token budget, types, and tags |
+| Recalled context | Complete byte-bounded JSONL records with recalled text and available time metadata; redacted and explicitly framed in a provider-neutral envelope as stale, untrusted evidence. Explicit recall results also retain the available type. | Formatted memory text or a reflect synthesis with configurable preamble, token budget, types, and tags |
 | Automatic retention | Opt-in; authorized, eligible turns are admitted all-or-none to a bounded private SQLite rollback-journal outbox before asynchronous delivery | Enabled by default; completed turns enter a process-local FIFO writer and then optional server-side async processing |
 | Retained payload | Pattern-redacted, independently decodable event records with a per-admission event ID and occurrence time, hashed session identity, and bounded provenance | Labeled user/assistant transcripts with richer session, platform, user, chat, and lineage metadata |
 | Crash behavior before remote delivery | Committed outbox rows survive process restart and are retried | Locally queued writer jobs are not persistent; shutdown drains them only within a bounded wait |
@@ -132,7 +132,7 @@ Recall fails open: timeout, service failure, invalid data, or unavailable runtim
 
 Reflection is disabled by default and is never automatic. When enabled, `better_hindsight_reflect`
 accepts one nonblank bounded query for the configured bank under the authorized principal and returns
-only a redacted synthesis inside the same untrusted historical-evidence envelope, explicitly framed
+only a redacted synthesis inside the same untrusted recalled-memory-evidence envelope, explicitly framed
 as stale, untrusted generated evidence. Its configured output cap counts the complete serialized UTF-8
 tool response. It does not
 return Hindsight traces, source payloads, usage details, or policy controls. Better's timeout and byte

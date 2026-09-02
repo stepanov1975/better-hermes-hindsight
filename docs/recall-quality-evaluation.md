@@ -165,7 +165,7 @@ classified.
 
 `labels_complete` is required. It must remain `false` during collection/capture and become `true` only
 after every case and returned ID has been reviewed. Each result requires `id` and `text`; captures also
-preserve the allowlisted model-facing `type`, `occurred_start`, `occurred_end`, and `mentioned_at`
+preserve the Hindsight `type` plus the model-facing `occurred_start`, `occurred_end`, and `mentioned_at`
 fields when present, plus an explicit `truncated` boolean, so distinct occurrences and real formatter
 truncation can be labeled and scored without inferring provenance from private text. `responses` is
 required for offline evaluation and omitted for live recall. Unknown fields, duplicate JSON keys,

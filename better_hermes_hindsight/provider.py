@@ -373,6 +373,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             deadline=deadline,
             started_at=started_at,
             warn_on_format_failure=True,
+            include_type=True,
         )
         if recalled is None:
             return _tool_json(error=_RECALL_TOOL_UNAVAILABLE)
@@ -546,6 +547,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         deadline: float,
         started_at: float,
         warn_on_format_failure: bool,
+        include_type: bool = False,
     ) -> tuple[str, list[dict[str, object]]] | None:
         config = self._config
         runtime = self._runtime
@@ -629,6 +631,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                 response,
                 max_bytes=config.recall.context_max_bytes,
                 deadline=deadline,
+                include_type=include_type,
             )
         except Exception:
             record("format_error")

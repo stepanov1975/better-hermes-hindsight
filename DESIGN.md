@@ -63,7 +63,7 @@ destination, principal, or retention policy.
 4. The client enforces a raw response-byte cap and accepts only one bounded non-empty text field.
 5. The formatter redacts the synthesis, keeps marker text inside one serialized JSONL record,
    truncates only its text field, and returns that complete record inside the normal untrusted
-   historical-evidence envelope, while the serialized outer tool response has its own byte cap.
+   recalled-memory-evidence envelope, while the serialized outer tool response has its own byte cap.
 6. Timeouts and malformed, empty, oversized, or exceptional responses become one sanitized unavailable
    result; the provider does not retry agentic reflection automatically.
 

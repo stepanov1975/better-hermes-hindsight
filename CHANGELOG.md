@@ -4,6 +4,14 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+### Changed
+
+- Replaced the provider-specific automatic-recall markers with the provider-neutral
+  `RECALLED_MEMORY_EVIDENCE` envelope, while continuing to strip legacy envelopes from recall
+  queries during migration.
+- Removed Hindsight's `type` label from automatic recall records to reduce repeated model-facing
+  metadata. Explicit `better_hindsight_recall` results continue to include the type when available.
+
 ## 0.5.0 - 2026-09-01
 
 ### Added
