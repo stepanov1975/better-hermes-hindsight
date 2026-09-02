@@ -8,7 +8,7 @@
 - `better_hindsight_reflect(query)` performs one default-off, deadline-bounded synthesis through the
   configured authorized bank. The caller supplies only the query; bank, budget, final-answer target,
   tags, and tag mode remain local. It returns one redacted, byte-bounded reflection record inside the
-  untrusted historical-evidence envelope, or one sanitized unavailable result. Reflection is
+  untrusted recalled-memory-evidence envelope, or one sanitized unavailable result. Reflection is
   read-only for bank memory but invokes Hindsight's configured LLM and may create audit/usage records.
   A local timeout does not guarantee backend model cancellation or refund work/cost already incurred.
 - `better_hindsight_retain(content, context?)` durably admits one agent-selected memory to the local

@@ -440,7 +440,7 @@ def _response_for_evaluation(
             LabeledResult(
                 result_id=result_id,
                 text=text,
-                memory_type=_record_metadata(record, "type", index),
+                memory_type=selected_result.type,
                 occurred_start=_record_metadata(record, "occurred_start", index),
                 occurred_end=_record_metadata(record, "occurred_end", index),
                 mentioned_at=_record_metadata(record, "mentioned_at", index),

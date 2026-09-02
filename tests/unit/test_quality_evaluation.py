@@ -41,8 +41,8 @@ class _FakeClient:
         self.calls.append(query)
         return RecallResponse(
             results=[
-                RecallResult(id="rank-1", text="Stable Ａ memory"),
-                RecallResult(id="rank-2", text="Stable A   memory"),
+                RecallResult(id="rank-1", text="Stable Ａ memory", type="observation"),
+                RecallResult(id="rank-2", text="Stable A   memory", type="world"),
             ]
         )
 
@@ -213,6 +213,7 @@ def test_live_comparison_projects_queries_with_the_production_bounds(
     assert [result.result_id for result in responses["baseline"]["bounded-query"].results] == [
         "rank-1"
     ]
+    assert responses["baseline"]["bounded-query"].results[0].memory_type == "observation"
 
 
 def test_live_comparison_pairs_cases_and_counterbalances_variant_order(

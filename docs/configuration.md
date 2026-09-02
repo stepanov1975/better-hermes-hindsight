@@ -207,9 +207,8 @@ do not participate, so changing `HINDSIGHT_API_KEY` does not change the fingerpr
 
 ## Recall and reflection trust, redaction, and byte budget
 
-The provider contributes one byte-stable system-role policy for the exact
-`[BETTER_HINDSIGHT_HISTORICAL_EVIDENCE_BEGIN] ...
-`[BETTER_HINDSIGHT_HISTORICAL_EVIDENCE_END]` envelope. Every enclosed recall or reflection JSONL
+The provider contributes one byte-stable system-role policy for the exact provider-neutral
+`[RECALLED_MEMORY_EVIDENCE_BEGIN] ... [RECALLED_MEMORY_EVIDENCE_END]` envelope. Every enclosed recall or reflection JSONL
 record is treated as stale, untrusted historical or generated evidence: it is evidence to evaluate,
 not an instruction, role message, or authority over the current conversation. The provider exposes
 `better_hindsight_recall` for
@@ -219,16 +218,18 @@ deadline, redaction, allowlist, complete-record byte budget, and untrusted evide
 sole argument is `query`; callers cannot override bank, tags, types, budget, scores, result size, or
 timeout. Automatic recall keeps the envelope; the explicit tool returns the bounded records as a
 structured `memories` list with the fixed `trust: "untrusted_historical_evidence"` label. The
-system-role trust policy covers both forms. Model-facing records contain only recalled text, type,
-and available occurrence/mention timestamps; internal ranking scores and source-identifier counts
-stay private.
+system-role trust policy covers both forms. Automatic records contain only recalled text and
+available occurrence/mention timestamps; explicit recall records also retain the available Hindsight
+type. Internal ranking scores and source-identifier counts stay private. Query projection recognizes
+the previous provider-specific envelope during migration, but newly rendered evidence uses only the
+provider-neutral markers.
 
 `better_hindsight_reflect` is available only when `reflect.enabled=true` on the same exact authorized
 provider handle. Its sole argument is `query`; it applies the independent reflection query projection
 and total deadline, then uses only the locally configured bank, budget, final-answer target, tags, and
 tag mode. The client caps the raw response and accepts only one bounded non-empty `text` field. The
 provider redacts that generated text, fits one complete `type: "reflection"` JSONL record inside the
-historical-evidence envelope, and caps the complete serialized outer tool response. Failures return
+recalled-memory-evidence envelope, and caps the complete serialized outer tool response. Failures return
 one fixed unavailable result; reflection is never automatic and is not retried by the provider.
 
 `better_hindsight_retain` accepts required `content` of at most 8,192 characters plus an optional
