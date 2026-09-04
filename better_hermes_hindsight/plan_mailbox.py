@@ -18,13 +18,24 @@ from .config import PlannerMode
 
 PlanAction = Literal["skip", "reuse", "recall"]
 PlanState = Literal["pending", "ready"]
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 _ALLOWED_MODES = frozenset({"shadow", "active"})
 _ALLOWED_ACTIONS = frozenset({"skip", "reuse", "recall"})
 _PROCESS_NONCE_ENV = "BETTER_HINDSIGHT_RUNTIME_NONCE"
-_SCHEMA_TABLES = frozenset({"active_session", "recall_plan"})
+_OWNER_CLEANUP_BATCH = 128
+_PREVIOUS_SCHEMA_OBJECTS = frozenset({"active_session", "recall_plan", "recall_plan_lookup"})
+_SCHEMA_OBJECTS = frozenset(
+    {"process_owner", "active_session", "recall_plan", "recall_plan_lookup"}
+)
 
 _SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS process_owner (
+    process_identity TEXT PRIMARY KEY,
+    process_id INTEGER NOT NULL CHECK (process_id > 0),
+    boot_token TEXT NOT NULL,
+    start_token TEXT NOT NULL,
+    observed_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS active_session (
     process_identity TEXT NOT NULL,
     session_id TEXT NOT NULL,
@@ -78,6 +89,62 @@ class RecallPlan:
     turn_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class _ProcessOwner:
+    process_id: int
+    boot_token: str
+    start_token: str
+
+
+def _read_boot_token() -> str:
+    try:
+        value = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError):
+        return ""
+    if not value:
+        return ""
+    return hashlib.sha256(value.encode("ascii")).hexdigest()[:16]
+
+
+_BOOT_TOKEN = _read_boot_token()
+
+
+def _process_start_token(process_id: int) -> str:
+    try:
+        stat_text = Path(f"/proc/{process_id}/stat").read_text(encoding="ascii")
+    except (OSError, UnicodeError):
+        return ""
+    _, separator, suffix = stat_text.rpartition(")")
+    fields = suffix.split() if separator else []
+    return fields[19] if len(fields) > 19 else ""
+
+
+def _current_process_owner() -> _ProcessOwner:
+    process_id = os.getpid()
+    return _ProcessOwner(
+        process_id=process_id,
+        boot_token=_BOOT_TOKEN,
+        start_token=_process_start_token(process_id),
+    )
+
+
+def _process_owner_is_live(owner: _ProcessOwner) -> bool:
+    if owner.boot_token and _BOOT_TOKEN and owner.boot_token != _BOOT_TOKEN:
+        return False
+    observed_start = _process_start_token(owner.process_id)
+    if observed_start:
+        return not owner.start_token or observed_start == owner.start_token
+    if os.name == "nt":
+        return True
+    try:
+        os.kill(owner.process_id, 0)
+    except ProcessLookupError:
+        return False
+    except (OSError, OverflowError, ValueError):
+        return True
+    return True
+
+
 def _query_digest(query: str) -> str:
     return hashlib.sha256(query.encode("utf-8", errors="surrogatepass")).hexdigest()
 
@@ -102,6 +169,7 @@ class SQLitePlanMailbox:
         "_monotonic",
         "_path",
         "_process_identity",
+        "_process_owner",
     )
 
     def __init__(
@@ -110,12 +178,13 @@ class SQLitePlanMailbox:
         *,
         busy_timeout_seconds: float,
         process_identity: str | None = None,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._path = path
         self._busy_timeout_seconds = busy_timeout_seconds
         self._process_identity = process_identity or _process_identity()
+        self._process_owner = _current_process_owner()
         self._clock = clock
         self._monotonic = monotonic
 
@@ -134,6 +203,26 @@ class SQLitePlanMailbox:
                 connection.execute("BEGIN IMMEDIATE")
                 now = self._clock()
                 self._delete_stale(connection, now)
+                self._delete_dead_owners(connection, now)
+                connection.execute(
+                    """
+                    INSERT INTO process_owner (
+                        process_identity, process_id, boot_token, start_token, observed_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(process_identity) DO UPDATE SET
+                        process_id = excluded.process_id,
+                        boot_token = excluded.boot_token,
+                        start_token = excluded.start_token,
+                        observed_at = excluded.observed_at
+                    """,
+                    (
+                        self._process_identity,
+                        self._process_owner.process_id,
+                        self._process_owner.boot_token,
+                        self._process_owner.start_token,
+                        now,
+                    ),
+                )
                 connection.execute(
                     """
                     INSERT INTO active_session (
@@ -165,33 +254,41 @@ class SQLitePlanMailbox:
                     """,
                     (self._process_identity, session_id),
                 ).fetchone()
-                if row is None:
-                    connection.commit()
-                    return
-                if int(row[0]) <= 1:
-                    connection.execute(
-                        """
-                        DELETE FROM active_session
-                        WHERE process_identity = ? AND session_id = ?
-                        """,
-                        (self._process_identity, session_id),
-                    )
-                    connection.execute(
-                        """
-                        DELETE FROM recall_plan
-                        WHERE process_identity = ? AND session_id = ?
-                        """,
-                        (self._process_identity, session_id),
-                    )
-                else:
-                    connection.execute(
-                        """
-                        UPDATE active_session
-                        SET ref_count = ref_count - 1
-                        WHERE process_identity = ? AND session_id = ?
-                        """,
-                        (self._process_identity, session_id),
-                    )
+                if row is not None:
+                    if int(row[0]) <= 1:
+                        connection.execute(
+                            """
+                            DELETE FROM active_session
+                            WHERE process_identity = ? AND session_id = ?
+                            """,
+                            (self._process_identity, session_id),
+                        )
+                        connection.execute(
+                            """
+                            DELETE FROM recall_plan
+                            WHERE process_identity = ? AND session_id = ?
+                            """,
+                            (self._process_identity, session_id),
+                        )
+                    else:
+                        connection.execute(
+                            """
+                            UPDATE active_session
+                            SET ref_count = ref_count - 1
+                            WHERE process_identity = ? AND session_id = ?
+                            """,
+                            (self._process_identity, session_id),
+                        )
+                connection.execute(
+                    """
+                    DELETE FROM process_owner
+                    WHERE process_identity = ?
+                      AND NOT EXISTS (
+                          SELECT 1 FROM active_session WHERE process_identity = ?
+                      )
+                    """,
+                    (self._process_identity, self._process_identity),
+                )
                 connection.commit()
         except (OSError, sqlite3.Error, UnicodeError) as exc:
             raise PlanMailboxError(
@@ -466,14 +563,21 @@ class SQLitePlanMailbox:
             publish_deadline=publish_deadline,
         )
 
-    def consume(self, *, source_query: str, session_id: str = "") -> RecallPlan | None:
+    def consume(
+        self,
+        *,
+        source_query: str,
+        session_id: str = "",
+        deadline: float | None = None,
+    ) -> RecallPlan | None:
         """Atomically remove the newest exact-session plan, ready or pending."""
 
         if not session_id:
             return None
         now = self._clock()
         try:
-            with contextlib.closing(self._connect()) as connection:
+            with contextlib.closing(self._connect(deadline=deadline)) as connection:
+                self._set_busy_timeout(connection, deadline=deadline)
                 connection.execute("BEGIN IMMEDIATE")
                 self._delete_stale(connection, now)
                 rows = connection.execute(
@@ -492,6 +596,7 @@ class SQLitePlanMailbox:
                     ),
                 ).fetchall()
                 if not rows:
+                    self._set_busy_timeout(connection, deadline=deadline)
                     connection.commit()
                     return None
                 selected = rows[0]
@@ -506,55 +611,171 @@ class SQLitePlanMailbox:
                         session_id,
                     ),
                 )
+                self._set_busy_timeout(connection, deadline=deadline)
                 connection.commit()
                 return self._decode_plan(selected)
         except (OSError, sqlite3.Error, UnicodeError) as exc:
             raise PlanMailboxError("Better Hindsight recall-plan mailbox consume failed.") from exc
 
-    def _connect(self) -> sqlite3.Connection:
+    def _connect(self, *, deadline: float | None = None) -> sqlite3.Connection:
         self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self._path.parent, 0o700)
+        busy_timeout_seconds = self._remaining_busy_timeout(deadline)
         connection = sqlite3.connect(
             self._path,
-            timeout=self._busy_timeout_seconds,
+            timeout=busy_timeout_seconds,
             isolation_level=None,
         )
         try:
             connection.row_factory = sqlite3.Row
-            busy_timeout_ms = max(1, round(self._busy_timeout_seconds * 1000))
-            connection.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
+            self._set_busy_timeout(connection, deadline=deadline)
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("PRAGMA secure_delete = ON")
-            self._prepare_schema(connection)
+            self._prepare_schema(connection, deadline=deadline)
             os.chmod(self._path, 0o600)
             return connection
         except BaseException:
             connection.close()
             raise
 
+    def _remaining_busy_timeout(self, deadline: float | None) -> float:
+        if deadline is None:
+            return self._busy_timeout_seconds
+        remaining = deadline - self._monotonic()
+        if not math.isfinite(remaining) or remaining <= 0:
+            return 0.0
+        return min(self._busy_timeout_seconds, remaining)
+
+    def _set_busy_timeout(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        deadline: float | None,
+    ) -> None:
+        remaining = self._remaining_busy_timeout(deadline)
+        milliseconds = max(0, int(remaining * 1000))
+        connection.execute(f"PRAGMA busy_timeout = {milliseconds}")
+        if deadline is not None and remaining <= 0:
+            raise PlanMailboxError("Better Hindsight recall-plan mailbox deadline elapsed.")
+
+    def _prepare_schema(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        deadline: float | None,
+    ) -> None:
+        connection.execute("BEGIN")
+        try:
+            current, objects = SQLitePlanMailbox._schema_state(connection)
+            connection.commit()
+        except BaseException:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+        if current == _SCHEMA_VERSION and objects == _SCHEMA_OBJECTS:
+            return
+        if not (
+            (current == 0 and not objects) or (current == 2 and objects == _PREVIOUS_SCHEMA_OBJECTS)
+        ):
+            raise PlanMailboxError("Better Hindsight recall-plan mailbox schema is unsupported.")
+
+        self._set_busy_timeout(connection, deadline=deadline)
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            current, objects = SQLitePlanMailbox._schema_state(connection)
+            if current == _SCHEMA_VERSION and objects == _SCHEMA_OBJECTS:
+                self._set_busy_timeout(connection, deadline=deadline)
+                connection.commit()
+                return
+            if current == 0 and not objects:
+                self._execute_schema_sql(connection, deadline=deadline)
+            elif current == 2 and objects == _PREVIOUS_SCHEMA_OBJECTS:
+                self._execute_schema_sql(connection, deadline=deadline)
+                self._set_busy_timeout(connection, deadline=deadline)
+                connection.execute("DELETE FROM recall_plan")
+                self._set_busy_timeout(connection, deadline=deadline)
+                connection.execute("DELETE FROM active_session")
+            else:
+                raise PlanMailboxError(
+                    "Better Hindsight recall-plan mailbox schema is unsupported."
+                )
+            self._set_busy_timeout(connection, deadline=deadline)
+            connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
+            self._set_busy_timeout(connection, deadline=deadline)
+            connection.commit()
+        except BaseException:
+            if connection.in_transaction:
+                connection.rollback()
+            raise
+
     @staticmethod
-    def _prepare_schema(connection: sqlite3.Connection) -> None:
+    def _schema_state(connection: sqlite3.Connection) -> tuple[int, frozenset[str]]:
         current = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        tables = {
+        objects = frozenset(
             str(row[0])
             for row in connection.execute(
                 """
                 SELECT name FROM sqlite_master
-                WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                WHERE name NOT LIKE 'sqlite_%'
+                  AND type IN ('table', 'index', 'view', 'trigger')
                 """
             ).fetchall()
-        }
-        if current == 0 and not tables:
-            for statement in _SCHEMA_SQL.split(";"):
-                if statement.strip():
-                    connection.execute(statement)
-            connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
-            return
-        if current != _SCHEMA_VERSION or tables != _SCHEMA_TABLES:
-            raise PlanMailboxError("Better Hindsight recall-plan mailbox schema is unsupported.")
+        )
+        return current, objects
+
+    def _execute_schema_sql(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        deadline: float | None,
+    ) -> None:
+        for statement in _SCHEMA_SQL.split(";"):
+            if statement.strip():
+                self._set_busy_timeout(connection, deadline=deadline)
+                connection.execute(statement)
 
     def _delete_stale(self, connection: sqlite3.Connection, now: float) -> None:
         connection.execute("DELETE FROM recall_plan WHERE expires_at <= ?", (now,))
+
+    def _delete_dead_owners(self, connection: sqlite3.Connection, now: float) -> None:
+        rows = connection.execute(
+            """
+            SELECT process_identity, process_id, boot_token, start_token
+            FROM process_owner
+            WHERE process_identity <> ?
+            ORDER BY observed_at ASC
+            LIMIT ?
+            """,
+            (self._process_identity, _OWNER_CLEANUP_BATCH),
+        ).fetchall()
+        for row in rows:
+            try:
+                identity = str(row["process_identity"])
+                owner = _ProcessOwner(
+                    process_id=int(row["process_id"]),
+                    boot_token=str(row["boot_token"]),
+                    start_token=str(row["start_token"]),
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            if _process_owner_is_live(owner):
+                connection.execute(
+                    "UPDATE process_owner SET observed_at = ? WHERE process_identity = ?",
+                    (now, identity),
+                )
+                continue
+            connection.execute(
+                "DELETE FROM recall_plan WHERE process_identity = ?",
+                (identity,),
+            )
+            connection.execute(
+                "DELETE FROM active_session WHERE process_identity = ?",
+                (identity,),
+            )
+            connection.execute(
+                "DELETE FROM process_owner WHERE process_identity = ?",
+                (identity,),
+            )
 
     @staticmethod
     def _decode_plan(row: sqlite3.Row) -> RecallPlan | None:

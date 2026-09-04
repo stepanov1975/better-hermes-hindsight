@@ -280,6 +280,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                 plan = mailbox.consume(
                     source_query=query,
                     session_id=session_id or self._session_id,
+                    deadline=deadline,
                 )
             except PlanMailboxError:
                 plan = None
@@ -288,6 +289,8 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                     "better_hindsight.recall_plan_mailbox",
                     outcome="consume_failed",
                 )
+            if time.monotonic() >= deadline:
+                return ""
             if plan is not None and plan.mode == config.planner.mode:
                 emit_event(
                     logger,

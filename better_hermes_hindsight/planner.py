@@ -43,13 +43,11 @@ Return exactly one JSON object:
   uncertainty. Do not add facts or answer the question.
 """
 
-_MEMORY_MARKERS = (
-    "[RECALLED_MEMORY_EVIDENCE_BEGIN]",
-    "[RECALLED_MEMORY_EVIDENCE_END]",
-    "<memory-context>",
-    "</memory-context>",
-)
 _CLIP_MARKER = "\n[… clipped …]\n"
+_HISTORY_INSPECTED_ROWS_PER_EXCHANGE = 8
+_CAPSULE_UTF8_EXPANSION = 6
+_CAPSULE_FIXED_OVERHEAD_BYTES = 512
+_CAPSULE_MESSAGE_OVERHEAD_BYTES = 64
 
 
 class _StructuredLlm(Protocol):
@@ -89,29 +87,21 @@ def _clip_text(text: str, maximum: int) -> str:
     return f"{text[:head]}{_CLIP_MARKER}{text[-tail:]}" if tail else text[:head]
 
 
-def _planner_current_text(text: str) -> str:
-    """Remove one provider-appended memory envelope while preserving the source query."""
-
-    marker = "<memory-context>"
-    start = text.rfind(marker)
-    if start <= 0 or not text.rstrip().endswith("</memory-context>"):
-        return text
-    prefix = text[:start].rstrip()
-    return prefix if prefix else text
-
-
-def _safe_history_message(message: object) -> tuple[str, str] | None:
+def _safe_history_message(message: object, *, maximum: int) -> tuple[str, str] | None:
     if not isinstance(message, Mapping):
         return None
     role = message.get("role")
-    content = message.get("content")
-    if role not in {"user", "assistant"} or not isinstance(content, str) or not content.strip():
+    if role not in {"user", "assistant"}:
         return None
     if role == "assistant" and message.get("tool_calls"):
         return None
-    if any(marker in content for marker in _MEMORY_MARKERS):
+    content = message.get("content")
+    if not isinstance(content, str):
         return None
-    return cast(str, role), content
+    bounded = _clip_text(content, maximum)
+    if not bounded.strip():
+        return None
+    return cast(str, role), bounded
 
 
 def _build_capsule(
@@ -119,26 +109,28 @@ def _build_capsule(
     conversation_history: object,
     config: PlannerConfig,
 ) -> dict[str, object]:
-    planner_current = _planner_current_text(current_user_message)
-    current = _clip_text(planner_current, config.history_max_chars)
+    current = _clip_text(current_user_message, config.history_max_chars)
     remaining = max(0, config.history_max_chars - len(current))
     candidates: list[tuple[str, str]] = []
     skipped_current = False
     history: Sequence[object] = (
         conversation_history if isinstance(conversation_history, Sequence) else ()
     )
-    for raw in reversed(history):
-        message = _safe_history_message(raw)
+    inspection_limit = config.history_max_exchanges * _HISTORY_INSPECTED_ROWS_PER_EXCHANGE
+    for index, raw in enumerate(reversed(history)):
+        if index >= inspection_limit or remaining <= 0:
+            break
+        message = _safe_history_message(raw, maximum=config.history_max_chars)
         if message is None:
             continue
         role, content = message
         # Hermes includes the current user row in this history, but compaction may append
-        # another user-role row afterward. Remove the latest exact current-text match rather
+        # another user-role row afterward. Remove the latest bounded current-text match rather
         # than assuming the physical history boundary identifies the current row.
-        if not skipped_current and role == "user" and content == current_user_message:
+        if not skipped_current and role == "user" and content == current:
             skipped_current = True
             continue
-        if len(candidates) >= config.history_max_exchanges * 2 or remaining <= 0:
+        if len(candidates) >= config.history_max_exchanges * 2:
             break
         clipped = _clip_text(content, remaining)
         candidates.append((role, clipped))
@@ -149,6 +141,22 @@ def _build_capsule(
         "current_user_message": current,
         "recent_conversation": recent_messages,
     }
+
+
+def _capsule_byte_limit(config: PlannerConfig) -> int:
+    max_messages = config.history_max_exchanges * 2
+    return (
+        config.history_max_chars * _CAPSULE_UTF8_EXPANSION
+        + max_messages * _CAPSULE_MESSAGE_OVERHEAD_BYTES
+        + _CAPSULE_FIXED_OVERHEAD_BYTES
+    )
+
+
+def _serialize_capsule(capsule: Mapping[str, object], config: PlannerConfig) -> str:
+    serialized = json.dumps(capsule, ensure_ascii=False, separators=(",", ":"))
+    if len(serialized.encode("utf-8")) > _capsule_byte_limit(config):
+        raise ValueError("Planner capsule exceeds its serialized byte budget.")
+    return serialized
 
 
 def _parse_decision(parsed: object, *, query_max_chars: int) -> _PlanDecision | None:
@@ -194,7 +202,7 @@ class RecallPlanner:
 
     def on_pre_llm_call(self, **kwargs: object) -> None:
         current = kwargs.get("user_message")
-        if not isinstance(current, str) or not current.strip():
+        if not isinstance(current, str) or not current:
             return
         turn_id = kwargs.get("turn_id")
         if not isinstance(turn_id, str) or not turn_id:
@@ -204,6 +212,8 @@ class RecallPlanner:
         except (ConfigError, OSError):
             return
         if config.planner.mode == "off" or not config.recall.enabled:
+            return
+        if len(current) > config.planner.history_max_chars or not current.strip():
             return
 
         session_id = kwargs.get("session_id")
@@ -239,23 +249,23 @@ class RecallPlanner:
         capsule = _build_capsule(current, kwargs.get("conversation_history"), config.planner)
 
         try:
+            serialized_capsule = _serialize_capsule(capsule, config.planner)
+            remaining_timeout = deadline - self._monotonic()
+            if remaining_timeout <= 0:
+                raise TimeoutError
             result = self._llm.complete_structured(
                 instructions=_PLANNER_INSTRUCTIONS,
                 input=[
                     {
                         "type": "text",
-                        "text": json.dumps(
-                            capsule,
-                            ensure_ascii=False,
-                            separators=(",", ":"),
-                        ),
+                        "text": serialized_capsule,
                     }
                 ],
                 json_schema=_PLAN_SCHEMA,
                 schema_name="better_hindsight_recall_plan",
                 temperature=0.0,
                 max_tokens=128,
-                timeout=config.planner.timeout_seconds,
+                timeout=remaining_timeout,
                 purpose="context-aware automatic memory recall planning",
                 task=AUXILIARY_TASK_KEY,
             )

@@ -6,10 +6,15 @@ import concurrent.futures
 import os
 import sqlite3
 import stat
+import subprocess
+import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
 
+import better_hermes_hindsight.plan_mailbox as plan_mailbox_module
 from better_hermes_hindsight.plan_mailbox import (
     PlanMailboxError,
     RecallPlan,
@@ -41,6 +46,14 @@ def _publish(
     )
 
 
+def _create_version_two_mailbox(path: Path) -> None:
+    with sqlite3.connect(path, isolation_level=None) as connection:
+        for statement in plan_mailbox_module._SCHEMA_SQL.split(";"):
+            if statement.strip() and "CREATE TABLE IF NOT EXISTS process_owner" not in statement:
+                connection.execute(statement)
+        connection.execute("PRAGMA user_version = 2")
+
+
 def test_publish_consume_is_exactly_once_and_profile_private(tmp_path: Path) -> None:
     path = tmp_path / "profile" / "better_hindsight" / "recall_plans.sqlite3"
     mailbox = SQLitePlanMailbox(
@@ -64,6 +77,156 @@ def test_publish_consume_is_exactly_once_and_profile_private(tmp_path: Path) -> 
     assert mailbox.consume(source_query="What did we decide?", session_id="session-a") is None
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_consume_deadline_caps_sqlite_lock_wait(tmp_path: Path) -> None:
+    path = tmp_path / "mailbox.sqlite3"
+    mailbox = SQLitePlanMailbox(
+        path,
+        busy_timeout_seconds=1.0,
+        process_identity="process-a",
+    )
+    mailbox.activate(session_id="session-a")
+    _publish(mailbox)
+    lock = sqlite3.connect(path, isolation_level=None)
+    lock.execute("BEGIN EXCLUSIVE")
+    started = time.monotonic()
+    try:
+        with pytest.raises(PlanMailboxError, match="consume failed"):
+            mailbox.consume(
+                source_query="What did we decide?",
+                session_id="session-a",
+                deadline=started + 0.05,
+            )
+    finally:
+        elapsed = time.monotonic() - started
+        lock.rollback()
+        lock.close()
+
+    assert elapsed < 0.5
+    assert mailbox.consume(
+        source_query="What did we decide?", session_id="session-a"
+    ) == RecallPlan(
+        mode="active",
+        action="recall",
+        rewritten_query="What backup policy did Alex choose?",
+        turn_id="turn-a",
+    )
+
+
+def test_consume_recomputes_deadline_before_commit_wait(tmp_path: Path) -> None:
+    path = tmp_path / "mailbox.sqlite3"
+    mailbox = SQLitePlanMailbox(
+        path,
+        busy_timeout_seconds=1.0,
+        process_identity="process-a",
+    )
+    mailbox.activate(session_id="session-a")
+    _publish(mailbox)
+
+    reader = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+    writer = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+    reader.execute("BEGIN")
+    reader.execute("SELECT COUNT(*) FROM recall_plan").fetchone()
+    writer.execute("BEGIN IMMEDIATE")
+    writer_released = threading.Event()
+    reader_released = threading.Event()
+
+    def release_writer() -> None:
+        writer.rollback()
+        writer_released.set()
+
+    def release_reader() -> None:
+        reader.rollback()
+        reader_released.set()
+
+    writer_timer = threading.Timer(0.05, release_writer)
+    reader_timer = threading.Timer(0.4, release_reader)
+    writer_timer.start()
+    reader_timer.start()
+    started = time.monotonic()
+    try:
+        with pytest.raises(PlanMailboxError, match="consume failed"):
+            mailbox.consume(
+                source_query="What did we decide?",
+                session_id="session-a",
+                deadline=started + 0.2,
+            )
+    finally:
+        elapsed = time.monotonic() - started
+        writer_was_released = writer_released.is_set()
+        reader_was_released = reader_released.is_set()
+        writer_timer.join()
+        reader_timer.join()
+        writer.close()
+        reader.close()
+
+    assert writer_was_released
+    assert not reader_was_released
+    assert reader_released.is_set()
+    assert elapsed < 0.3
+    assert mailbox.consume(
+        source_query="What did we decide?", session_id="session-a"
+    ) == RecallPlan(
+        mode="active",
+        action="recall",
+        rewritten_query="What backup policy did Alex choose?",
+        turn_id="turn-a",
+    )
+
+
+def test_schema_migration_recomputes_deadline_before_each_lock_wait(tmp_path: Path) -> None:
+    path = tmp_path / "mailbox.sqlite3"
+    _create_version_two_mailbox(path)
+    mailbox = SQLitePlanMailbox(path, busy_timeout_seconds=1.0)
+
+    reader = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+    writer = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+    reader.execute("BEGIN")
+    reader.execute("SELECT COUNT(*) FROM active_session").fetchone()
+    writer.execute("BEGIN IMMEDIATE")
+    writer_released = threading.Event()
+    reader_released = threading.Event()
+
+    def release_writer() -> None:
+        writer.rollback()
+        writer_released.set()
+
+    def release_reader() -> None:
+        reader.rollback()
+        reader_released.set()
+
+    writer_timer = threading.Timer(0.05, release_writer)
+    reader_timer = threading.Timer(0.4, release_reader)
+    writer_timer.start()
+    reader_timer.start()
+    started = time.monotonic()
+    try:
+        with pytest.raises(PlanMailboxError):
+            mailbox.consume(
+                source_query="What did we decide?",
+                session_id="session-a",
+                deadline=started + 0.2,
+            )
+    finally:
+        elapsed = time.monotonic() - started
+        writer_was_released = writer_released.is_set()
+        reader_was_released = reader_released.is_set()
+        writer_timer.join()
+        reader_timer.join()
+        writer.close()
+        reader.close()
+
+    assert writer_was_released
+    assert not reader_was_released
+    assert reader_released.is_set()
+    assert elapsed < 0.3
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+
+    mailbox.activate(session_id="session-a")
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
 
 
 def test_parent_authorization_and_rebind_support_multiple_session_rotations(
@@ -484,6 +647,117 @@ def test_foreign_version_one_database_is_not_migrated_or_modified(tmp_path: Path
             ).fetchall()
         }
     assert tables == {"foreign_state"}
+
+
+def test_default_persisted_ttl_uses_restart_comparable_wall_time(tmp_path: Path) -> None:
+    path = tmp_path / "mailbox.sqlite3"
+    before = time.time()
+    mailbox = SQLitePlanMailbox(path, busy_timeout_seconds=0.1)
+    mailbox.activate(session_id="session-a")
+    _publish(mailbox, ttl_seconds=5.0)
+    after = time.time()
+
+    with sqlite3.connect(path) as connection:
+        created_at, expires_at = connection.execute(
+            "SELECT created_at, expires_at FROM recall_plan"
+        ).fetchone()
+    assert before <= float(created_at) <= after
+    assert float(expires_at) - float(created_at) == pytest.approx(5.0)
+
+
+def test_activation_reclaims_rows_from_a_dead_process(tmp_path: Path) -> None:
+    path = tmp_path / "mailbox.sqlite3"
+    repo_root = Path(__file__).resolve().parents[2]
+    code = """
+import sys
+from pathlib import Path
+from better_hermes_hindsight.plan_mailbox import SQLitePlanMailbox
+mailbox = SQLitePlanMailbox(Path(sys.argv[1]), busy_timeout_seconds=0.1)
+mailbox.activate(session_id="abandoned-session")
+"""
+    subprocess.run(
+        [sys.executable, "-c", code, str(path)],
+        check=True,
+        cwd=repo_root,
+        env={**os.environ, "PYTHONPATH": str(repo_root)},
+    )
+
+    mailbox = SQLitePlanMailbox(path, busy_timeout_seconds=0.1)
+    mailbox.activate(session_id="live-session")
+
+    with sqlite3.connect(path) as connection:
+        sessions = {
+            str(row[0]) for row in connection.execute("SELECT session_id FROM active_session")
+        }
+    assert sessions == {"live-session"}
+
+
+def test_schema_state_is_read_inside_one_transaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[bool] = []
+    original = SQLitePlanMailbox._schema_state
+
+    def observe(connection: sqlite3.Connection) -> tuple[int, frozenset[str]]:
+        observed.append(connection.in_transaction)
+        return original(connection)
+
+    monkeypatch.setattr(SQLitePlanMailbox, "_schema_state", staticmethod(observe))
+    mailbox = SQLitePlanMailbox(tmp_path / "mailbox.sqlite3", busy_timeout_seconds=0.1)
+    mailbox.activate(session_id="session-a")
+
+    assert observed
+    assert all(observed)
+
+
+def test_schema_initialization_rolls_back_partial_ddl(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "mailbox.sqlite3"
+    monkeypatch.setattr(
+        plan_mailbox_module,
+        "_SCHEMA_SQL",
+        "CREATE TABLE partial_state (value TEXT); CREATE TABLE broken (",
+    )
+
+    mailbox = SQLitePlanMailbox(path, busy_timeout_seconds=0.1)
+    with pytest.raises(PlanMailboxError, match="activation failed"):
+        mailbox.activate(session_id="session-a")
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 0
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+    assert tables == set()
+
+
+def test_version_two_mailbox_migrates_atomically_and_discards_ephemeral_rows(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "mailbox.sqlite3"
+    _create_version_two_mailbox(path)
+    with sqlite3.connect(path, isolation_level=None) as connection:
+        connection.execute(
+            "INSERT INTO active_session VALUES ('old-process', 'old-session', 1.0, 1)"
+        )
+
+    mailbox = SQLitePlanMailbox(path, busy_timeout_seconds=0.1)
+    mailbox.activate(session_id="new-session")
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
+        sessions = {
+            str(row[0]) for row in connection.execute("SELECT session_id FROM active_session")
+        }
+        owner_count = int(connection.execute("SELECT COUNT(*) FROM process_owner").fetchone()[0])
+    assert sessions == {"new-session"}
+    assert owner_count == 1
 
 
 def test_default_process_identity_is_stable_across_instances(tmp_path: Path) -> None:

@@ -551,10 +551,17 @@ def test_mailbox_wait_is_charged_to_the_total_recall_deadline(
     def monotonic() -> float:
         return now
 
-    def delayed_consume(_mailbox: SQLitePlanMailbox, *, source_query: str, session_id: str) -> None:
+    def delayed_consume(
+        _mailbox: SQLitePlanMailbox,
+        *,
+        source_query: str,
+        session_id: str,
+        deadline: float | None = None,
+    ) -> None:
         nonlocal now
         assert source_query == "Current direct query"
         assert session_id == "session-a"
+        assert deadline == pytest.approx(100.125)
         now += 0.05
         return None
 
@@ -571,7 +578,8 @@ def test_mailbox_wait_exhausting_recall_deadline_prevents_remote_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     document = _base_config()
-    document["planner"] = {"mode": "active", "busy_timeout_seconds": 0.05}
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 0.05
+    document["planner"] = {"mode": "active", "busy_timeout_seconds": 1.0}
     _write_config(tmp_path, document)
     handle = _RecordingHandle()
     monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
@@ -582,10 +590,17 @@ def test_mailbox_wait_exhausting_recall_deadline_prevents_remote_request(
     def monotonic() -> float:
         return now
 
-    def delayed_consume(_mailbox: SQLitePlanMailbox, *, source_query: str, session_id: str) -> None:
+    def delayed_consume(
+        _mailbox: SQLitePlanMailbox,
+        *,
+        source_query: str,
+        session_id: str,
+        deadline: float | None = None,
+    ) -> None:
         nonlocal now
         del _mailbox, source_query, session_id
-        now += 0.125
+        assert deadline == pytest.approx(100.05)
+        now += 0.05
         return None
 
     monkeypatch.setattr("better_hermes_hindsight.provider.time.monotonic", monotonic)

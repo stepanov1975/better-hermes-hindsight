@@ -138,29 +138,36 @@ core patch or second package installation is required.
 - `active`: `skip` and `reuse` make no Hindsight request; `recall` substitutes exactly one validated,
   self-contained query before the normal provider bounds and request path.
 
-The planner sees the clean current user text and a bounded window of ordinary string-valued user and
-assistant messages. It excludes system/developer/tool roles, tool-call scaffolding, non-text turns, and
-known recalled-memory envelopes. Full conversation history is never written to the mailbox. The mailbox
-stores an SHA-256 digest of the source query, session/turn correlation, action, and only the optional
-rewritten query. Rows expire after `planner.mailbox_ttl_seconds`, are atomically consumed and deleted,
-and use SQLite `secure_delete`; normal filesystem and backup residue caveats still apply. When planning
-is enabled, `planner.mailbox_ttl_seconds` must be greater than
+The planner receives Hermes's clean original `user_message` and preserves user-authored marker text. It
+reads only ordinary string-valued `content` from user/assistant history, never provider-expanded
+`api_content`; system/developer/tool roles, tool-call scaffolding, and non-text turns are excluded. It
+inspects at most eight history rows per configured exchange and clips each accepted text before
+whitespace checks or serialization. The compact JSON is checked against a derived UTF-8 byte ceiling
+before the model call. A current message larger than `planner.history_max_chars` skips planning and
+preserves direct-query recall. Full conversation history is never written to the mailbox.
+The mailbox stores an SHA-256 digest of the source query, session/turn correlation, action, and only the
+optional rewritten query. Rows use restart-comparable wall-clock expiration, are atomically consumed
+and deleted, and use SQLite `secure_delete`; normal filesystem and backup residue caveats still apply.
+When planning is enabled, `planner.mailbox_ttl_seconds` must be greater than
 `planner.timeout_seconds + (2 × planner.busy_timeout_seconds)`, covering bounded contention while the
 reservation is created and finalized so an on-time result cannot expire before provider consumption.
-Mailbox consumption time is charged against the provider's existing `recall.timeout_seconds` total
-deadline. Mailbox initialization refuses a nonempty or differently versioned SQLite schema without
-migration; never share `planner.path` with `outbox.path` or another application database.
+Mailbox consumption receives the provider's absolute `recall.timeout_seconds` deadline, so every SQLite
+lock wait is capped by the smaller remaining budget; elapsed mailbox work is charged to the same total.
+Schema creation and the owned version-2 migration run in one write transaction. Foreign/nonempty schemas
+are rejected without mutation; never share `planner.path` with `outbox.path` or another application
+database.
 
 The provider activates the mailbox only for a session whose Better recall policy was authorized, and
 moves that activation through Hermes's public `on_session_switch` callback and invalidates plans on a
 same-session rewind. Planner authorization and provider consumption both require the exact rebound
 session identity, so sibling plans cannot cross; an incomplete switch falls back to direct-query recall.
-Concurrently active processes sharing one profile retain separate authorization and plans. Activation
-purges expired plan rows across process identities but never removes an unexpired foreign-process row.
-If deactivation is contended, the provider stays inactive and retains that release for retry before any
-reinitialization. A missing, stale, mismatched, contended, malformed, or late plan preserves direct
-current-query recall rather than breaking the turn. In active mode, a planner timeout, exception, or
-invalid structured result finalizes a bounded `skip` decision only while that turn's reservation still
+Concurrently active processes sharing one profile retain separate authorization and plans. The mailbox
+stores bounded local owner metadata (PID, hashed boot identity, and process-start token); activation
+removes rows for processes confirmed dead while preserving every live foreign process, and separately
+purges expired plans by restart-comparable TTL. If deactivation is contended, the provider stays inactive
+and retains that release for retry before any reinitialization. A missing, stale, mismatched, contended,
+malformed, or late plan preserves direct current-query recall rather than breaking the turn. In active
+mode, a planner timeout, exception, or invalid structured result finalizes a bounded `skip` decision only
 exists. Provider consumption atomically cancels a pending reservation, so a hook thread abandoned by
 Hermes cannot publish a result into a later turn; successful results also recheck the planner deadline
 inside the finalize transaction.
@@ -203,7 +210,7 @@ timeout does not guarantee backend model cancellation or refund work/cost alread
 | `planner.mode` | `off` | `off`, `shadow`, or `active`; explicit opt-in only |
 | `planner.timeout_seconds` | `2.0` | Greater than zero, at most 4 seconds; with recall timeout, at most 7.5 seconds when enabled |
 | `planner.history_max_exchanges` | `4` | Integer from 1 through 20 exchanges |
-| `planner.history_max_chars` | `6000` | Integer from 1 through 65,536 transcript-content characters |
+| `planner.history_max_chars` | `6000` | Integer from 1 through 65,536 capsule characters; a larger current turn bypasses planning |
 | `planner.query_max_chars` | `1024` | Integer from 1 through 8,192 characters for a rewritten query |
 | `planner.mailbox_ttl_seconds` | `10.0` | Greater than zero, at most 60 seconds |
 | `planner.busy_timeout_seconds` | `0.1` | Greater than zero, at most 1 second |

@@ -38,8 +38,11 @@ important.
 ### Recall
 
 1. When planner mode is `shadow` or `active`, the standalone companion's `pre_llm_call` hook builds a
-   bounded capsule from the current plain-text message and recent ordinary user/assistant history, then
-   asks the host-owned `ctx.llm` for `skip`, `reuse`, or one self-contained recall query.
+   bounded capsule from Hermes's original current user text and a capped scan of clean user/assistant
+   `content` fields. Provider-expanded sidecars are ignored, user-authored marker text is preserved, and
+   compact serialization is rejected if it exceeds its derived UTF-8 byte ceiling. The hook asks the
+   host-owned `ctx.llm` for `skip`, `reuse`, or one self-contained recall query using
+   only the remaining planner deadline.
 2. After verifying that Better recall is active for the exact session, the hook reserves that turn's
    source-query digest in a short-lived profile-local SQLite mailbox. It never writes the conversation
    capsule, and it finalizes the reservation with only the action and optional rewritten query.
@@ -62,9 +65,12 @@ The planner and provider communicate through SQLite because Hermes may import th
 and exclusive memory provider under distinct module namespaces. The provider's public
 `on_session_switch` callback moves its authorization reference across branch/resume/reset/compression
 rotations and clears plans on same-session rewind. Profile path, process identity, exact current session,
-current-query digest, TTL, and atomic deletion prevent a consumed, sibling-session, or prior-process
-plan from leaking into a later turn. Planner authorization and provider consumption both require that
-exact rebound session identity; an incomplete switch therefore falls back to direct-query recall.
+current-query digest, restart-comparable TTL, and atomic deletion prevent a consumed, sibling-session, or
+prior-process plan from leaking into a later turn. Atomic schema initialization avoids partial migration;
+bounded owner metadata lets a later startup reclaim confirmed-dead process rows without touching a live
+concurrent process. Provider consumption caps each SQLite wait by the remaining recall deadline. Planner
+authorization and provider consumption both require the exact rebound session identity; an incomplete
+switch therefore falls back to direct-query recall.
 
 The model-facing `better_hindsight_recall` tool reuses this configured path and returns structured
 records without internal ranking or source-count telemetry. It cannot select a different bank,
