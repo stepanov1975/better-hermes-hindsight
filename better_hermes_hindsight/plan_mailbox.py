@@ -132,6 +132,8 @@ class SQLitePlanMailbox:
         try:
             with contextlib.closing(self._connect()) as connection:
                 connection.execute("BEGIN IMMEDIATE")
+                now = self._clock()
+                self._delete_stale(connection, now)
                 connection.execute(
                     """
                     INSERT INTO active_session (
@@ -141,7 +143,7 @@ class SQLitePlanMailbox:
                         activated_at = excluded.activated_at,
                         ref_count = active_session.ref_count + 1
                     """,
-                    (self._process_identity, session_id, self._clock()),
+                    (self._process_identity, session_id, now),
                 )
                 connection.commit()
         except (OSError, sqlite3.Error, UnicodeError) as exc:

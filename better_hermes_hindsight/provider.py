@@ -102,6 +102,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         "_legacy_system_prompt_block",
         "_last_recall_count",
         "_plan_mailbox",
+        "_pending_plan_mailbox_release",
         "_recall_enabled",
         "_reflect_enabled",
         "_retain_enabled",
@@ -119,6 +120,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         self._legacy_system_prompt_block = True
         self._last_recall_count = 0
         self._plan_mailbox: SQLitePlanMailbox | None = None
+        self._pending_plan_mailbox_release: tuple[SQLitePlanMailbox, str] | None = None
         self._recall_enabled = False
         self._reflect_enabled = False
         self._retain_enabled = False
@@ -150,7 +152,8 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         request is made here.
         """
 
-        self._deactivate()
+        if not self._deactivate():
+            return
         self._session_id = session_id if isinstance(session_id, str) else ""
 
         hermes_home = kwargs.get("hermes_home")
@@ -742,7 +745,17 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
 
         self._deactivate()
 
-    def _deactivate(self) -> None:
+    def _deactivate(self) -> bool:
+        pending_release = self._pending_plan_mailbox_release
+        if pending_release is not None:
+            pending_mailbox, pending_session_id = pending_release
+            try:
+                pending_mailbox.deactivate(session_id=pending_session_id)
+            except PlanMailboxError:
+                logger.warning("Better Hindsight recall planner mailbox deactivation failed.")
+                return False
+            self._pending_plan_mailbox_release = None
+
         runtime = self._runtime
         mailbox = self._plan_mailbox
         session_id = self._session_id
@@ -754,13 +767,17 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         self._retain_enabled = False
         self._runtime = None
         self._session_id = ""
+        released = True
         if mailbox is not None and session_id:
             try:
                 mailbox.deactivate(session_id=session_id)
             except PlanMailboxError:
+                self._pending_plan_mailbox_release = (mailbox, session_id)
+                released = False
                 logger.warning("Better Hindsight recall planner mailbox deactivation failed.")
         if runtime is not None:
             runtime.close()
+        return released
 
 
 def _recall_tool_schema() -> dict[str, Any]:

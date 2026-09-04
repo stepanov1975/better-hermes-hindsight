@@ -34,7 +34,7 @@ from better_hermes_hindsight.formatting import (
     count_query_tokens,
     format_recall_context,
 )
-from better_hermes_hindsight.plan_mailbox import SQLitePlanMailbox
+from better_hermes_hindsight.plan_mailbox import PlanMailboxError, SQLitePlanMailbox
 from better_hermes_hindsight.provider import (
     AUTHORIZATION_INACTIVE_DIAGNOSTIC,
     CONFIG_INACTIVE_DIAGNOSTIC,
@@ -458,6 +458,57 @@ def test_shadow_or_missing_plan_preserves_direct_query_recall(
     assert handle.recalls[-1][0] == "Why?"
     assert provider.prefetch("No mailbox plan")
     assert handle.recalls[-1][0] == "No mailbox plan"
+
+
+def test_failed_mailbox_release_is_retried_before_reinitialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    document["planner"] = {"mode": "active", "busy_timeout_seconds": 0.01}
+    _write_config(tmp_path, document)
+    handles: list[_RecordingHandle] = []
+
+    def acquire(_config: object) -> _RecordingHandle:
+        handle = _RecordingHandle()
+        handles.append(handle)
+        return handle
+
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", acquire)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    config = load_config(tmp_path, environ={})
+    observer = SQLitePlanMailbox(
+        config.planner.path,
+        busy_timeout_seconds=config.planner.busy_timeout_seconds,
+    )
+    assert observer.is_active(session_id="session-a") is True
+    original_deactivate = SQLitePlanMailbox.deactivate
+    attempts = 0
+
+    def fail_once(mailbox: SQLitePlanMailbox, *, session_id: str) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise PlanMailboxError("fixture contention")
+        original_deactivate(mailbox, session_id=session_id)
+
+    monkeypatch.setattr(SQLitePlanMailbox, "deactivate", fail_once)
+
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    assert attempts == 1
+    assert len(handles) == 1
+    assert provider.prefetch("inactive after failed cleanup") == ""
+    assert observer.is_active(session_id="session-a") is True
+
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    assert attempts == 2
+    assert len(handles) == 2
+    assert observer.is_active(session_id="session-a") is True
+
+    provider.shutdown()
+    assert attempts == 3
+    assert observer.is_active(session_id="session-a") is False
 
 
 def test_mailbox_contention_falls_back_to_direct_query_recall(

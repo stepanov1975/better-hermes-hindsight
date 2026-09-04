@@ -301,6 +301,41 @@ def test_expired_and_other_process_plans_are_never_consumed(tmp_path: Path) -> N
     )
 
 
+def test_activation_purges_expired_foreign_process_plans(tmp_path: Path) -> None:
+    now = 100.0
+    path = tmp_path / "mailbox.sqlite3"
+    first = SQLitePlanMailbox(
+        path,
+        busy_timeout_seconds=0.1,
+        process_identity="process-a",
+        clock=lambda: now,
+        monotonic=lambda: now,
+    )
+    second = SQLitePlanMailbox(
+        path,
+        busy_timeout_seconds=0.1,
+        process_identity="process-b",
+        clock=lambda: now,
+        monotonic=lambda: now,
+    )
+    first.activate(session_id="session-a")
+    _publish(
+        first,
+        source_query="Sensitive query",
+        rewritten_query="Sensitive rewrite",
+        ttl_seconds=1.0,
+    )
+
+    now = 102.0
+    second.activate(session_id="session-b")
+
+    with sqlite3.connect(path) as connection:
+        plan_count = int(connection.execute("SELECT COUNT(*) FROM recall_plan").fetchone()[0])
+    assert plan_count == 0
+    assert first.is_active(session_id="session-a") is True
+    assert second.is_active(session_id="session-b") is True
+
+
 def test_duplicate_turn_cannot_overwrite_an_unconsumed_ready_plan(tmp_path: Path) -> None:
     mailbox = SQLitePlanMailbox(
         tmp_path / "mailbox.sqlite3",

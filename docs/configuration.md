@@ -155,13 +155,15 @@ The provider activates the mailbox only for a session whose Better recall policy
 moves that activation through Hermes's public `on_session_switch` callback and invalidates plans on a
 same-session rewind. Planner authorization and provider consumption both require the exact rebound
 session identity, so sibling plans cannot cross; an incomplete switch falls back to direct-query recall.
-Concurrently active processes sharing one profile retain separate authorization and plans; expiry cleanup
-never removes unexpired rows owned by another process. A missing, stale, mismatched, contended,
-malformed, or late plan preserves direct current-query recall rather than breaking the turn. In active
-mode, a planner timeout, exception, or invalid structured result finalizes a bounded `skip` decision only
-while that turn's reservation still exists. Provider consumption
-atomically cancels a pending reservation, so a hook thread abandoned by Hermes cannot publish a result
-into a later turn; successful results also recheck the planner deadline inside the finalize transaction.
+Concurrently active processes sharing one profile retain separate authorization and plans. Activation
+purges expired plan rows across process identities but never removes an unexpired foreign-process row.
+If deactivation is contended, the provider stays inactive and retains that release for retry before any
+reinitialization. A missing, stale, mismatched, contended, malformed, or late plan preserves direct
+current-query recall rather than breaking the turn. In active mode, a planner timeout, exception, or
+invalid structured result finalizes a bounded `skip` decision only while that turn's reservation still
+exists. Provider consumption atomically cancels a pending reservation, so a hook thread abandoned by
+Hermes cannot publish a result into a later turn; successful results also recheck the planner deadline
+inside the finalize transaction.
 
 When recall is enabled, `planner.timeout_seconds + recall.timeout_seconds` must not exceed 7.5 seconds
 in `shadow` or `active` mode; the defaults total 5.5 seconds. Dormant planner timing constraints are not
