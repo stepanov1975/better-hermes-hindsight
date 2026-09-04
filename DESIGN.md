@@ -37,15 +37,34 @@ important.
 
 ### Recall
 
-1. Hermes supplies the current user query and agent context.
-2. The provider verifies enabled context and principal policy.
-3. It projects and bounds the query by characters and by Hindsight's exact `cl100k_base` input-token
-   rule, preserving bounded head-and-tail context.
-4. The async client performs one deadline-bounded Hindsight recall.
-5. The formatter projects allowlisted fields, redacts likely credentials, removes later exact
+1. When planner mode is `shadow` or `active`, the standalone companion's `pre_llm_call` hook builds a
+   bounded capsule from the current plain-text message and recent ordinary user/assistant history, then
+   asks the host-owned `ctx.llm` for `skip`, `reuse`, or one self-contained recall query.
+2. After verifying that Better recall is active for the exact session, the hook reserves that turn's
+   source-query digest in a short-lived profile-local SQLite mailbox. It never writes the conversation
+   capsule, and it finalizes the reservation with only the action and optional rewritten query.
+3. Hermes invokes the normal Better provider prefetch. The provider atomically consumes at most one
+   matching session/query plan and also cancels a still-pending reservation, fencing out an abandoned
+   late hook thread. Shadow or missing/invalid mailbox state preserves the original current query,
+   while active `skip`/`reuse` returns without a Hindsight request.
+4. The provider verifies enabled context and principal policy, then projects and bounds the selected
+   query by characters and by Hindsight's exact `cl100k_base` input-token rule, preserving bounded
+   head-and-tail context.
+5. The async client performs one deadline-bounded Hindsight recall.
+6. The formatter projects allowlisted fields, redacts likely credentials, removes later exact
    duplicates using normalized model-facing text plus identical occurrence metadata, frames records
    as untrusted evidence, and enforces the output-byte limit.
-6. Errors and timeouts return no external context rather than failing Hermes.
+7. Errors and timeouts return no external context rather than failing Hermes. Planner or mailbox
+   failures preserve direct current-query recall; an active planner's invalid or timed-out decision is
+   converted to `skip` when the mailbox remains available.
+
+The planner and provider communicate through SQLite because Hermes may import the standalone companion
+and exclusive memory provider under distinct module namespaces. The provider's public
+`on_session_switch` callback moves its authorization reference across branch/resume/reset/compression
+rotations and clears plans on same-session rewind. Profile path, process identity, exact current session,
+current-query digest, TTL, and atomic deletion prevent a consumed, sibling-session, or prior-process
+plan from leaking into a later turn. Planner authorization and provider consumption both require that
+exact rebound session identity; an incomplete switch therefore falls back to direct-query recall.
 
 The model-facing `better_hindsight_recall` tool reuses this configured path and returns structured
 records without internal ranking or source-count telemetry. It cannot select a different bank,
@@ -108,6 +127,8 @@ Durability begins only after admission commits. A network timeout may be ambiguo
 
 ## Safety boundary
 
+- The planner uses only bounded ordinary user/assistant text, treats it as untrusted data, and never
+  stores the capsule; the mailbox persists only a source-query digest and the small decision payload.
 - API credentials come from the environment and are not part of destination fingerprints or persisted payload metadata.
 - Reflection is explicit, default-off, fixed to the configured destination/policy, and returned only as
   untrusted generated evidence; its source records, traces, directives, and usage metadata are not
@@ -122,15 +143,17 @@ Durability begins only after admission commits. A network timeout may be ambiguo
 
 ## Deployment model
 
-Better is a self-contained standard Hermes Git plugin. Each Better-enabled Hermes profile may run in
-its own process with profile-local configuration, outbox, and diagnostics. One process owns one exact
-Better configuration and runtime; another profile in that process fails open rather than crossing the
-profile boundary. Its root entry points and
-`better_hermes_hindsight` implementation package are installed together by `hermes plugins
-install`; no second package installation or runtime environment is part of deployment. Better
-implements its narrow Hindsight 0.8.5/0.9.1/0.9.2 wire contract over `aiohttp`, uses `tiktoken` for
-bounded recall and reflection query projection, and does not import the Hindsight Python SDK, so the
-untouched bundled provider remains available.
+Better is a self-contained standard Hermes Git plugin. Its root manifest is standalone so Hermes's
+general plugin loader can register the context planner; the same root entry point detects the separate
+memory-provider collector and registers only the exclusive Better provider on that path. Each
+Better-enabled Hermes profile may run in its own process with profile-local configuration, plan
+mailbox, outbox, and diagnostics. One process owns one exact Better configuration and runtime; another
+profile in that process fails open rather than crossing the profile boundary. The root entry point and
+`better_hermes_hindsight` implementation package are installed together by `hermes plugins install`;
+no second package installation or runtime environment is part of deployment. Better implements its
+narrow Hindsight 0.8.5/0.9.1/0.9.2 wire contract over `aiohttp`, uses `tiktoken` for bounded recall
+and reflection query projection, and does not import the Hindsight Python SDK, so the untouched bundled
+provider remains available.
 
 The Git commit is the working identity. A tag or version bump is optional and does not define compatibility. Validation records the current Better and Hermes commits and tests behavior against that checkout.
 

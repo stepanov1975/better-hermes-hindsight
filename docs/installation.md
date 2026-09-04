@@ -25,13 +25,14 @@ encoding service.
 Run the standard Hermes plugin commands:
 
 ```bash
-hermes plugins install stepanov1975/better-hermes-hindsight
+hermes plugins install --enable stepanov1975/better-hermes-hindsight
 hermes memory setup better_hindsight
 ```
 
-The first command clones the complete plugin into the current Hermes plugin directory. The second
-selects `better_hindsight` as the active memory provider and checks its declared dependency. No
-custom install script or additional runtime is involved.
+The first command clones and enables the complete plugin in the current Hermes plugin directory. That
+enablement lets the standalone companion register its `pre_llm_call` hook; the default `planner.mode`
+of `off` still makes the hook inert. The second command selects `better_hindsight` as the active memory
+provider and checks its declared dependency. No custom install script or additional runtime is involved.
 
 ### Multiple Hermes profiles
 
@@ -39,7 +40,7 @@ Repeat installation, selection, configuration, and verification for every profil
 Better. For example:
 
 ```bash
-hermes -p coder plugins install stepanov1975/better-hermes-hindsight
+hermes -p coder plugins install --enable stepanov1975/better-hermes-hindsight
 hermes -p coder memory setup better_hindsight
 hermes -p coder better_hindsight status
 ```
@@ -57,8 +58,8 @@ a gateway, or schedule its optional canary and watchdog.
 
 Create the Better Hindsight configuration under the same Hermes home used by the rest of the
 current installation. Configure the endpoint, bank, API-key environment variable, principal, and
-policy as described in [configuration](configuration.md). Keep `reflect.enabled=false` and
-`retain.enabled=false` initially.
+policy as described in [configuration](configuration.md). Keep `planner.mode="off"`,
+`reflect.enabled=false`, and `retain.enabled=false` initially.
 
 ## Verify before retention
 
@@ -69,10 +70,10 @@ hermes better_hindsight status
 hermes better_hindsight missions check
 ```
 
-The plugin should appear as installed at version `0.5.0`, and `memory.provider` should be
-`better_hindsight`. General-plugin enablement is not required for a selected memory provider. An
-absent outbox is reported as `uninitialized`; that is normal before the first admitted retained
-turn.
+The plugin should appear as installed and enabled at version `0.5.0`, and `memory.provider` should be
+`better_hindsight`. General-plugin enablement is required only for the optional planner companion; the
+memory-provider path remains separately selected through `memory.provider`. An absent outbox is reported
+as `uninitialized`; that is normal before the first admitted retained turn.
 
 Verify one synthetic recall against the configured Hindsight bank. Then explicitly enable
 reflection only if the profile needs Hindsight synthesis and the service's LLM/cost policy has been
@@ -94,7 +95,7 @@ If upgrading from a pre-0.2.0 installation that copied only bridge files, replac
 standard Git plugin:
 
 ```bash
-hermes plugins install stepanov1975/better-hermes-hindsight --force
+hermes plugins install --enable stepanov1975/better-hermes-hindsight --force
 hermes memory setup better_hindsight
 ```
 

@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 from collections.abc import Iterator, Mapping
@@ -33,6 +34,7 @@ from better_hermes_hindsight.formatting import (
     count_query_tokens,
     format_recall_context,
 )
+from better_hermes_hindsight.plan_mailbox import SQLitePlanMailbox
 from better_hermes_hindsight.provider import (
     AUTHORIZATION_INACTIVE_DIAGNOSTIC,
     CONFIG_INACTIVE_DIAGNOSTIC,
@@ -281,7 +283,9 @@ def test_provider_passes_projected_query_and_request_to_diagnostic_capture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _write_config(tmp_path, _base_config())
+    document = _base_config()
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
+    _write_config(tmp_path, document)
     handle = _RecordingHandle()
     captured: list[dict[str, object]] = []
     monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
@@ -300,6 +304,184 @@ def test_provider_passes_projected_query_and_request_to_diagnostic_capture(
     assert cast(dict[str, object], captured[0]["request"])["trace"] is False
     assert captured[0]["outcome"] == "success"
     assert captured[0]["result_count"] == 1
+
+
+@pytest.mark.parametrize("action", ["skip", "reuse"])
+def test_active_planner_skip_or_reuse_avoids_remote_recall(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
+    document = _base_config()
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
+    document["planner"] = {"mode": "active"}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    config = load_config(tmp_path, environ={})
+    mailbox = SQLitePlanMailbox(
+        config.planner.path,
+        busy_timeout_seconds=config.planner.busy_timeout_seconds,
+    )
+    mailbox.publish(
+        source_query="Why?",
+        session_id="session-a",
+        parent_session_id="",
+        turn_id="turn-a",
+        mode="active",
+        action=action,
+        rewritten_query=None,
+        ttl_seconds=config.planner.mailbox_ttl_seconds,
+    )
+
+    assert provider.prefetch("Why?") == ""
+    assert handle.recalls == []
+    assert provider.recall_status() is None
+    assert mailbox.consume(source_query="Why?", session_id="session-a") is None
+
+
+def test_active_planner_recall_uses_only_rewritten_query(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
+    document["planner"] = {"mode": "active"}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    config = load_config(tmp_path, environ={})
+    mailbox = SQLitePlanMailbox(
+        config.planner.path,
+        busy_timeout_seconds=config.planner.busy_timeout_seconds,
+    )
+    mailbox.publish(
+        source_query="What did we decide?",
+        session_id="session-a",
+        parent_session_id="",
+        turn_id="turn-a",
+        mode="active",
+        action="recall",
+        rewritten_query="What backup policy did Alex choose?",
+        ttl_seconds=config.planner.mailbox_ttl_seconds,
+    )
+
+    assert provider.prefetch("What did we decide?")
+    assert len(handle.recalls) == 1
+    assert handle.recalls[0][0] == "What backup policy did Alex choose?"
+    assert "What did we decide?" not in handle.recalls[0][0]
+
+
+def test_session_switch_rebinds_planner_across_multiple_rotations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
+    document["planner"] = {"mode": "active"}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("root", hermes_home=str(tmp_path), platform="cli")
+    config = load_config(tmp_path, environ={})
+    mailbox = SQLitePlanMailbox(
+        config.planner.path,
+        busy_timeout_seconds=config.planner.busy_timeout_seconds,
+    )
+
+    provider.on_session_switch("child-1", parent_session_id="root")
+    provider.on_session_switch("child-2", parent_session_id="child-1")
+    assert not mailbox.is_active(session_id="root")
+    assert not mailbox.is_active(session_id="child-1")
+    assert mailbox.is_active(session_id="child-2")
+    assert mailbox.publish(
+        source_query="stale after rewind",
+        session_id="child-2",
+        parent_session_id="child-1",
+        turn_id="stale-turn",
+        mode="active",
+        action="skip",
+        rewritten_query=None,
+        ttl_seconds=config.planner.mailbox_ttl_seconds,
+    )
+    provider.on_session_switch("child-2", rewound=True)
+    assert mailbox.consume(source_query="stale after rewind", session_id="child-2") is None
+    assert mailbox.publish(
+        source_query="Why?",
+        session_id="child-2",
+        parent_session_id="child-1",
+        turn_id="turn-a",
+        mode="active",
+        action="recall",
+        rewritten_query="What backup policy did Alex choose?",
+        ttl_seconds=config.planner.mailbox_ttl_seconds,
+    )
+
+    assert provider.prefetch("Why?")
+    assert handle.recalls[-1][0] == "What backup policy did Alex choose?"
+
+
+def test_shadow_or_missing_plan_preserves_direct_query_recall(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
+    document["planner"] = {"mode": "shadow"}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    config = load_config(tmp_path, environ={})
+    mailbox = SQLitePlanMailbox(
+        config.planner.path,
+        busy_timeout_seconds=config.planner.busy_timeout_seconds,
+    )
+    mailbox.publish(
+        source_query="Why?",
+        session_id="session-a",
+        parent_session_id="",
+        turn_id="turn-a",
+        mode="shadow",
+        action="recall",
+        rewritten_query="rewritten only for shadow telemetry",
+        ttl_seconds=config.planner.mailbox_ttl_seconds,
+    )
+
+    assert provider.prefetch("Why?")
+    assert handle.recalls[-1][0] == "Why?"
+    assert provider.prefetch("No mailbox plan")
+    assert handle.recalls[-1][0] == "No mailbox plan"
+
+
+def test_mailbox_contention_falls_back_to_direct_query_recall(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
+    document["planner"] = {"mode": "active", "busy_timeout_seconds": 0.01}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    path = load_config(tmp_path, environ={}).planner.path
+    lock = sqlite3.connect(path, isolation_level=None)
+    lock.execute("BEGIN EXCLUSIVE")
+    try:
+        assert provider.prefetch("Current direct query")
+    finally:
+        lock.rollback()
+        lock.close()
+
+    assert handle.recalls[-1][0] == "Current direct query"
 
 
 def test_configured_recall_deadline_covers_projection_runtime_and_formatting(

@@ -49,7 +49,7 @@ The moving Hermes `main` canary is intentionally scheduled/manual rather than a 
 
 ## Optional source snapshots
 
-The ordinary installation path remains `hermes plugins install stepanov1975/better-hermes-hindsight`; PyPI and uploaded wheel/sdist assets are not publication targets.
+The ordinary installation path remains `hermes plugins install --enable stepanov1975/better-hermes-hindsight`; PyPI and uploaded wheel/sdist assets are not publication targets.
 
 After required tests pass on a `main` push, the release workflow:
 

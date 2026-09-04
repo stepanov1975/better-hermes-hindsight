@@ -4,6 +4,16 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+### Added
+
+- Added a default-off context-aware automatic-recall planner that runs through Hermes's public
+  `pre_llm_call` and `ctx.llm` plugin surfaces, chooses `skip`, `reuse`, or one self-contained recall
+  query from bounded ordinary user/assistant history, and hands the decision to the memory provider
+  through a profile-local, short-lived, session-scoped SQLite reservation mailbox. Pending reservations
+  fence out late hook workers before provider consumption, and finalized decisions are consume-once.
+  Shadow mode records only safe action/latency metadata; planner or mailbox failures preserve direct
+  current-query recall.
+
 ### Changed
 
 - Replaced the provider-specific automatic-recall markers with the provider-neutral

@@ -108,6 +108,14 @@ def test_defaults_follow_the_best_effort_product_contract(tmp_path: Path) -> Non
     assert not hasattr(config, "integration_mode")
     assert config.recall.enabled is True
     assert config.recall.input_max_tokens == 500
+    assert config.planner.mode == "off"
+    assert config.planner.timeout_seconds == 2.0
+    assert config.planner.history_max_exchanges == 4
+    assert config.planner.history_max_chars == 6_000
+    assert config.planner.query_max_chars == 1_024
+    assert config.planner.mailbox_ttl_seconds == 10.0
+    assert config.planner.busy_timeout_seconds == 0.1
+    assert config.planner.path == (tmp_path / "better_hindsight" / "recall_plans.sqlite3").resolve()
     assert config.reflect.enabled is False
     assert config.reflect.timeout_seconds == DEFAULT_REFLECT_TIMEOUT_SECONDS == 60.0
     assert config.reflect.input_max_chars == DEFAULT_REFLECT_INPUT_MAX_CHARS == 4096
@@ -130,6 +138,56 @@ def test_defaults_follow_the_best_effort_product_contract(tmp_path: Path) -> Non
     assert config.diagnostics.max_records == 50
     assert config.diagnostics.replay_timeout_seconds == 30.0
     assert not hasattr(config.missions, "policy")
+
+
+def test_planner_configuration_is_bounded_and_profile_local(tmp_path: Path) -> None:
+    config = load_config(
+        hermes_home=tmp_path,
+        environ={},
+        injected={
+            "planner": {
+                "mode": "active",
+                "timeout_seconds": 1.5,
+                "history_max_exchanges": 2,
+                "history_max_chars": 3_000,
+                "query_max_chars": 700,
+                "mailbox_ttl_seconds": 8.0,
+                "busy_timeout_seconds": 0.2,
+                "path": "better_hindsight/custom-plans.sqlite3",
+            }
+        },
+    )
+
+    assert config.planner.mode == "active"
+    assert config.planner.timeout_seconds == 1.5
+    assert config.planner.history_max_exchanges == 2
+    assert config.planner.history_max_chars == 3_000
+    assert config.planner.query_max_chars == 700
+    assert config.planner.mailbox_ttl_seconds == 8.0
+    assert config.planner.busy_timeout_seconds == 0.2
+    assert config.planner.path == (tmp_path / "better_hindsight" / "custom-plans.sqlite3").resolve()
+
+    with pytest.raises(ConfigError, match="planner.path must remain inside hermes_home"):
+        load_config(
+            hermes_home=tmp_path,
+            environ={},
+            injected={"planner": {"path": "../outside.sqlite3"}},
+        )
+    with pytest.raises(ConfigError, match="planner.mode"):
+        load_config(
+            hermes_home=tmp_path,
+            environ={},
+            injected={"planner": {"mode": "invalid"}},
+        )
+    with pytest.raises(ConfigError, match="combined planner and recall deadline"):
+        load_config(
+            hermes_home=tmp_path,
+            environ={},
+            injected={
+                "recall": {"timeout_seconds": 6.0},
+                "planner": {"mode": "active", "timeout_seconds": 2.0},
+            },
+        )
 
 
 def test_hermes_home_must_be_explicit_valid_and_absolute(tmp_path: Path) -> None:

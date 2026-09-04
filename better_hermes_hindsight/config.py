@@ -30,6 +30,13 @@ DEFAULT_RECALL_TIMEOUT_SECONDS = 3.5
 DEFAULT_RECALL_INPUT_MAX_CHARS = 4096
 DEFAULT_RECALL_INPUT_MAX_TOKENS = 500
 DEFAULT_RECALL_CONTEXT_MAX_BYTES = 8192
+DEFAULT_PLANNER_TIMEOUT_SECONDS = 2.0
+DEFAULT_PLANNER_HISTORY_MAX_EXCHANGES = 4
+DEFAULT_PLANNER_HISTORY_MAX_CHARS = 6_000
+DEFAULT_PLANNER_QUERY_MAX_CHARS = 1_024
+DEFAULT_PLANNER_MAILBOX_TTL_SECONDS = 10.0
+DEFAULT_PLANNER_BUSY_TIMEOUT_SECONDS = 0.1
+PLANNER_AND_RECALL_BUDGET_SECONDS = 7.5
 DEFAULT_REFLECT_TIMEOUT_SECONDS = 60.0
 DEFAULT_REFLECT_INPUT_MAX_CHARS = 4096
 DEFAULT_REFLECT_INPUT_MAX_TOKENS = 500
@@ -54,6 +61,12 @@ MAX_RECALL_INPUT_CHARS = 65536
 MAX_RECALL_INPUT_TOKENS = 1_048_576
 MAX_RECALL_CONTEXT_BYTES = 1_048_576
 MAX_RECALL_TOKENS = 1_048_576
+MAX_PLANNER_TIMEOUT_SECONDS = 4.0
+MAX_PLANNER_HISTORY_EXCHANGES = 20
+MAX_PLANNER_HISTORY_CHARS = 65_536
+MAX_PLANNER_QUERY_CHARS = 8_192
+MAX_PLANNER_MAILBOX_TTL_SECONDS = 60.0
+MAX_PLANNER_BUSY_TIMEOUT_SECONDS = 1.0
 MAX_REFLECT_TIMEOUT_SECONDS = 300.0
 MAX_REFLECT_INPUT_CHARS = 65_536
 MAX_REFLECT_INPUT_TOKENS = 1_048_576
@@ -76,6 +89,7 @@ IdentifierKind: TypeAlias = Literal["user_id", "user_id_alt"]
 RecallBudget: TypeAlias = Literal["low", "mid", "high"]
 RecallType: TypeAlias = Literal["world", "experience", "observation"]
 RecallTagMode: TypeAlias = Literal["any", "all", "any_strict", "all_strict", "exact"]
+PlannerMode: TypeAlias = Literal["off", "shadow", "active"]
 ReflectBudget: TypeAlias = Literal["low", "mid", "high"]
 ReflectTagMode: TypeAlias = Literal["any", "all", "any_strict", "all_strict", "exact"]
 ObservationScopes: TypeAlias = Literal["combined"] | tuple[tuple[str, ...], ...] | None
@@ -92,6 +106,7 @@ _ROOT_KEYS = {
     "single_principal",
     "allowed_principals",
     "recall",
+    "planner",
     "reflect",
     "retain",
     "missions",
@@ -113,6 +128,16 @@ _RECALL_KEYS = {
     "min_scores",
     "include_source_facts",
     "max_source_facts_tokens",
+}
+_PLANNER_KEYS = {
+    "mode",
+    "timeout_seconds",
+    "history_max_exchanges",
+    "history_max_chars",
+    "query_max_chars",
+    "mailbox_ttl_seconds",
+    "busy_timeout_seconds",
+    "path",
 }
 _REFLECT_KEYS = {
     "enabled",
@@ -230,6 +255,26 @@ class RecallConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class PlannerConfig:
+    """Bounded context planner and one-shot mailbox policy."""
+
+    path: Path = field(repr=False)
+    mode: PlannerMode = "off"
+    timeout_seconds: float = DEFAULT_PLANNER_TIMEOUT_SECONDS
+    history_max_exchanges: int = DEFAULT_PLANNER_HISTORY_MAX_EXCHANGES
+    history_max_chars: int = DEFAULT_PLANNER_HISTORY_MAX_CHARS
+    query_max_chars: int = DEFAULT_PLANNER_QUERY_MAX_CHARS
+    mailbox_ttl_seconds: float = DEFAULT_PLANNER_MAILBOX_TTL_SECONDS
+    busy_timeout_seconds: float = DEFAULT_PLANNER_BUSY_TIMEOUT_SECONDS
+
+    @property
+    def busy_timeout_ms(self) -> int:
+        """Return the SQLite busy timeout in whole milliseconds."""
+
+        return math.ceil(self.busy_timeout_seconds * 1000)
+
+
+@dataclass(frozen=True, slots=True)
 class ReflectConfig:
     """Bounded, fixed policy for explicit server-side reflection."""
 
@@ -324,6 +369,9 @@ class BetterHindsightConfig:
     single_principal: bool = False
     allowed_principals: tuple[AllowedPrincipal, ...] = field(default=(), repr=False)
     recall: RecallConfig = field(default_factory=RecallConfig)
+    planner: PlannerConfig = field(
+        default_factory=lambda: PlannerConfig(Path("better_hindsight/recall_plans.sqlite3"))
+    )
     reflect: ReflectConfig = field(default_factory=ReflectConfig)
     retain: RetainConfig = field(default_factory=RetainConfig)
     missions: MissionConfig = field(default_factory=MissionConfig)
@@ -422,6 +470,7 @@ def load_config(
     single_principal = _parse_bool(merged.get("single_principal", False), "single_principal")
     principals = _parse_principals(merged.get("allowed_principals", ()))
     recall = _parse_recall(merged.get("recall", {}))
+    planner = _parse_planner(home, merged.get("planner", {}))
     reflect = _parse_reflect(merged.get("reflect", {}))
     retain = _parse_retain(merged.get("retain", {}))
     missions = _parse_missions(merged.get("missions", {}))
@@ -430,6 +479,14 @@ def load_config(
 
     if retain.observation_scopes == ((),) and not single_principal:
         raise _error("retain.observation_scopes='shared' requires explicit single_principal=true")
+    if (
+        planner.mode != "off"
+        and planner.timeout_seconds + recall.timeout_seconds > PLANNER_AND_RECALL_BUDGET_SECONDS
+    ):
+        raise _error(
+            "combined planner and recall deadline must not exceed "
+            f"{PLANNER_AND_RECALL_BUDGET_SECONDS} seconds"
+        )
     minimum_segment_bytes = _minimum_retained_segment_bytes(
         retain.tags,
         max_pending_rows=outbox.max_pending_rows,
@@ -465,6 +522,7 @@ def load_config(
         single_principal=single_principal,
         allowed_principals=principals,
         recall=recall,
+        planner=planner,
         reflect=reflect,
         retain=retain,
         missions=missions,
@@ -854,6 +912,51 @@ def _parse_recall(value: object) -> RecallConfig:
     )
 
 
+def _parse_planner(home: Path, value: object) -> PlannerConfig:
+    values = _expect_mapping(value, "planner")
+    _check_unknown_keys(values, _PLANNER_KEYS, "planner")
+    return PlannerConfig(
+        path=_parse_planner_path(home, values.get("path", "better_hindsight/recall_plans.sqlite3")),
+        mode=cast(
+            PlannerMode,
+            _parse_literal(values.get("mode", "off"), "planner.mode", ("off", "shadow", "active")),
+        ),
+        timeout_seconds=_parse_bounded_float(
+            values.get("timeout_seconds", DEFAULT_PLANNER_TIMEOUT_SECONDS),
+            "planner.timeout_seconds",
+            minimum=0.0,
+            maximum=MAX_PLANNER_TIMEOUT_SECONDS,
+        ),
+        history_max_exchanges=_parse_positive_int(
+            values.get("history_max_exchanges", DEFAULT_PLANNER_HISTORY_MAX_EXCHANGES),
+            "planner.history_max_exchanges",
+            maximum=MAX_PLANNER_HISTORY_EXCHANGES,
+        ),
+        history_max_chars=_parse_positive_int(
+            values.get("history_max_chars", DEFAULT_PLANNER_HISTORY_MAX_CHARS),
+            "planner.history_max_chars",
+            maximum=MAX_PLANNER_HISTORY_CHARS,
+        ),
+        query_max_chars=_parse_positive_int(
+            values.get("query_max_chars", DEFAULT_PLANNER_QUERY_MAX_CHARS),
+            "planner.query_max_chars",
+            maximum=MAX_PLANNER_QUERY_CHARS,
+        ),
+        mailbox_ttl_seconds=_parse_bounded_float(
+            values.get("mailbox_ttl_seconds", DEFAULT_PLANNER_MAILBOX_TTL_SECONDS),
+            "planner.mailbox_ttl_seconds",
+            minimum=0.0,
+            maximum=MAX_PLANNER_MAILBOX_TTL_SECONDS,
+        ),
+        busy_timeout_seconds=_parse_bounded_float(
+            values.get("busy_timeout_seconds", DEFAULT_PLANNER_BUSY_TIMEOUT_SECONDS),
+            "planner.busy_timeout_seconds",
+            minimum=0.0,
+            maximum=MAX_PLANNER_BUSY_TIMEOUT_SECONDS,
+        ),
+    )
+
+
 def _parse_reflect(value: object) -> ReflectConfig:
     values = _expect_mapping(value, "reflect")
     _check_unknown_keys(values, _REFLECT_KEYS, "reflect")
@@ -1055,6 +1158,22 @@ def _parse_missions(value: object) -> MissionConfig:
             values.get("observations_mission"), "missions.observations_mission"
         ),
     )
+
+
+def _parse_planner_path(home: Path, value: object) -> Path:
+    if not isinstance(value, (str, Path)) or not str(value):
+        raise _error("planner.path must be a non-empty profile-local path")
+    configured = Path(value)
+    candidate = configured if configured.is_absolute() else home / configured
+    try:
+        normalized = candidate.resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        raise _error("planner.path must resolve inside hermes_home") from None
+    try:
+        normalized.relative_to(home)
+    except ValueError:
+        raise _error("planner.path must remain inside hermes_home") from None
+    return normalized
 
 
 def _parse_outbox(home: Path, value: object) -> OutboxConfig:

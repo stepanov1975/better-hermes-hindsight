@@ -4,10 +4,11 @@ Better Hermes Hindsight configuration is explicit, Hermes-home-scoped, and local
 configuration does not contact Hindsight, create a client, import Hermes, discover a `.env` file, or
 search the current working directory.
 
-Recall is enabled by default. Reflection and automatic retention are disabled by default. Enable
-reflection only after reviewing the configured Hindsight LLM/data/cost boundary; enable retention only
-after fake-service proof and an isolated Hindsight development deployment. Capability is controlled
-directly by `recall.enabled`, `reflect.enabled`, and `retain.enabled`.
+Recall is enabled by default. Context-aware recall planning, reflection, and automatic retention are
+disabled by default. Enable the planner in `shadow` mode first; enable reflection only after reviewing
+the configured Hindsight LLM/data/cost boundary; enable retention only after fake-service proof and an
+isolated Hindsight development deployment. Capability is controlled directly by `recall.enabled`,
+`planner.mode`, `reflect.enabled`, and `retain.enabled`.
 
 ## Sources and precedence
 
@@ -58,6 +59,16 @@ This example uses only synthetic/local values and contains no API key. Retention
     "input_max_chars": 4096,
     "input_max_tokens": 500,
     "context_max_bytes": 8192
+  },
+  "planner": {
+    "mode": "off",
+    "timeout_seconds": 2.0,
+    "history_max_exchanges": 4,
+    "history_max_chars": 6000,
+    "query_max_chars": 1024,
+    "mailbox_ttl_seconds": 10.0,
+    "busy_timeout_seconds": 0.1,
+    "path": "better_hindsight/recall_plans.sqlite3"
   },
   "reflect": {
     "enabled": false,
@@ -111,6 +122,45 @@ ordinary text. Keep this value at or below the server's
 `HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS`. The existing `recall.max_tokens` setting controls the
 response budget; it does not limit query input.
 
+## Context-aware recall planner
+
+The planner is a companion surface in the same standard Git plugin. Hermes loads it as a normal
+standalone plugin and loads the Better memory provider through the existing exclusive
+`memory.provider` path. The companion's public `pre_llm_call` hook runs before provider prefetch,
+uses `ctx.llm` for one structured decision, and transfers only that decision through SQLite; no Hermes
+core patch or second package installation is required.
+
+`planner.mode` controls behavior:
+
+- `off` (default): do not call the planner and preserve direct current-query recall;
+- `shadow`: compute and consume a plan, emit only action/outcome/latency metadata, but still recall with
+  the original query;
+- `active`: `skip` and `reuse` make no Hindsight request; `recall` substitutes exactly one validated,
+  self-contained query before the normal provider bounds and request path.
+
+The planner sees the clean current user text and a bounded window of ordinary string-valued user and
+assistant messages. It excludes system/developer/tool roles, tool-call scaffolding, non-text turns, and
+known recalled-memory envelopes. Full conversation history is never written to the mailbox. The mailbox
+stores an SHA-256 digest of the source query, session/turn correlation, action, and only the optional
+rewritten query. Rows expire after `planner.mailbox_ttl_seconds`, are atomically consumed and deleted,
+and use SQLite `secure_delete`; normal filesystem and backup residue caveats still apply.
+
+The provider activates the mailbox only for a session whose Better recall policy was authorized, and
+moves that activation through Hermes's public `on_session_switch` callback and invalidates plans on a
+same-session rewind. Planner authorization and provider consumption both require the exact rebound
+session identity, so sibling plans cannot cross; an incomplete switch falls back to direct-query recall.
+A missing, stale, mismatched, contended, malformed, or late plan preserves direct current-query recall
+rather than breaking the turn. In active mode, a planner timeout, exception, or invalid structured result
+finalizes a bounded `skip` decision only while that turn's reservation still exists. Provider consumption
+atomically cancels a pending reservation, so a hook thread abandoned by Hermes cannot publish a result
+into a later turn; successful results also recheck the planner deadline inside the finalize transaction.
+
+`planner.timeout_seconds + recall.timeout_seconds` must not exceed 7.5 seconds when planner mode is
+`shadow` or `active`; the defaults total 5.5 seconds. Planner model routing is exposed as the auxiliary
+slot `better_hindsight_recall_planner`, so its provider/model can be configured through Hermes's normal
+auxiliary-model settings. Configuration is loaded for the process lifecycle; restart the owning Hermes
+process after changing planner activation or routing.
+
 `reflect.input_max_chars` and `reflect.input_max_tokens` independently bound the caller's projected
 nonblank query before the request. `reflect.max_tokens` is the fixed final-answer target sent to
 Hindsight; it is not a complete provider-cost cap. `reflect.output_max_bytes` bounds the complete
@@ -138,6 +188,14 @@ timeout does not guarantee backend model cancellation or refund work/cost alread
 | `recall.input_max_chars` | `4096` | 1 through 65,536 characters |
 | `recall.input_max_tokens` | `500` | 1 through 1,048,576 `cl100k_base` tokens; must not exceed the Hindsight server's `HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS` |
 | `recall.context_max_bytes` | `8192` | 1 through 1,048,576 bytes |
+| `planner.mode` | `off` | `off`, `shadow`, or `active`; explicit opt-in only |
+| `planner.timeout_seconds` | `2.0` | Greater than zero, at most 4 seconds; with recall timeout, at most 7.5 seconds when enabled |
+| `planner.history_max_exchanges` | `4` | Integer from 1 through 20 exchanges |
+| `planner.history_max_chars` | `6000` | Integer from 1 through 65,536 transcript-content characters |
+| `planner.query_max_chars` | `1024` | Integer from 1 through 8,192 characters for a rewritten query |
+| `planner.mailbox_ttl_seconds` | `10.0` | Greater than zero, at most 60 seconds |
+| `planner.busy_timeout_seconds` | `0.1` | Greater than zero, at most 1 second |
+| `planner.path` | `better_hindsight/recall_plans.sqlite3` | Must resolve inside `hermes_home` |
 | `reflect.enabled` | `false` | Boolean; explicit opt-in only |
 | `reflect.timeout_seconds` | `60.0` | Greater than zero, at most 300 seconds; bounds the local Hermes wait |
 | `reflect.input_max_chars` | `4096` | 1 through 65,536 characters |
