@@ -117,6 +117,37 @@ def test_planner_uses_only_bounded_plain_user_assistant_context(tmp_path: Path) 
     )
 
 
+def test_latest_current_copy_is_removed_when_a_later_user_row_exists(tmp_path: Path) -> None:
+    _write_config(tmp_path)
+    mailbox = _mailbox(tmp_path)
+    mailbox.activate(session_id="session-a")
+    llm = _FakeLlm({"action": "reuse"})
+    planner = RecallPlanner(
+        hermes_home=tmp_path,
+        llm=llm,
+        process_identity="fixture-process",
+    )
+
+    planner.on_pre_llm_call(
+        user_message="Why?",
+        conversation_history=[
+            {"role": "user", "content": "Why?"},
+            {"role": "assistant", "content": "Because snapshots make rollback deterministic."},
+            {"role": "user", "content": "Why?"},
+            {"role": "user", "content": "Restored post-current user row."},
+        ],
+        session_id="session-a",
+        turn_id="turn-a",
+    )
+
+    capsule = json.loads(llm.calls[0]["input"][0]["text"])
+    assert capsule["recent_conversation"] == [
+        {"role": "user", "content": "Why?"},
+        {"role": "assistant", "content": "Because snapshots make rollback deterministic."},
+        {"role": "user", "content": "Restored post-current user row."},
+    ]
+
+
 def test_planner_strips_appended_memory_envelope_without_changing_mailbox_digest(
     tmp_path: Path,
 ) -> None:

@@ -190,6 +190,42 @@ def test_planner_configuration_is_bounded_and_profile_local(tmp_path: Path) -> N
         )
 
 
+@pytest.mark.parametrize("mode", ["shadow", "active"])
+@pytest.mark.parametrize("mailbox_ttl_seconds", [1.49, 1.5])
+def test_enabled_planner_mailbox_ttl_covers_bounded_writes(
+    tmp_path: Path,
+    mode: str,
+    mailbox_ttl_seconds: float,
+) -> None:
+    with pytest.raises(ConfigError, match="planner.mailbox_ttl_seconds"):
+        load_config(
+            hermes_home=tmp_path,
+            environ={},
+            injected={
+                "planner": {
+                    "mode": mode,
+                    "timeout_seconds": 1.0,
+                    "busy_timeout_seconds": 0.25,
+                    "mailbox_ttl_seconds": mailbox_ttl_seconds,
+                }
+            },
+        )
+
+    config = load_config(
+        hermes_home=tmp_path,
+        environ={},
+        injected={
+            "planner": {
+                "mode": mode,
+                "timeout_seconds": 1.0,
+                "busy_timeout_seconds": 0.25,
+                "mailbox_ttl_seconds": 1.500001,
+            }
+        },
+    )
+    assert config.planner.mailbox_ttl_seconds == 1.500001
+
+
 def test_hermes_home_must_be_explicit_valid_and_absolute(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="absolute"):
         load_config(hermes_home=Path("relative/profile"), environ={})

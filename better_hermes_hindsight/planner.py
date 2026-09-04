@@ -132,6 +132,9 @@ def _build_capsule(
         if message is None:
             continue
         role, content = message
+        # Hermes includes the current user row in this history, but compaction may append
+        # another user-role row afterward. Remove the latest exact current-text match rather
+        # than assuming the physical history boundary identifies the current row.
         if not skipped_current and role == "user" and content == current_user_message:
             skipped_current = True
             continue

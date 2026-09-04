@@ -484,6 +484,66 @@ def test_mailbox_contention_falls_back_to_direct_query_recall(
     assert handle.recalls[-1][0] == "Current direct query"
 
 
+def test_mailbox_wait_is_charged_to_the_total_recall_deadline(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    document["planner"] = {"mode": "active", "busy_timeout_seconds": 0.05}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    now = 100.0
+
+    def monotonic() -> float:
+        return now
+
+    def delayed_consume(_mailbox: SQLitePlanMailbox, *, source_query: str, session_id: str) -> None:
+        nonlocal now
+        assert source_query == "Current direct query"
+        assert session_id == "session-a"
+        now += 0.05
+        return None
+
+    monkeypatch.setattr("better_hermes_hindsight.provider.time.monotonic", monotonic)
+    monkeypatch.setattr(SQLitePlanMailbox, "consume", delayed_consume)
+
+    assert provider.prefetch("Current direct query")
+    assert len(handle.recalls) == 1
+    assert handle.recalls[0][1] == pytest.approx(0.075)
+
+
+def test_mailbox_wait_exhausting_recall_deadline_prevents_remote_request(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    document["planner"] = {"mode": "active", "busy_timeout_seconds": 0.05}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    now = 100.0
+
+    def monotonic() -> float:
+        return now
+
+    def delayed_consume(_mailbox: SQLitePlanMailbox, *, source_query: str, session_id: str) -> None:
+        nonlocal now
+        del _mailbox, source_query, session_id
+        now += 0.125
+        return None
+
+    monkeypatch.setattr("better_hermes_hindsight.provider.time.monotonic", monotonic)
+    monkeypatch.setattr(SQLitePlanMailbox, "consume", delayed_consume)
+
+    assert provider.prefetch("Current direct query") == ""
+    assert handle.recalls == []
+
+
 def test_configured_recall_deadline_covers_projection_runtime_and_formatting(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

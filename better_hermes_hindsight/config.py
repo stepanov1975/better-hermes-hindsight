@@ -487,6 +487,13 @@ def load_config(
             "combined planner and recall deadline must not exceed "
             f"{PLANNER_AND_RECALL_BUDGET_SECONDS} seconds"
         )
+    if planner.mode != "off" and planner.mailbox_ttl_seconds <= planner.timeout_seconds + (
+        2.0 * planner.busy_timeout_seconds
+    ):
+        raise _error(
+            "planner.mailbox_ttl_seconds must be greater than planner.timeout_seconds plus "
+            "twice planner.busy_timeout_seconds"
+        )
     minimum_segment_bytes = _minimum_retained_segment_bytes(
         retain.tags,
         max_pending_rows=outbox.max_pending_rows,

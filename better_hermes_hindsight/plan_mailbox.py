@@ -132,14 +132,6 @@ class SQLitePlanMailbox:
             with contextlib.closing(self._connect()) as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 connection.execute(
-                    "DELETE FROM active_session WHERE process_identity <> ?",
-                    (self._process_identity,),
-                )
-                connection.execute(
-                    "DELETE FROM recall_plan WHERE process_identity <> ?",
-                    (self._process_identity,),
-                )
-                connection.execute(
                     """
                     INSERT INTO active_session (
                         process_identity, session_id, activated_at, ref_count
@@ -558,10 +550,7 @@ class SQLitePlanMailbox:
                     connection.execute(statement)
 
     def _delete_stale(self, connection: sqlite3.Connection, now: float) -> None:
-        connection.execute(
-            "DELETE FROM recall_plan WHERE expires_at <= ? OR process_identity <> ?",
-            (now, self._process_identity),
-        )
+        connection.execute("DELETE FROM recall_plan WHERE expires_at <= ?", (now,))
 
     @staticmethod
     def _decode_plan(row: sqlite3.Row) -> RecallPlan | None:

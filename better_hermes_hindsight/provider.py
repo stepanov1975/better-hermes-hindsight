@@ -268,6 +268,8 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         if not isinstance(query, str) or not query:
             return ""
 
+        started_at = time.monotonic()
+        deadline = started_at + config.recall.timeout_seconds
         effective_query = query
         mailbox = self._plan_mailbox
         if mailbox is not None:
@@ -300,8 +302,6 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                 ):
                     effective_query = plan.rewritten_query
 
-        started_at = time.monotonic()
-        deadline = started_at + config.recall.timeout_seconds
         try:
             projected = project_query(
                 effective_query,

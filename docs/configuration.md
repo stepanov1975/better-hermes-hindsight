@@ -143,15 +143,22 @@ assistant messages. It excludes system/developer/tool roles, tool-call scaffoldi
 known recalled-memory envelopes. Full conversation history is never written to the mailbox. The mailbox
 stores an SHA-256 digest of the source query, session/turn correlation, action, and only the optional
 rewritten query. Rows expire after `planner.mailbox_ttl_seconds`, are atomically consumed and deleted,
-and use SQLite `secure_delete`; normal filesystem and backup residue caveats still apply.
+and use SQLite `secure_delete`; normal filesystem and backup residue caveats still apply. When planning
+is enabled, `planner.mailbox_ttl_seconds` must be greater than
+`planner.timeout_seconds + (2 × planner.busy_timeout_seconds)`, covering bounded contention while the
+reservation is created and finalized so an on-time result cannot expire before provider consumption.
+Mailbox consumption time is charged against the provider's existing `recall.timeout_seconds` total
+deadline.
 
 The provider activates the mailbox only for a session whose Better recall policy was authorized, and
 moves that activation through Hermes's public `on_session_switch` callback and invalidates plans on a
 same-session rewind. Planner authorization and provider consumption both require the exact rebound
 session identity, so sibling plans cannot cross; an incomplete switch falls back to direct-query recall.
-A missing, stale, mismatched, contended, malformed, or late plan preserves direct current-query recall
-rather than breaking the turn. In active mode, a planner timeout, exception, or invalid structured result
-finalizes a bounded `skip` decision only while that turn's reservation still exists. Provider consumption
+Concurrently active processes sharing one profile retain separate authorization and plans; expiry cleanup
+never removes unexpired rows owned by another process. A missing, stale, mismatched, contended,
+malformed, or late plan preserves direct current-query recall rather than breaking the turn. In active
+mode, a planner timeout, exception, or invalid structured result finalizes a bounded `skip` decision only
+while that turn's reservation still exists. Provider consumption
 atomically cancels a pending reservation, so a hook thread abandoned by Hermes cannot publish a result
 into a later turn; successful results also recheck the planner deadline inside the finalize transaction.
 

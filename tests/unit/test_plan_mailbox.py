@@ -269,9 +269,29 @@ def test_expired_and_other_process_plans_are_never_consumed(tmp_path: Path) -> N
     assert second.consume(source_query="What did we decide?", session_id="session-a") is None
 
     second.activate(session_id="session-a")
-    assert first.is_active(session_id="session-a") is False
+    assert first.is_active(session_id="session-a") is True
     assert second.is_active(session_id="session-a") is True
+    _publish(
+        second,
+        source_query="Second process query",
+        turn_id="turn-c",
+        rewritten_query="Second process rewrite",
+    )
     assert second.consume(source_query="What did we decide?", session_id="session-a") is None
+    assert first.consume(source_query="What did we decide?", session_id="session-a") == RecallPlan(
+        mode="active",
+        action="recall",
+        rewritten_query="What backup policy did Alex choose?",
+        turn_id="turn-b",
+    )
+    assert second.consume(
+        source_query="Second process query", session_id="session-a"
+    ) == RecallPlan(
+        mode="active",
+        action="recall",
+        rewritten_query="Second process rewrite",
+        turn_id="turn-c",
+    )
 
 
 def test_duplicate_turn_cannot_overwrite_an_unconsumed_ready_plan(tmp_path: Path) -> None:
