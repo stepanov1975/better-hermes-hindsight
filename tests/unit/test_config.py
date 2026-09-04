@@ -226,6 +226,29 @@ def test_enabled_planner_mailbox_ttl_covers_bounded_writes(
     assert config.planner.mailbox_ttl_seconds == 1.500001
 
 
+def test_disabled_recall_skips_dormant_planner_deadline_constraints(tmp_path: Path) -> None:
+    config = load_config(
+        hermes_home=tmp_path,
+        environ={},
+        injected={
+            "recall": {"enabled": False, "timeout_seconds": 30.0},
+            "planner": {
+                "mode": "active",
+                "timeout_seconds": 4.0,
+                "busy_timeout_seconds": 1.0,
+                "mailbox_ttl_seconds": 0.1,
+            },
+            "reflect": {"enabled": True},
+            "retain": {"enabled": True},
+        },
+    )
+
+    assert config.recall.enabled is False
+    assert config.planner.mode == "active"
+    assert config.reflect.enabled is True
+    assert config.retain.enabled is True
+
+
 def test_hermes_home_must_be_explicit_valid_and_absolute(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="absolute"):
         load_config(hermes_home=Path("relative/profile"), environ={})

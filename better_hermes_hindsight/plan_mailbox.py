@@ -22,6 +22,7 @@ _SCHEMA_VERSION = 2
 _ALLOWED_MODES = frozenset({"shadow", "active"})
 _ALLOWED_ACTIONS = frozenset({"skip", "reuse", "recall"})
 _PROCESS_NONCE_ENV = "BETTER_HINDSIGHT_RUNTIME_NONCE"
+_SCHEMA_TABLES = frozenset({"active_session", "recall_plan"})
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS active_session (
@@ -532,22 +533,23 @@ class SQLitePlanMailbox:
     @staticmethod
     def _prepare_schema(connection: sqlite3.Connection) -> None:
         current = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        if current > _SCHEMA_VERSION:
-            raise PlanMailboxError("Better Hindsight recall-plan mailbox schema is unsupported.")
-        if current == 1:
-            connection.execute("DROP TABLE IF EXISTS recall_plan")
-            connection.execute("DROP TABLE IF EXISTS active_process")
-            connection.execute("DROP TABLE IF EXISTS active_session")
-            current = 0
-        if current == 0:
+        tables = {
+            str(row[0])
+            for row in connection.execute(
+                """
+                SELECT name FROM sqlite_master
+                WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+                """
+            ).fetchall()
+        }
+        if current == 0 and not tables:
             for statement in _SCHEMA_SQL.split(";"):
                 if statement.strip():
                     connection.execute(statement)
             connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
-        elif current == _SCHEMA_VERSION:
-            for statement in _SCHEMA_SQL.split(";"):
-                if statement.strip():
-                    connection.execute(statement)
+            return
+        if current != _SCHEMA_VERSION or tables != _SCHEMA_TABLES:
+            raise PlanMailboxError("Better Hindsight recall-plan mailbox schema is unsupported.")
 
     def _delete_stale(self, connection: sqlite3.Connection, now: float) -> None:
         connection.execute("DELETE FROM recall_plan WHERE expires_at <= ?", (now,))

@@ -148,7 +148,8 @@ is enabled, `planner.mailbox_ttl_seconds` must be greater than
 `planner.timeout_seconds + (2 × planner.busy_timeout_seconds)`, covering bounded contention while the
 reservation is created and finalized so an on-time result cannot expire before provider consumption.
 Mailbox consumption time is charged against the provider's existing `recall.timeout_seconds` total
-deadline.
+deadline. Mailbox initialization refuses a nonempty or differently versioned SQLite schema without
+migration; never share `planner.path` with `outbox.path` or another application database.
 
 The provider activates the mailbox only for a session whose Better recall policy was authorized, and
 moves that activation through Hermes's public `on_session_switch` callback and invalidates plans on a
@@ -162,8 +163,10 @@ while that turn's reservation still exists. Provider consumption
 atomically cancels a pending reservation, so a hook thread abandoned by Hermes cannot publish a result
 into a later turn; successful results also recheck the planner deadline inside the finalize transaction.
 
-`planner.timeout_seconds + recall.timeout_seconds` must not exceed 7.5 seconds when planner mode is
-`shadow` or `active`; the defaults total 5.5 seconds. Planner model routing is exposed as the auxiliary
+When recall is enabled, `planner.timeout_seconds + recall.timeout_seconds` must not exceed 7.5 seconds
+in `shadow` or `active` mode; the defaults total 5.5 seconds. Dormant planner timing constraints are not
+applied while recall is disabled, so independently enabled reflection or retention can still initialize.
+Planner model routing is exposed as the auxiliary
 slot `better_hindsight_recall_planner`, so its provider/model can be configured through Hermes's normal
 auxiliary-model settings. Configuration is loaded for the process lifecycle; restart the owning Hermes
 process after changing planner activation or routing.

@@ -480,15 +480,19 @@ def load_config(
     if retain.observation_scopes == ((),) and not single_principal:
         raise _error("retain.observation_scopes='shared' requires explicit single_principal=true")
     if (
-        planner.mode != "off"
+        recall.enabled
+        and planner.mode != "off"
         and planner.timeout_seconds + recall.timeout_seconds > PLANNER_AND_RECALL_BUDGET_SECONDS
     ):
         raise _error(
             "combined planner and recall deadline must not exceed "
             f"{PLANNER_AND_RECALL_BUDGET_SECONDS} seconds"
         )
-    if planner.mode != "off" and planner.mailbox_ttl_seconds <= planner.timeout_seconds + (
-        2.0 * planner.busy_timeout_seconds
+    if (
+        recall.enabled
+        and planner.mode != "off"
+        and planner.mailbox_ttl_seconds
+        <= (planner.timeout_seconds + (2.0 * planner.busy_timeout_seconds))
     ):
         raise _error(
             "planner.mailbox_ttl_seconds must be greater than planner.timeout_seconds plus "

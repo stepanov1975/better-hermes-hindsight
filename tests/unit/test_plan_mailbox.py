@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import concurrent.futures
 import os
+import sqlite3
 import stat
 from pathlib import Path
 
-from better_hermes_hindsight.plan_mailbox import RecallPlan, SQLitePlanMailbox
+import pytest
+
+from better_hermes_hindsight.plan_mailbox import (
+    PlanMailboxError,
+    RecallPlan,
+    SQLitePlanMailbox,
+)
 
 
 def _publish(
@@ -419,6 +426,29 @@ def test_activation_is_reference_counted_for_sibling_provider_handles(tmp_path: 
 
     second.deactivate(session_id="session-a")
     assert first.is_active(session_id="session-a") is False
+
+
+def test_foreign_version_one_database_is_not_migrated_or_modified(tmp_path: Path) -> None:
+    path = tmp_path / "shared.sqlite3"
+    with sqlite3.connect(path) as connection:
+        connection.execute("CREATE TABLE foreign_state (value TEXT NOT NULL)")
+        connection.execute("INSERT INTO foreign_state VALUES ('preserve-me')")
+        connection.execute("PRAGMA user_version = 1")
+
+    mailbox = SQLitePlanMailbox(path, busy_timeout_seconds=0.1)
+    with pytest.raises(PlanMailboxError, match="schema is unsupported"):
+        mailbox.activate(session_id="session-a")
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert connection.execute("SELECT value FROM foreign_state").fetchone()[0] == "preserve-me"
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+    assert tables == {"foreign_state"}
 
 
 def test_default_process_identity_is_stable_across_instances(tmp_path: Path) -> None:
