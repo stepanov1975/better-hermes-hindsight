@@ -148,6 +148,8 @@ preserves direct-query recall. Full conversation history is never written to the
 The mailbox stores an SHA-256 digest of the source query, session/turn correlation, action, and only the
 optional rewritten query. Rows use restart-comparable wall-clock expiration, are atomically consumed
 and deleted, and use SQLite `secure_delete`; normal filesystem and backup residue caveats still apply.
+Provider initialization purges an existing mailbox even when planning or recall is now disabled, while a
+missing dormant mailbox is not created. Expiration is rechecked after acquiring the write lock.
 When planning is enabled, `planner.mailbox_ttl_seconds` must be greater than
 `planner.timeout_seconds + (2 × planner.busy_timeout_seconds)`, covering bounded contention while the
 reservation is created and finalized so an on-time result cannot expire before provider consumption.
@@ -168,9 +170,9 @@ purges expired plans by restart-comparable TTL. If deactivation is contended, th
 and retains that release for retry before any reinitialization. A missing, stale, mismatched, contended,
 malformed, or late plan preserves direct current-query recall rather than breaking the turn. In active
 mode, a planner timeout, exception, or invalid structured result finalizes a bounded `skip` decision only
-exists. Provider consumption atomically cancels a pending reservation, so a hook thread abandoned by
-Hermes cannot publish a result into a later turn; successful results also recheck the planner deadline
-inside the finalize transaction.
+while that turn's reservation still exists. Provider consumption atomically cancels a pending reservation,
+so a hook thread abandoned by Hermes cannot publish a result into a later turn; successful results also
+recheck the planner deadline inside the finalize transaction.
 
 When recall is enabled, `planner.timeout_seconds + recall.timeout_seconds` must not exceed 7.5 seconds
 in `shadow` or `active` mode; the defaults total 5.5 seconds. Dormant planner timing constraints are not

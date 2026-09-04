@@ -499,6 +499,83 @@ def test_activation_purges_expired_foreign_process_plans(tmp_path: Path) -> None
     assert second.is_active(session_id="session-b") is True
 
 
+def test_consume_rechecks_expiry_after_waiting_for_the_write_lock(tmp_path: Path) -> None:
+    now = [100.0]
+    path = tmp_path / "mailbox.sqlite3"
+    mailbox = SQLitePlanMailbox(
+        path,
+        busy_timeout_seconds=1.0,
+        process_identity="process-a",
+        clock=lambda: now[0],
+    )
+    mailbox.activate(session_id="session-a")
+    _publish(mailbox, ttl_seconds=1.0)
+    lock = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+    lock.execute("BEGIN IMMEDIATE")
+
+    def release_after_expiry() -> None:
+        now[0] = 102.0
+        lock.rollback()
+
+    timer = threading.Timer(0.05, release_after_expiry)
+    timer.start()
+    try:
+        assert (
+            mailbox.consume(
+                source_query="What did we decide?",
+                session_id="session-a",
+            )
+            is None
+        )
+    finally:
+        timer.join()
+        lock.close()
+
+
+def test_newest_matching_plan_uses_insertion_order_when_wall_clock_moves_backward(
+    tmp_path: Path,
+) -> None:
+    now = [100.0]
+    mailbox = SQLitePlanMailbox(
+        tmp_path / "mailbox.sqlite3",
+        busy_timeout_seconds=0.1,
+        process_identity="process-a",
+        clock=lambda: now[0],
+    )
+    mailbox.activate(session_id="session-a")
+    _publish(mailbox, turn_id="turn-old", rewritten_query="older", ttl_seconds=1000.0)
+    now[0] = 50.0
+    _publish(mailbox, turn_id="turn-new", rewritten_query="newer", ttl_seconds=1000.0)
+
+    assert mailbox.consume(
+        source_query="What did we decide?",
+        session_id="session-a",
+    ) == RecallPlan(
+        mode="active",
+        action="recall",
+        rewritten_query="newer",
+        turn_id="turn-new",
+    )
+
+
+@pytest.mark.parametrize("deadline", [None, 1.0])
+def test_positive_submillisecond_busy_timeout_rounds_up_when_budget_allows(
+    tmp_path: Path,
+    deadline: float | None,
+) -> None:
+    mailbox = SQLitePlanMailbox(
+        tmp_path / "mailbox.sqlite3",
+        busy_timeout_seconds=0.0001,
+        monotonic=lambda: 0.0,
+    )
+    connection = mailbox._connect(deadline=deadline)
+    try:
+        timeout_ms = int(connection.execute("PRAGMA busy_timeout").fetchone()[0])
+    finally:
+        connection.close()
+    assert timeout_ms == 1
+
+
 def test_duplicate_turn_cannot_overwrite_an_unconsumed_ready_plan(tmp_path: Path) -> None:
     mailbox = SQLitePlanMailbox(
         tmp_path / "mailbox.sqlite3",

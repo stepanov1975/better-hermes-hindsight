@@ -306,6 +306,52 @@ def test_provider_passes_projected_query_and_request_to_diagnostic_capture(
     assert captured[0]["result_count"] == 1
 
 
+@pytest.mark.parametrize(
+    ("planner_mode", "recall_enabled"),
+    [("off", True), ("active", False)],
+)
+def test_initialize_purges_expired_mailbox_rows_when_planning_is_dormant(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    planner_mode: str,
+    recall_enabled: bool,
+) -> None:
+    document = _base_config()
+    cast(dict[str, object], document["recall"])["enabled"] = recall_enabled
+    document["planner"] = {"mode": planner_mode}
+    _write_config(tmp_path, document)
+    config = load_config(tmp_path, environ={})
+    stale = SQLitePlanMailbox(
+        config.planner.path,
+        busy_timeout_seconds=config.planner.busy_timeout_seconds,
+        process_identity="stale-process",
+        clock=lambda: 1.0,
+    )
+    stale.activate(session_id="stale-session")
+    assert stale.publish(
+        source_query="expired sensitive query",
+        session_id="stale-session",
+        parent_session_id="",
+        turn_id="stale-turn",
+        mode="active",
+        action="recall",
+        rewritten_query="expired sensitive rewrite",
+        ttl_seconds=1.0,
+    )
+    with sqlite3.connect(config.planner.path) as connection:
+        assert int(connection.execute("SELECT COUNT(*) FROM recall_plan").fetchone()[0]) == 1
+
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+
+    with sqlite3.connect(config.planner.path) as connection:
+        assert int(connection.execute("SELECT COUNT(*) FROM recall_plan").fetchone()[0]) == 0
+    assert provider._plan_mailbox is None
+    provider.shutdown()
+
+
 @pytest.mark.parametrize("action", ["skip", "reuse"])
 def test_active_planner_skip_or_reuse_avoids_remote_recall(
     tmp_path: Path,
@@ -458,6 +504,25 @@ def test_shadow_or_missing_plan_preserves_direct_query_recall(
     assert handle.recalls[-1][0] == "Why?"
     assert provider.prefetch("No mailbox plan")
     assert handle.recalls[-1][0] == "No mailbox plan"
+
+
+def test_oversized_planner_query_bypasses_mailbox_consumption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
+    document["planner"] = {"mode": "active", "history_max_chars": 10}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    monkeypatch.setattr(SQLitePlanMailbox, "consume", _forbidden)
+
+    query = "x" * 11
+    assert provider.prefetch(query)
+    assert handle.recalls[-1][0] == query
 
 
 def test_failed_mailbox_release_is_retried_before_reinitialization(

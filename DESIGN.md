@@ -57,9 +57,9 @@ important.
 6. The formatter projects allowlisted fields, redacts likely credentials, removes later exact
    duplicates using normalized model-facing text plus identical occurrence metadata, frames records
    as untrusted evidence, and enforces the output-byte limit.
-7. Errors and timeouts return no external context rather than failing Hermes. Planner or mailbox
-   failures preserve direct current-query recall; an active planner's invalid or timed-out decision is
-   converted to `skip` when the mailbox remains available.
+7. Errors and timeouts return no external context rather than failing Hermes. Missing, stale, malformed,
+   or contended mailbox state preserves direct current-query recall. A shadow planner failure does the
+   same; an active planner's invalid or timed-out decision becomes `skip` while its reservation remains.
 
 The planner and provider communicate through SQLite because Hermes may import the standalone companion
 and exclusive memory provider under distinct module namespaces. The provider's public

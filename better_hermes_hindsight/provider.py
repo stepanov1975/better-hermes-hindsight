@@ -177,6 +177,21 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                 user_id_alt=_optional_string(kwargs.get("user_id_alt")),
                 agent_context=agent_context,
             )
+        planner_will_activate = bool(self._session_id) and (
+            authorization.recall_enabled and config.planner.mode != "off"
+        )
+        if not planner_will_activate and config.planner.path.exists():
+            try:
+                SQLitePlanMailbox(
+                    config.planner.path,
+                    busy_timeout_seconds=config.planner.busy_timeout_seconds,
+                ).purge_stale()
+            except PlanMailboxError:
+                emit_event(
+                    logger,
+                    "better_hindsight.recall_plan_mailbox",
+                    outcome="cleanup_failed",
+                )
         if not authorization.memory_enabled:
             logger.debug(AUTHORIZATION_INACTIVE_DIAGNOSTIC)
             return
@@ -204,7 +219,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         self._reflect_enabled = authorization.reflect_enabled
         self._retain_enabled = authorization.retain_enabled
         self._runtime = runtime
-        if self._recall_enabled and config.planner.mode != "off" and self._session_id:
+        if planner_will_activate:
             try:
                 mailbox = SQLitePlanMailbox(
                     config.planner.path,
@@ -275,7 +290,10 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         deadline = started_at + config.recall.timeout_seconds
         effective_query = query
         mailbox = self._plan_mailbox
-        if mailbox is not None:
+        planner_query_eligible = len(query) <= config.planner.history_max_chars and bool(
+            query.strip()
+        )
+        if mailbox is not None and planner_query_eligible:
             try:
                 plan = mailbox.consume(
                     source_query=query,

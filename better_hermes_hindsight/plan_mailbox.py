@@ -194,6 +194,21 @@ class SQLitePlanMailbox:
 
         return self._process_identity
 
+    def purge_stale(self) -> None:
+        """Remove expired plans and dead-owner leases without activating this process."""
+
+        if not self._path.exists():
+            return
+        try:
+            with contextlib.closing(self._connect()) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                now = self._clock()
+                self._delete_stale(connection, now)
+                self._delete_dead_owners(connection, now)
+                connection.commit()
+        except (OSError, sqlite3.Error, UnicodeError) as exc:
+            raise PlanMailboxError("recall plan mailbox unavailable") from exc
+
     def activate(self, *, session_id: str) -> None:
         """Mark one authorized provider session as active in this process."""
 
@@ -413,10 +428,10 @@ class SQLitePlanMailbox:
             mode=mode,
             ttl_seconds=ttl_seconds,
         )
-        now = self._clock()
         try:
             with contextlib.closing(self._connect()) as connection:
                 connection.execute("BEGIN IMMEDIATE")
+                now = self._clock()
                 self._delete_stale(connection, now)
                 active = connection.execute(
                     """
@@ -473,10 +488,10 @@ class SQLitePlanMailbox:
             action=action,
             rewritten_query=rewritten_query,
         )
-        now = self._clock()
         try:
             with contextlib.closing(self._connect()) as connection:
                 connection.execute("BEGIN IMMEDIATE")
+                now = self._clock()
                 self._delete_stale(connection, now)
                 if publish_deadline is not None and self._monotonic() >= publish_deadline:
                     connection.execute(
@@ -574,11 +589,11 @@ class SQLitePlanMailbox:
 
         if not session_id:
             return None
-        now = self._clock()
         try:
             with contextlib.closing(self._connect(deadline=deadline)) as connection:
                 self._set_busy_timeout(connection, deadline=deadline)
                 connection.execute("BEGIN IMMEDIATE")
+                now = self._clock()
                 self._delete_stale(connection, now)
                 rows = connection.execute(
                     """
@@ -586,7 +601,7 @@ class SQLitePlanMailbox:
                     FROM recall_plan
                     WHERE process_identity = ? AND query_digest = ? AND expires_at > ?
                       AND session_id = ?
-                    ORDER BY created_at DESC, id DESC
+                    ORDER BY id DESC
                     """,
                     (
                         self._process_identity,
@@ -652,11 +667,17 @@ class SQLitePlanMailbox:
         *,
         deadline: float | None,
     ) -> None:
-        remaining = self._remaining_busy_timeout(deadline)
-        milliseconds = max(0, int(remaining * 1000))
+        deadline_remaining = None if deadline is None else deadline - self._monotonic()
+        if deadline_remaining is None:
+            milliseconds = max(1, math.ceil(self._busy_timeout_seconds * 1000))
+        else:
+            if not math.isfinite(deadline_remaining) or deadline_remaining <= 0:
+                connection.execute("PRAGMA busy_timeout = 0")
+                raise PlanMailboxError("Better Hindsight recall-plan mailbox deadline elapsed.")
+            configured_ms = max(1, math.ceil(self._busy_timeout_seconds * 1000))
+            deadline_ms = max(0, int(deadline_remaining * 1000))
+            milliseconds = min(configured_ms, deadline_ms)
         connection.execute(f"PRAGMA busy_timeout = {milliseconds}")
-        if deadline is not None and remaining <= 0:
-            raise PlanMailboxError("Better Hindsight recall-plan mailbox deadline elapsed.")
 
     def _prepare_schema(
         self,

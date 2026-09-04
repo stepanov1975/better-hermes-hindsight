@@ -11,8 +11,9 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
   query from bounded ordinary user/assistant history, and hands the decision to the memory provider
   through a profile-local, short-lived, session-scoped SQLite reservation mailbox. Pending reservations
   fence out late hook workers before provider consumption, and finalized decisions are consume-once.
-  Shadow mode records only safe action/latency metadata; planner or mailbox failures preserve direct
-  current-query recall.
+  Shadow mode records only safe action/latency metadata. Missing, stale, mismatched, contended, or
+  malformed mailbox state preserves direct current-query recall. In active mode, a planner timeout,
+  exception, or invalid result instead finalizes a bounded `skip` decision while the reservation remains.
 
 ### Changed
 
