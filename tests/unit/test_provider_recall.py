@@ -8,7 +8,6 @@ import json
 import logging
 import os
 import socket
-import sqlite3
 import subprocess
 import sys
 from collections.abc import Iterator, Mapping
@@ -54,6 +53,7 @@ from better_hermes_hindsight.runtime import (
     finalize_process_runtime,
     reset_process_runtime_for_tests,
 )
+from tests.legacy_plan_mailbox import create_legacy_plan_mailbox
 
 _PLUGIN_SPEC = importlib.util.spec_from_file_location(
     "_better_hindsight_plugin_entrypoint",
@@ -368,21 +368,7 @@ def test_provider_initialization_removes_legacy_sqlite_mailbox(
     }
     _write_config(tmp_path, document)
     path = tmp_path / "better_hindsight" / "custom-plans.sqlite3"
-    with sqlite3.connect(path) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE active_session (session_id TEXT NOT NULL);
-            CREATE TABLE recall_plan (
-                turn_id TEXT NOT NULL,
-                query_digest TEXT NOT NULL,
-                mode TEXT NOT NULL,
-                action TEXT,
-                rewritten_query TEXT,
-                expires_at REAL NOT NULL
-            );
-            PRAGMA user_version = 3;
-            """
-        )
+    create_legacy_plan_mailbox(path)
     candidates = [path, Path(f"{path}-wal"), Path(f"{path}-shm"), Path(f"{path}-journal")]
     for candidate in candidates[1:]:
         candidate.write_bytes(b"private rewritten query")

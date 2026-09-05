@@ -71,10 +71,9 @@ current-query identity plus monotonic expiry, an atomic publication deadline, an
 prevent a consumed, late, or sibling plan from leaking into a later turn. Consuming a pending reservation
 removes it before an abandoned hook worker can publish late. Missing state falls back to direct-query
 recall, and process exit removes all handoff state automatically. Companion registration and provider
-initialization also idempotently remove only a schema-verified obsolete branch-preview SQLite mailbox
-and its sidecars; its former settings are accepted only long enough to validate and locate that cleanup
-target. An
-unrecognized file is preserved and produces a sanitized cleanup-failure event.
+initialization also idempotently remove only an exact-schema-verified obsolete branch-preview SQLite
+mailbox and its sidecars; its former settings are accepted only long enough to validate and locate that
+cleanup target. An unrecognized file is preserved and produces a sanitized cleanup-failure event.
 
 The model-facing `better_hindsight_recall` tool reuses this configured path and returns structured
 records without internal ranking or source-count telemetry. It cannot select a different bank,

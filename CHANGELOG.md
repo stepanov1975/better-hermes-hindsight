@@ -12,9 +12,9 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
   through a profile-keyed, short-lived process-local reservation registry. Pending reservations
   fence out late hook workers before provider consumption, publication deadlines are enforced while
   finalizing under the registry lock, and finalized decisions are consume-once. Companion registration
-  or provider initialization idempotently removes only schema-verified obsolete branch-preview SQLite
-  planner mailboxes and sidecars while continuing to accept their former settings only for validated
-  migration cleanup.
+  or provider initialization idempotently removes only exact-schema-verified obsolete branch-preview
+  SQLite planner mailboxes and sidecars while continuing to accept their former settings only for
+  validated migration cleanup.
   Shadow mode records only safe action/latency metadata. Missing, stale, or mismatched handoff state
   preserves direct current-query recall. In active mode, a planner timeout,
   exception, or invalid result finalizes a bounded `skip` decision only while the reservation and its

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
-import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
 
 from better_hermes_hindsight.planner import RECALL_PLANNER_TASK
+from tests.legacy_plan_mailbox import create_legacy_plan_mailbox
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -23,25 +23,6 @@ def _load_plugin_entrypoint() -> Any:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
-
-
-def _create_legacy_mailbox(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as connection:
-        connection.executescript(
-            """
-            CREATE TABLE active_session (session_id TEXT NOT NULL);
-            CREATE TABLE recall_plan (
-                turn_id TEXT NOT NULL,
-                query_digest TEXT NOT NULL,
-                mode TEXT NOT NULL,
-                action TEXT,
-                rewritten_query TEXT,
-                expires_at REAL NOT NULL
-            );
-            PRAGMA user_version = 3;
-            """
-        )
 
 
 class _State:
@@ -110,7 +91,7 @@ def test_general_plugin_surface_registers_one_planner_hook_and_task(tmp_path: Pa
 
 def test_general_plugin_registration_removes_a_legacy_mailbox(tmp_path: Path) -> None:
     path = tmp_path / "better_hindsight" / "recall_plans.sqlite3"
-    _create_legacy_mailbox(path)
+    create_legacy_plan_mailbox(path)
     plugin = _load_plugin_entrypoint()
     context = _GeneralContext(tmp_path)
 
