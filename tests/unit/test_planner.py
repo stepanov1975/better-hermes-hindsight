@@ -442,6 +442,76 @@ def test_active_timeout_publishes_skip_without_using_late_model_result(tmp_path:
     )
 
 
+def test_invalid_turn_identity_does_not_mutate_the_mailbox(tmp_path: Path) -> None:
+    mailbox = _mailbox(tmp_path)
+    mailbox.activate(session_id="session-a")
+    assert mailbox.reserve(
+        source_query="question",
+        session_id="session-a",
+        parent_session_id="",
+        turn_id="turn-old",
+        mode="active",
+    )
+    assert mailbox.finalize(
+        turn_id="turn-old",
+        mode="active",
+        action="recall",
+        rewritten_query="older valid rewrite",
+    )
+    llm = _FakeLlm({"action": "skip"})
+
+    RecallPlanner(hermes_home=tmp_path, llm=llm).on_pre_llm_call(
+        user_message="question",
+        session_id="session-a",
+    )
+
+    assert llm.calls == []
+    assert mailbox.consume(source_query="question", session_id="session-a") == RecallPlan(
+        mode="active",
+        action="recall",
+        rewritten_query="older valid rewrite",
+        turn_id="turn-old",
+    )
+
+
+def test_config_failure_fences_an_abandoned_matching_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mailbox = _mailbox(tmp_path)
+    mailbox.activate(session_id="session-a")
+    assert mailbox.reserve(
+        source_query="same question",
+        session_id="session-a",
+        parent_session_id="",
+        turn_id="old-turn",
+        mode="active",
+    )
+    assert mailbox.finalize(
+        turn_id="old-turn",
+        mode="active",
+        action="recall",
+        rewritten_query="stale context-dependent rewrite",
+    )
+
+    def fail_config(_home: Path) -> object:
+        raise OSError("temporarily unavailable")
+
+    monkeypatch.setattr(planner_module, "load_config", fail_config)
+    llm = _FakeLlm({"action": "recall", "query": "unused"})
+    planner = RecallPlanner(hermes_home=tmp_path, llm=llm)
+
+    planner.on_pre_llm_call(
+        user_message="same question",
+        conversation_history=[],
+        session_id="session-a",
+        parent_session_id="",
+        turn_id="new-turn",
+    )
+
+    assert llm.calls == []
+    assert mailbox.consume(source_query="same question", session_id="session-a") is None
+
+
 def test_off_or_inactive_planner_makes_no_model_call_or_mailbox(tmp_path: Path) -> None:
     _write_config(tmp_path, mode="off")
     llm = _FakeLlm({"action": "recall", "query": "must not run"})

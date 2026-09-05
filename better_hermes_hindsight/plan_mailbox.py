@@ -46,7 +46,7 @@ class _StoredPlan:
     sequence: int
     query_digest: str
     session_id: str
-    mode: PlanMode
+    mode: PlanMode | None
     expires_at: float
     publish_before: float | None = None
     action: PlanAction | None = None
@@ -110,8 +110,8 @@ class InMemoryPlanMailbox:
 
         _require_text(session_id, "session_id")
         token = uuid.uuid4().hex
-        now = self._clock()
         with self._registry.lock:
+            now = self._clock()
             state = self._home_state(create=True)
             assert state is not None
             self._purge_expired(state, now)
@@ -122,8 +122,8 @@ class InMemoryPlanMailbox:
         """Release exactly one provider handle and its orphaned session plans."""
 
         _require_text(token, "token")
-        now = self._clock()
         with self._registry.lock:
+            now = self._clock()
             state = self._home_state(create=False)
             if state is None:
                 return
@@ -138,8 +138,8 @@ class InMemoryPlanMailbox:
 
         _require_text(token, "token")
         _require_text(new_session_id, "new_session_id")
-        now = self._clock()
         with self._registry.lock:
+            now = self._clock()
             state = self._home_state(create=False)
             if state is None or token not in state.activations:
                 raise PlanMailboxError("recall plan handoff unavailable")
@@ -154,13 +154,45 @@ class InMemoryPlanMailbox:
         """Return whether an authorized provider handle owns this session."""
 
         _require_text(session_id, "session_id")
-        now = self._clock()
         with self._registry.lock:
+            now = self._clock()
             state = self._home_state(create=False)
             if state is None:
                 return False
             self._purge_expired(state, now)
             return session_id in state.activations.values()
+
+    def begin_turn(self, *, source_query: str, session_id: str, turn_id: str) -> bool:
+        """Publish a pending fence before any current-turn planning work."""
+
+        _require_text(source_query, "source_query")
+        _require_text(session_id, "session_id")
+        _require_text(turn_id, "turn_id")
+        digest = _query_digest(source_query)
+        with self._registry.lock:
+            now = self._clock()
+            state = self._home_state(create=False)
+            if state is None:
+                return False
+            self._purge_expired(state, now)
+            if session_id not in state.activations.values():
+                return False
+            existing = state.plans.get(turn_id)
+            if existing is not None:
+                return (
+                    existing.session_id == session_id
+                    and existing.query_digest == digest
+                    and existing.action is None
+                )
+            state.sequence += 1
+            state.plans[turn_id] = _StoredPlan(
+                sequence=state.sequence,
+                query_digest=digest,
+                session_id=session_id,
+                mode=None,
+                expires_at=now + _PLAN_MAX_AGE_SECONDS,
+            )
+            return True
 
     def reserve(
         self,
@@ -183,24 +215,39 @@ class InMemoryPlanMailbox:
             not math.isfinite(publish_timeout_seconds) or publish_timeout_seconds <= 0
         ):
             raise ValueError("publish_timeout_seconds must be finite and positive")
-        now = self._clock()
         with self._registry.lock:
+            now = self._clock()
             state = self._home_state(create=False)
             if state is None:
                 return False
             self._purge_expired(state, now)
-            if session_id not in state.activations.values() or turn_id in state.plans:
+            if session_id not in state.activations.values():
                 return False
+            digest = _query_digest(source_query)
+            publish_before = (
+                None if publish_timeout_seconds is None else now + publish_timeout_seconds
+            )
+            existing = state.plans.get(turn_id)
+            if existing is not None:
+                if (
+                    existing.session_id != session_id
+                    or existing.query_digest != digest
+                    or existing.mode is not None
+                    or existing.action is not None
+                ):
+                    return False
+                existing.mode = mode
+                existing.expires_at = now + _PLAN_MAX_AGE_SECONDS
+                existing.publish_before = publish_before
+                return True
             state.sequence += 1
             state.plans[turn_id] = _StoredPlan(
                 sequence=state.sequence,
-                query_digest=_query_digest(source_query),
+                query_digest=digest,
                 session_id=session_id,
                 mode=mode,
                 expires_at=now + _PLAN_MAX_AGE_SECONDS,
-                publish_before=(
-                    None if publish_timeout_seconds is None else now + publish_timeout_seconds
-                ),
+                publish_before=publish_before,
             )
             return True
 
@@ -217,8 +264,8 @@ class InMemoryPlanMailbox:
         _require_text(turn_id, "turn_id")
         _require_mode(mode)
         _require_action(action, rewritten_query)
-        now = self._clock()
         with self._registry.lock:
+            now = self._clock()
             state = self._home_state(create=False)
             if state is None:
                 return False
@@ -249,9 +296,9 @@ class InMemoryPlanMailbox:
 
         _require_text(source_query, "source_query")
         _require_text(session_id, "session_id")
-        now = self._clock()
         digest = _query_digest(source_query)
         with self._registry.lock:
+            now = self._clock()
             state = self._home_state(create=False)
             if state is None:
                 return None
@@ -268,7 +315,7 @@ class InMemoryPlanMailbox:
             newest_turn_id, newest = max(matches, key=lambda item: item[1].sequence)
             for turn_id, _plan in matches:
                 del state.plans[turn_id]
-            if newest.action is None:
+            if newest.action is None or newest.mode is None:
                 return None
             return RecallPlan(
                 mode=newest.mode,
@@ -278,7 +325,7 @@ class InMemoryPlanMailbox:
             )
 
     def clear_session_plans(self, *, session_id: str) -> None:
-        """Invalidate pending and ready plans after a same-session rewind."""
+        """Invalidate pending and ready plans after a same-session reset or rewind."""
 
         _require_text(session_id, "session_id")
         with self._registry.lock:
@@ -291,8 +338,8 @@ class InMemoryPlanMailbox:
     def purge_stale(self) -> None:
         """Drop expired process-local plans for this profile."""
 
-        now = self._clock()
         with self._registry.lock:
+            now = self._clock()
             state = self._home_state(create=False)
             if state is None:
                 return

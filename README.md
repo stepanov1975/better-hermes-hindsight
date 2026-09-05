@@ -138,12 +138,15 @@ The optional planner is disabled by default. In `shadow` mode it records only ac
 keeps direct-query recall. In `active` mode, `skip` and `reuse` avoid a Hindsight request while `recall`
 substitutes one validated self-contained query. The hook never stores the transcript; a short-lived
 process-local handoff stores only query hashes and the planned action/query in memory. Session-scoped
-reservations are consumed once, and consuming a pending reservation fences out an abandoned late hook
-worker. Finalization rejects model-derived `recall` or `reuse` after the planner deadline while still
-allowing the deterministic active-mode `skip` failure policy. Missing, stale, late, or mismatched handoff
-state falls back to direct current-query recall. Earlier branch-preview revisions wrote planner decisions
-to SQLite. The runtime deliberately leaves that legacy path untouched: stop every Hermes process using
-the profile, remove the configured database and sidecars offline, then remove the obsolete planner keys.
+reservations are consumed once. After validating current session/turn identity, every hook publishes the
+newest pending fence before configuration or model work, so an early return cannot expose an older plan.
+Consuming a pending reservation fences out an abandoned late hook worker. Finalization samples the clock
+and rejects model-derived `recall` or `reuse` after the
+planner deadline while holding the registry lock, while still allowing the deterministic active-mode
+`skip` failure policy. Missing, stale, late, or mismatched handoff state falls back to direct current-query
+recall. Earlier branch-preview revisions wrote planner decisions to SQLite. The runtime deliberately leaves
+that legacy path untouched: stop every Hermes process using the profile, remove the configured database
+and sidecars offline, then remove the obsolete planner keys.
 
 Reflection is disabled by default and is never automatic. When enabled, `better_hindsight_reflect`
 accepts one nonblank bounded query for the configured bank under the authorized principal and returns

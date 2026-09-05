@@ -6,6 +6,7 @@ import importlib.util
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 from typing import Any
 
 import pytest
@@ -162,6 +163,106 @@ def test_publication_deadline_is_enforced_inside_finalize(tmp_path: Path) -> Non
         rewritten_query="late rewritten query",
     )
     assert mailbox.consume(source_query="Why?", session_id="session-a") is None
+    mailbox.deactivate(token=token)
+
+
+def test_finalize_samples_deadline_after_acquiring_registry_lock(tmp_path: Path) -> None:
+    clock = _Clock(10.0)
+    sampled = Event()
+    arm_sample = False
+
+    def monotonic() -> float:
+        if arm_sample:
+            sampled.set()
+        return clock()
+
+    mailbox = InMemoryPlanMailbox(tmp_path, monotonic=monotonic)
+    token = mailbox.activate(session_id="session-a")
+    assert mailbox.reserve(
+        source_query="Why?",
+        session_id="session-a",
+        parent_session_id="",
+        turn_id="turn-a",
+        mode="active",
+        publish_timeout_seconds=0.5,
+    )
+    arm_sample = True
+    started = Event()
+
+    def finalize() -> bool:
+        started.set()
+        return mailbox.finalize(
+            turn_id="turn-a",
+            mode="active",
+            action="recall",
+            rewritten_query="rewritten",
+        )
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    lock_held = True
+    mailbox._registry.lock.acquire()
+    try:
+        future = pool.submit(finalize)
+        assert started.wait(timeout=1.0)
+        assert not sampled.wait(timeout=0.1)
+        clock.value = 10.5
+        mailbox._registry.lock.release()
+        lock_held = False
+        assert not future.result(timeout=1.0)
+    finally:
+        if lock_held:
+            mailbox._registry.lock.release()
+        pool.shutdown(wait=True)
+    mailbox.deactivate(token=token)
+
+
+def test_pending_turn_fence_blocks_an_abandoned_matching_plan(tmp_path: Path) -> None:
+    mailbox = InMemoryPlanMailbox(tmp_path)
+    token = _ready_plan(mailbox, rewritten_query="stale rewrite")
+
+    assert mailbox.begin_turn(source_query="Why?", session_id="session-a", turn_id="turn-current")
+    assert mailbox.consume(source_query="Why?", session_id="session-a") is None
+    mailbox.deactivate(token=token)
+
+
+def test_pending_fence_does_not_delete_an_existing_matching_reservation(
+    tmp_path: Path,
+) -> None:
+    mailbox = InMemoryPlanMailbox(tmp_path)
+    token = mailbox.activate(session_id="session-a")
+    assert mailbox.reserve(
+        source_query="Why?",
+        session_id="session-a",
+        parent_session_id="",
+        turn_id="turn-a",
+        mode="active",
+    )
+    assert mailbox.begin_turn(source_query="Why?", session_id="session-a", turn_id="turn-b")
+    assert mailbox.finalize(
+        turn_id="turn-a",
+        mode="active",
+        action="recall",
+        rewritten_query="first turn rewrite",
+    )
+    assert mailbox.reserve(
+        source_query="Why?",
+        session_id="session-a",
+        parent_session_id="",
+        turn_id="turn-b",
+        mode="active",
+    )
+    assert mailbox.finalize(
+        turn_id="turn-b",
+        mode="active",
+        action="skip",
+        rewritten_query=None,
+    )
+    assert mailbox.consume(source_query="Why?", session_id="session-a") == RecallPlan(
+        mode="active",
+        action="skip",
+        rewritten_query=None,
+        turn_id="turn-b",
+    )
     mailbox.deactivate(token=token)
 
 

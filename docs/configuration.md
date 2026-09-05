@@ -145,9 +145,13 @@ preserves direct-query recall. Full conversation history is never written to the
 The handoff stores an SHA-256 digest of the source query, session/turn correlation, action, and optional
 rewritten query only in process memory. Hermes imports the companion and provider under distinct module
 names, so they share a stable private `sys.modules` registry keyed by the resolved Hermes home. No planner
-database, file lock, PID lease, or cross-process coordination exists in normal operation. Monotonic expiry
-bounds stale plans, the planner deadline is checked atomically when a reservation is finalized,
-consume-once deletion prevents reuse, and process exit removes all handoff state.
+database, file lock, PID lease, or cross-process coordination exists in normal operation. After validating
+current session/turn identity, every hook publishes the newest pending fence before configuration or model
+work, so an early return cannot expose an older plan. Hermes acquires its conversation-scoped turn lease
+before this hook, so same-session turns cannot overlap; sequence ordering handles retries within one turn.
+Monotonic expiry bounds stale plans, and the planner deadline clock is sampled and checked while the
+reservation registry lock is held. Consume-once deletion prevents reuse, and process exit removes all
+handoff state.
 
 Earlier branch-preview revisions wrote planner decisions to SQLite. The runtime deliberately does not touch
 that legacy path because an on-disk update can coexist with a still-running old gateway. To upgrade:

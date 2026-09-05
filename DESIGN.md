@@ -69,9 +69,13 @@ shared process-local handoff without durable or cross-process coordination. The 
 activation token and its public `on_session_switch` callback rebinds that token across
 branch/resume/reset/compression rotations; same-session reset or rewind clears plans. Exact profile,
 session, and current-query identity plus monotonic expiry, an atomic publication deadline, and
-consume-once deletion prevents a consumed, late, or sibling plan from leaking into a later turn.
-Consuming a pending reservation removes it before an abandoned hook worker can publish late. Missing
-state falls back to direct-query recall, and process exit removes all handoff state automatically.
+consume-once deletion prevents a consumed, late, or sibling plan from leaking into a later turn. After
+validating current session/turn identity, every hook publishes the newest pending fence before configuration
+or model work, so an early return cannot expose an older plan. Hermes acquires its conversation-scoped
+turn lease before this hook, so same-session turns cannot overlap; sequence ordering handles retries within
+one turn. Deadline and
+expiry clocks are sampled only while holding the registry lock. Missing state falls back to direct-query
+recall, and process exit removes all handoff state automatically.
 Earlier branch-preview revisions wrote planner decisions to SQLite. The runtime deliberately leaves that
 legacy path untouched because an install may coexist with a still-running old gateway. Upgrading operators
 must stop every Hermes process using the profile, remove the database and sidecars offline, and then remove

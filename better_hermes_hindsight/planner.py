@@ -206,9 +206,24 @@ class RecallPlanner:
         current = kwargs.get("user_message")
         if not isinstance(current, str) or not current:
             return
+        session_id = kwargs.get("session_id")
+        session = session_id if isinstance(session_id, str) else ""
+        if not session:
+            return
         turn_id = kwargs.get("turn_id")
         if not isinstance(turn_id, str) or not turn_id:
             return
+        try:
+            mailbox = InMemoryPlanMailbox(self._hermes_home, monotonic=self._monotonic)
+            if not mailbox.begin_turn(
+                source_query=current,
+                session_id=session,
+                turn_id=turn_id,
+            ):
+                return
+        except (PlanMailboxError, ValueError):
+            return
+
         try:
             config = load_config(self._hermes_home)
         except (ConfigError, OSError):
@@ -218,20 +233,9 @@ class RecallPlanner:
         if len(current) > config.planner.history_max_chars or not current.strip():
             return
 
-        session_id = kwargs.get("session_id")
         parent_session_id = kwargs.get("parent_session_id")
-        session = session_id if isinstance(session_id, str) else ""
         parent = parent_session_id if isinstance(parent_session_id, str) else ""
-        if not session:
-            return
-
         try:
-            mailbox = InMemoryPlanMailbox(self._hermes_home, monotonic=self._monotonic)
-        except PlanMailboxError:
-            return
-        try:
-            if not mailbox.is_active(session_id=session):
-                return
             if not mailbox.reserve(
                 source_query=current,
                 session_id=session,
