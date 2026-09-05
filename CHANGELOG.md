@@ -4,6 +4,27 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+### Added
+
+- Added a default-off context-aware automatic-recall planner that runs through Hermes's public
+  `pre_llm_call` and `ctx.llm` plugin surfaces, chooses `skip`, `reuse`, or one self-contained recall
+  query from bounded ordinary user/assistant history, and hands the decision to the memory provider
+  through a profile-keyed, short-lived process-local reservation registry. After validating current
+  session/turn identity, every hook clears that session's prior plans before checking whether the current
+  payload is plannable. Queries above the planner's absolute maximum skip planning before hashing. Pending
+  reservations fence out late hook workers and are removed on provider-query mismatch; consumed turn IDs
+  remain bounded tombstones so hook retries cannot republish them. Publication deadlines are sampled and
+  enforced while holding the registry lock. Queued Hermes session rotations are
+  bridged from the exact active parent for only that top-level turn; subagent lineage is excluded, stale
+  callbacks are ignored, and provider initialization, identity updates, mailbox rebinding, and shutdown are
+  serialized. Bounded pending and stale-parent state retain out-of-order descendants until their parent
+  arrives. Legacy branch-preview SQLite settings remain loadable but no longer configure the handoff. The runtime does not mutate those
+  paths; the documented upgrade requires stopping profile users before explicit offline file cleanup.
+  Shadow mode records only safe action/latency metadata. Missing, stale, or mismatched handoff state
+  preserves direct current-query recall. In active mode, a planner timeout, exception, or invalid result
+  finalizes a bounded `skip` while the reservation remains. The atomic publication deadline rejects late
+  model-derived `recall` or `reuse` decisions without blocking that deterministic failure policy.
+
 ### Changed
 
 - Replaced the provider-specific automatic-recall markers with the provider-neutral

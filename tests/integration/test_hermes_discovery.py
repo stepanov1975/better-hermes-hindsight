@@ -16,6 +16,116 @@ from tests.integration.helpers import (
 
 ROOT = Path(__file__).resolve().parents[2]
 
+_COMPANION_HANDOFF_SCRIPT = r"""
+import json
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+from hermes_cli.plugins import PluginManager
+from plugins.memory import load_memory_provider
+
+
+class FakeLlm:
+    def __init__(self):
+        self.calls = []
+
+    def complete_structured(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(parsed={
+            "action": "recall",
+            "query": "What backup policy did Alex choose?",
+        })
+
+
+class FakeRuntime:
+    def __init__(self):
+        self.calls = []
+        self.close_calls = 0
+
+    def recall(self, query, *, timeout):
+        self.calls.append((query, timeout))
+        return SimpleNamespace(results=[])
+
+    def close(self):
+        self.close_calls += 1
+
+
+manager = PluginManager()
+manager.discover_and_load()
+callback = manager._hooks["pre_llm_call"][0]
+fake_llm = FakeLlm()
+callback.__self__._llm = fake_llm
+provider = load_memory_provider("better_hindsight")
+runtime = FakeRuntime()
+provider_module = sys.modules[type(provider).__module__]
+provider_module.acquire_process_runtime = lambda _config: runtime
+observer = provider_module.InMemoryPlanMailbox(Path(manager.scope_key))
+provider.initialize(
+    "root-session",
+    hermes_home=manager.scope_key,
+    platform="cli",
+    agent_context="primary",
+)
+provider.on_session_switch("child-1", parent_session_id="root-session")
+provider.on_session_switch("child-2", parent_session_id="child-1")
+manager.invoke_hook(
+    "pre_llm_call",
+    session_id="child-2",
+    parent_session_id="child-1",
+    task_id="task-a",
+    turn_id="turn-a",
+    user_message="What did we decide?",
+    conversation_history=[
+        {"role": "user", "content": "We discussed backup policy."},
+        {"role": "assistant", "content": "Keep seven daily backups."},
+        {"role": "user", "content": "What did we decide?"},
+    ],
+    provider="fixture",
+    model="fixture",
+)
+provider.prefetch("What did we decide?")
+provider.shutdown()
+assert len(fake_llm.calls) == 1
+assert runtime.calls[0][0] == "What backup policy did Alex choose?"
+assert runtime.close_calls == 1
+assert not observer.is_active(session_id="child-2")
+assert not (Path(manager.scope_key) / "better_hindsight" / "recall_plans.sqlite3").exists()
+print(json.dumps({
+    "active_after_shutdown": observer.is_active(session_id="child-2"),
+    "llm_calls": len(fake_llm.calls),
+    "planner_state_file_exists": (
+        Path(manager.scope_key) / "better_hindsight" / "recall_plans.sqlite3"
+    ).exists(),
+    "recall_query": runtime.calls[0][0],
+}, sort_keys=True))
+"""
+
+
+_COMPANION_DISCOVERY_SCRIPT = r"""
+import json
+
+from hermes_cli.plugins import PluginManager
+from plugins.memory import load_memory_provider
+
+manager = PluginManager()
+manager.discover_and_load()
+loaded = manager._plugins["better_hindsight"]
+provider = load_memory_provider("better_hindsight")
+assert loaded.enabled is True
+assert loaded.error is None
+assert provider.name == "better_hindsight"
+assert len(manager._hooks.get("pre_llm_call", [])) == 1
+assert set(manager._aux_tasks) == {"better_hindsight_recall_planner"}
+print(json.dumps({
+    "auxiliary_tasks": sorted(manager._aux_tasks),
+    "hook_count": len(manager._hooks["pre_llm_call"]),
+    "kind": loaded.manifest.kind,
+    "provider": provider.name,
+}, sort_keys=True))
+"""
+
+
 _ACTIVE_DISCOVERY_SCRIPT = r"""
 import argparse
 import fcntl
@@ -215,6 +325,85 @@ print(json.dumps({
     "version": release_version,
 }, sort_keys=True))
 """
+
+
+def test_current_loader_registers_companion_once_alongside_memory_provider(
+    tmp_path: Path,
+) -> None:
+    hermes_home = tmp_path / "hermes-home"
+    hermes_home.mkdir()
+    (hermes_home / "config.yaml").write_text(
+        "memory:\n  provider: better_hindsight\nplugins:\n  enabled:\n    - better_hindsight\n",
+        encoding="utf-8",
+    )
+    materialize_standard_plugin(source=ROOT, hermes_home=hermes_home)
+    completed = subprocess.run(
+        [sys.executable, "-c", _COMPANION_DISCOVERY_SCRIPT],
+        cwd=tmp_path,
+        env=clean_subprocess_env(
+            tmp_path,
+            hermes_home=hermes_home,
+            no_proxy="*",
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout.strip().splitlines()[-1]) == {
+        "auxiliary_tasks": ["better_hindsight_recall_planner"],
+        "hook_count": 1,
+        "kind": "standalone",
+        "provider": "better_hindsight",
+    }
+
+
+def test_current_hermes_hook_to_provider_mailbox_handoff_uses_rewritten_query(
+    tmp_path: Path,
+) -> None:
+    hermes_home = tmp_path / "hermes-home"
+    hermes_home.mkdir()
+    (hermes_home / "config.yaml").write_text(
+        "memory:\n  provider: better_hindsight\nplugins:\n  enabled:\n    - better_hindsight\n",
+        encoding="utf-8",
+    )
+    config_dir = hermes_home / "better_hindsight"
+    config_dir.mkdir()
+    (config_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "single_principal": True,
+                "recall": {"timeout_seconds": 1.0},
+                "planner": {"mode": "active"},
+                "retain": {"enabled": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+    materialize_standard_plugin(source=ROOT, hermes_home=hermes_home)
+    completed = subprocess.run(
+        [sys.executable, "-c", _COMPANION_HANDOFF_SCRIPT],
+        cwd=tmp_path,
+        env=clean_subprocess_env(
+            tmp_path,
+            hermes_home=hermes_home,
+            no_proxy="*",
+        ),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout.strip().splitlines()[-1]) == {
+        "active_after_shutdown": False,
+        "llm_calls": 1,
+        "planner_state_file_exists": False,
+        "recall_query": "What backup policy did Alex choose?",
+    }
 
 
 def test_current_loader_discovers_active_standard_plugin_cli_and_recall_tool(

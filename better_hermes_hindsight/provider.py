@@ -26,6 +26,7 @@ from .formatting import (
 )
 from .management import status
 from .outbox import AdmissionStatus
+from .plan_mailbox import InMemoryPlanMailbox, PlanMailboxError
 from .runtime import (
     AsyncCallTimeoutError,
     ProcessRuntimeHandle,
@@ -72,6 +73,8 @@ _RETAIN_TOOL_SOURCE_MARKER = (
 _STATUS_TOOL_NAME = "better_hindsight_status"
 _STATUS_TOOL_INVALID_ARGUMENTS = "Better Hindsight status does not accept arguments."
 _STATUS_TOOL_UNAVAILABLE = "Better Hindsight status is unavailable for this handle."
+_MAX_PENDING_SESSION_SWITCHES = 32
+_MAX_SEEN_SESSION_IDS = 128
 
 _UNKNOWN_TOOL = "Unknown Better Hindsight tool."
 
@@ -100,10 +103,16 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         "_config",
         "_legacy_system_prompt_block",
         "_last_recall_count",
+        "_plan_mailbox",
+        "_plan_mailbox_activation",
+        "_pending_session_switches",
         "_recall_enabled",
         "_reflect_enabled",
         "_retain_enabled",
         "_runtime",
+        "_session_id",
+        "_session_lock",
+        "_seen_session_ids",
         "_system_prompt_section_registrar",
     )
 
@@ -115,10 +124,16 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         self._config: BetterHindsightConfig | None = None
         self._legacy_system_prompt_block = True
         self._last_recall_count = 0
+        self._plan_mailbox: InMemoryPlanMailbox | None = None
+        self._plan_mailbox_activation: str | None = None
+        self._pending_session_switches: dict[str, tuple[str, bool, bool]] = {}
         self._recall_enabled = False
         self._reflect_enabled = False
         self._retain_enabled = False
         self._runtime: ProcessRuntimeHandle | None = None
+        self._session_id = ""
+        self._session_lock = threading.RLock()
+        self._seen_session_ids: dict[str, None] = {}
         self._system_prompt_section_registrar = system_prompt_section_registrar
 
     @property
@@ -138,6 +153,12 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         return SYSTEM_PROMPT_BLOCK if self._legacy_system_prompt_block else ""
 
     def initialize(self, session_id: str, **kwargs: object) -> None:
+        """Initialize this provider atomically with session callbacks."""
+
+        with self._session_lock:
+            self._initialize_locked(session_id, **kwargs)
+
+    def _initialize_locked(self, session_id: str, **kwargs: object) -> None:
         """Authorize one handle, then acquire the shared local process runtime.
 
         Initialization first becomes inactive. Configuration and authorization failures are fixed,
@@ -145,8 +166,11 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         request is made here.
         """
 
-        del session_id  # Released prefetch does not pass the initialization session back.
         self._deactivate()
+        with self._session_lock:
+            self._session_id = session_id if isinstance(session_id, str) else ""
+            self._pending_session_switches.clear()
+            self._seen_session_ids = {self._session_id: None} if self._session_id else {}
 
         hermes_home = kwargs.get("hermes_home")
         if not isinstance(hermes_home, (str, Path)) or not str(hermes_home):
@@ -169,6 +193,9 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                 user_id_alt=_optional_string(kwargs.get("user_id_alt")),
                 agent_context=agent_context,
             )
+        planner_will_activate = bool(self._session_id) and (
+            authorization.recall_enabled and config.planner.mode != "off"
+        )
         if not authorization.memory_enabled:
             logger.debug(AUTHORIZATION_INACTIVE_DIAGNOSTIC)
             return
@@ -196,6 +223,18 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         self._reflect_enabled = authorization.reflect_enabled
         self._retain_enabled = authorization.retain_enabled
         self._runtime = runtime
+        if planner_will_activate:
+            try:
+                mailbox = InMemoryPlanMailbox(Path(hermes_home))
+                activation = mailbox.activate(session_id=self._session_id)
+                self._plan_mailbox = mailbox
+                self._plan_mailbox_activation = activation
+            except PlanMailboxError:
+                emit_event(
+                    logger,
+                    "better_hindsight.recall_plan_mailbox",
+                    outcome="activation_failed",
+                )
         registrar = self._system_prompt_section_registrar
         if (self._recall_enabled or self._reflect_enabled) and registrar is not None:
             self._system_prompt_section_registrar = None
@@ -205,10 +244,116 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             except Exception:
                 logger.warning("Better Hindsight trust policy registration failed.")
 
+    def on_session_switch(
+        self,
+        new_session_id: str,
+        *,
+        parent_session_id: str = "",
+        reset: bool = False,
+        rewound: bool = False,
+        **kwargs: object,
+    ) -> None:
+        """Serialize provider identity and mailbox activation rebinding."""
+
+        with self._session_lock:
+            if self._config is None and self._runtime is None:
+                return
+            parent = parent_session_id if isinstance(parent_session_id, str) else ""
+            applied = self._on_session_switch_locked(
+                new_session_id,
+                parent_session_id=parent,
+                reset=reset,
+                rewound=rewound,
+                **kwargs,
+            )
+            if applied:
+                self._remember_session_id_locked(new_session_id)
+                self._drain_session_switches_locked()
+            elif parent and parent not in self._seen_session_ids:
+                self._pending_session_switches[parent] = (new_session_id, reset, rewound)
+                while len(self._pending_session_switches) > _MAX_PENDING_SESSION_SWITCHES:
+                    oldest_parent = next(iter(self._pending_session_switches))
+                    del self._pending_session_switches[oldest_parent]
+
+    def _on_session_switch_locked(
+        self,
+        new_session_id: str,
+        *,
+        parent_session_id: str = "",
+        reset: bool = False,
+        rewound: bool = False,
+        **kwargs: object,
+    ) -> bool:
+        """Rebind planner correlation whenever Hermes rotates the live session."""
+
+        del kwargs
+        if not isinstance(new_session_id, str) or not new_session_id:
+            return False
+        parent = parent_session_id if isinstance(parent_session_id, str) else ""
+        old_session_id = self._session_id
+        mailbox = self._plan_mailbox
+        activation = self._plan_mailbox_activation
+        if new_session_id == old_session_id:
+            if (reset or rewound) and mailbox is not None:
+                try:
+                    mailbox.clear_session_plans(session_id=new_session_id)
+                except PlanMailboxError:
+                    logger.warning("Better Hindsight recall planner mailbox rewind cleanup failed.")
+            return True
+
+        accepted = not parent or old_session_id == parent
+        if mailbox is not None and activation is not None:
+            try:
+                accepted = mailbox.rebind(
+                    token=activation,
+                    new_session_id=new_session_id,
+                    expected_parent_session_id=parent,
+                )
+            except PlanMailboxError:
+                logger.warning("Better Hindsight recall planner mailbox session rebind failed.")
+                self._plan_mailbox = None
+                self._plan_mailbox_activation = None
+        if accepted:
+            self._session_id = new_session_id
+        return accepted
+
+    def _drain_session_switches_locked(self) -> None:
+        """Apply queued descendants after their parent transition arrives."""
+
+        while True:
+            parent = self._session_id
+            pending = self._pending_session_switches.pop(parent, None)
+            if pending is None:
+                break
+            new_session_id, reset, rewound = pending
+            if not self._on_session_switch_locked(
+                new_session_id,
+                parent_session_id=parent,
+                reset=reset,
+                rewound=rewound,
+            ):
+                break
+            self._remember_session_id_locked(new_session_id)
+        stale = [
+            parent
+            for parent in self._pending_session_switches
+            if parent in self._seen_session_ids and parent != self._session_id
+        ]
+        for parent in stale:
+            del self._pending_session_switches[parent]
+
+    def _remember_session_id_locked(self, session_id: str) -> None:
+        """Retain bounded stale-parent evidence for callback ordering."""
+
+        self._seen_session_ids.pop(session_id, None)
+        self._seen_session_ids[session_id] = None
+        while len(self._seen_session_ids) > _MAX_SEEN_SESSION_IDS:
+            oldest_session_id = next(iter(self._seen_session_ids))
+            del self._seen_session_ids[oldest_session_id]
+
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         """Recall exactly the current projected query under the configured total deadline."""
 
-        del session_id  # Released Hermes supplies the documented default empty value.
         self._last_recall_count = 0
         config = self._config
         if not self._recall_enabled or config is None or self._runtime is None:
@@ -218,9 +363,46 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
 
         started_at = time.monotonic()
         deadline = started_at + config.recall.timeout_seconds
+        effective_query = query
+        mailbox = self._plan_mailbox
+        planner_query_eligible = len(query) <= config.planner.history_max_chars and bool(
+            query.strip()
+        )
+        if mailbox is not None and planner_query_eligible:
+            try:
+                plan = mailbox.consume(
+                    source_query=query,
+                    session_id=session_id or self._session_id,
+                )
+            except PlanMailboxError:
+                plan = None
+                emit_event(
+                    logger,
+                    "better_hindsight.recall_plan_mailbox",
+                    outcome="consume_failed",
+                )
+            if time.monotonic() >= deadline:
+                return ""
+            if plan is not None and plan.mode == config.planner.mode:
+                emit_event(
+                    logger,
+                    "better_hindsight.recall_plan",
+                    action=plan.action,
+                    mode=plan.mode,
+                    outcome="consumed",
+                )
+                if plan.mode == "active" and plan.action in {"skip", "reuse"}:
+                    return ""
+                if (
+                    plan.mode == "active"
+                    and plan.action == "recall"
+                    and plan.rewritten_query is not None
+                ):
+                    effective_query = plan.rewritten_query
+
         try:
             projected = project_query(
-                query,
+                effective_query,
                 max_chars=config.recall.input_max_chars,
                 max_tokens=config.recall.input_max_tokens,
             )
@@ -659,13 +841,29 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         self._deactivate()
 
     def _deactivate(self) -> None:
+        with self._session_lock:
+            self._deactivate_locked()
+
+    def _deactivate_locked(self) -> None:
         runtime = self._runtime
+        mailbox = self._plan_mailbox
+        activation = self._plan_mailbox_activation
         self._config = None
         self._last_recall_count = 0
+        self._plan_mailbox = None
+        self._plan_mailbox_activation = None
         self._recall_enabled = False
         self._reflect_enabled = False
         self._retain_enabled = False
         self._runtime = None
+        self._session_id = ""
+        self._pending_session_switches.clear()
+        self._seen_session_ids.clear()
+        if mailbox is not None and activation is not None:
+            try:
+                mailbox.deactivate(token=activation)
+            except PlanMailboxError:
+                logger.warning("Better Hindsight recall planner mailbox deactivation failed.")
         if runtime is not None:
             runtime.close()
 

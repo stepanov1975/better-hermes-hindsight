@@ -40,7 +40,7 @@ delete `~/.hermes/better_hindsight/`, its outbox, or any remote memory.
 Install or update the plugin with the standard Hermes commands:
 
 ```bash
-hermes plugins install stepanov1975/better-hermes-hindsight --force
+hermes plugins install --enable stepanov1975/better-hermes-hindsight --force
 hermes memory setup better_hindsight
 hermes better_hindsight status
 ```

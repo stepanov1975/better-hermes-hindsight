@@ -9,7 +9,8 @@ There is no separate canonical implementation plan, plan hash, immutable candida
 The provider currently includes:
 
 - external Hindsight 0.8.5, 0.9.1, and 0.9.2 connectivity;
-- bounded, fail-open current-query recall;
+- bounded, fail-open current-query recall plus a default-off context-aware `pre_llm_call` companion
+  planner with a one-shot process-local decision handoff;
 - model tools for bounded recall, default-off read-only reflection, durable retention admission, and
   compact passive queue status;
 - optional redacted automatic retention;
@@ -63,6 +64,6 @@ Historical Hermes versions, PyPI publication, exact source/artifact equality, ch
 
 The first usable version remains Linux/POSIX, external-service-only, single-principal, single-bank, and
 normal-Hermes-loop-only. It does not promise exactly-once delivery, typed direct-turn provenance for
-provenance, automatic migration, multi-user routing, caller-selected reflection or policy changes,
-hot reload, or automatic remote deletion. These are accepted scope limits rather than
+provenance, automatic bank/outbox migration, multi-user routing, caller-selected reflection or policy
+changes, hot reload, or automatic remote deletion. These are accepted scope limits rather than
 incomplete release tasks.

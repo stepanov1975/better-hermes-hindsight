@@ -43,7 +43,7 @@ def test_package_and_plugin_metadata_are_consistent() -> None:
     assert better_hermes_hindsight.PROVIDER_ID == "better_hindsight"
     assert better_hermes_hindsight.__version__ == project["version"]
     assert root_manifest["name"] == better_hermes_hindsight.PROVIDER_ID
-    assert root_manifest["kind"] == "exclusive"
+    assert root_manifest["kind"] == "standalone"
     assert root_manifest["version"] == project["version"]
     assert root_manifest["manifest_version"] == 1
     assert root_manifest["pip_dependencies"] == [
@@ -141,7 +141,7 @@ def test_vendored_tokenizer_attribution_is_packaged() -> None:
 def test_public_install_guide_uses_only_standard_hermes_plugin_commands() -> None:
     text = (ROOT / "docs" / "installation.md").read_text(encoding="utf-8")
 
-    assert "hermes plugins install stepanov1975/better-hermes-hindsight" in text
+    assert "hermes plugins install --enable stepanov1975/better-hermes-hindsight" in text
     assert "hermes memory setup better_hindsight" in text
     for forbidden in (
         "--profile",

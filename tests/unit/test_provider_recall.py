@@ -10,6 +10,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import NoReturn, cast
@@ -32,6 +33,11 @@ from better_hermes_hindsight.formatting import (
     QUERY_OMISSION_MARKER,
     count_query_tokens,
     format_recall_context,
+)
+from better_hermes_hindsight.plan_mailbox import (
+    InMemoryPlanMailbox,
+    PlanAction,
+    PlanMode,
 )
 from better_hermes_hindsight.provider import (
     AUTHORIZATION_INACTIVE_DIAGNOSTIC,
@@ -277,11 +283,38 @@ def _forbidden(*_args: object, **_kwargs: object) -> NoReturn:
     raise AssertionError("local provider construction/availability crossed a forbidden boundary")
 
 
+def _publish_plan(
+    mailbox: InMemoryPlanMailbox,
+    *,
+    source_query: str,
+    session_id: str,
+    turn_id: str,
+    mode: PlanMode,
+    action: PlanAction,
+    rewritten_query: str | None,
+) -> None:
+    assert mailbox.reserve(
+        source_query=source_query,
+        session_id=session_id,
+        parent_session_id="",
+        turn_id=turn_id,
+        mode=mode,
+    )
+    assert mailbox.finalize(
+        turn_id=turn_id,
+        mode=mode,
+        action=action,
+        rewritten_query=rewritten_query,
+    )
+
+
 def test_provider_passes_projected_query_and_request_to_diagnostic_capture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _write_config(tmp_path, _base_config())
+    document = _base_config()
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
+    _write_config(tmp_path, document)
     handle = _RecordingHandle()
     captured: list[dict[str, object]] = []
     monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
@@ -300,6 +333,402 @@ def test_provider_passes_projected_query_and_request_to_diagnostic_capture(
     assert cast(dict[str, object], captured[0]["request"])["trace"] is False
     assert captured[0]["outcome"] == "success"
     assert captured[0]["result_count"] == 1
+
+
+@pytest.mark.parametrize(("planner_mode", "recall_enabled"), [("off", True), ("active", False)])
+def test_dormant_planner_creates_no_handoff_state_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    planner_mode: str,
+    recall_enabled: bool,
+) -> None:
+    document = _base_config()
+    cast(dict[str, object], document["recall"])["enabled"] = recall_enabled
+    document["planner"] = {"mode": planner_mode}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+
+    assert not (tmp_path / "better_hindsight" / "recall_plans.sqlite3").exists()
+    assert provider._plan_mailbox is None
+    provider.shutdown()
+
+
+def test_provider_initialization_preserves_legacy_mailbox_for_offline_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    document = _base_config()
+    document["planner"] = {
+        "mode": "off",
+        "path": "better_hindsight/custom-plans.sqlite3",
+        "mailbox_ttl_seconds": 12.0,
+        "busy_timeout_seconds": 0.2,
+    }
+    _write_config(tmp_path, document)
+    path = tmp_path / "better_hindsight" / "custom-plans.sqlite3"
+    path.write_bytes(b"legacy mailbox retained for explicit offline cleanup")
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+
+    assert path.read_bytes() == b"legacy mailbox retained for explicit offline cleanup"
+    assert cast(object, provider._runtime) is handle
+    provider.shutdown()
+
+
+@pytest.mark.parametrize("action", ["skip", "reuse"])
+def test_active_planner_skip_or_reuse_avoids_remote_recall(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+) -> None:
+    document = _base_config()
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
+    document["planner"] = {"mode": "active"}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    mailbox = InMemoryPlanMailbox(tmp_path)
+    _publish_plan(
+        mailbox,
+        source_query="Why?",
+        session_id="session-a",
+        turn_id="turn-a",
+        mode="active",
+        action=cast(PlanAction, action),
+        rewritten_query=None,
+    )
+
+    assert provider.prefetch("Why?") == ""
+    assert handle.recalls == []
+    assert provider.recall_status() is None
+    assert mailbox.consume(source_query="Why?", session_id="session-a") is None
+
+
+def test_active_planner_recall_uses_only_rewritten_query(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
+    document["planner"] = {"mode": "active"}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    mailbox = InMemoryPlanMailbox(tmp_path)
+    _publish_plan(
+        mailbox,
+        source_query="What did we decide?",
+        session_id="session-a",
+        turn_id="turn-a",
+        mode="active",
+        action="recall",
+        rewritten_query="What backup policy did Alex choose?",
+    )
+
+    assert provider.prefetch("What did we decide?")
+    assert len(handle.recalls) == 1
+    assert handle.recalls[0][0] == "What backup policy did Alex choose?"
+    assert "What did we decide?" not in handle.recalls[0][0]
+
+
+def test_session_switch_rebinds_planner_across_multiple_rotations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
+    document["planner"] = {"mode": "active"}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("root", hermes_home=str(tmp_path), platform="cli")
+    mailbox = InMemoryPlanMailbox(tmp_path)
+
+    provider.on_session_switch("child-1", parent_session_id="root")
+    provider.on_session_switch("child-2", parent_session_id="child-1")
+    provider.on_session_switch("child-1", parent_session_id="root")
+    assert not mailbox.is_active(session_id="root")
+    assert not mailbox.is_active(session_id="child-1")
+    assert mailbox.is_active(session_id="child-2")
+    _publish_plan(
+        mailbox,
+        source_query="stale after rewind",
+        session_id="child-2",
+        turn_id="stale-turn",
+        mode="active",
+        action="skip",
+        rewritten_query=None,
+    )
+    provider.on_session_switch("child-2", rewound=True)
+    assert mailbox.consume(source_query="stale after rewind", session_id="child-2") is None
+    _publish_plan(
+        mailbox,
+        source_query="Why?",
+        session_id="child-2",
+        turn_id="turn-a",
+        mode="active",
+        action="recall",
+        rewritten_query="What backup policy did Alex choose?",
+    )
+
+    assert provider.prefetch("Why?")
+    assert handle.recalls[-1][0] == "What backup policy did Alex choose?"
+    _publish_plan(
+        mailbox,
+        source_query="stale after reset",
+        session_id="child-2",
+        turn_id="reset-turn",
+        mode="active",
+        action="skip",
+        rewritten_query=None,
+    )
+    provider.on_session_switch("child-2", reset=True)
+    assert mailbox.consume(source_query="stale after reset", session_id="child-2") is None
+
+
+def test_concurrent_session_switches_cannot_move_provider_backward(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    document["planner"] = {"mode": "active"}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("root", hermes_home=str(tmp_path), platform="cli")
+
+    original_rebind = InMemoryPlanMailbox.rebind
+    first_rebound = threading.Event()
+    release_first = threading.Event()
+
+    def delayed_rebind(
+        mailbox: InMemoryPlanMailbox,
+        *,
+        token: str,
+        new_session_id: str,
+        expected_parent_session_id: str = "",
+    ) -> bool:
+        accepted = original_rebind(
+            mailbox,
+            token=token,
+            new_session_id=new_session_id,
+            expected_parent_session_id=expected_parent_session_id,
+        )
+        if new_session_id == "child-1":
+            first_rebound.set()
+            release_first.wait(timeout=2.0)
+        return accepted
+
+    monkeypatch.setattr(InMemoryPlanMailbox, "rebind", delayed_rebind)
+    first = threading.Thread(
+        target=provider.on_session_switch,
+        args=("child-1",),
+        kwargs={"parent_session_id": "root"},
+    )
+    second = threading.Thread(
+        target=provider.on_session_switch,
+        args=("child-2",),
+        kwargs={"parent_session_id": "child-1"},
+    )
+    first.start()
+    assert first_rebound.wait(timeout=2.0)
+    second.start()
+    release_first.set()
+    first.join(timeout=2.0)
+    second.join(timeout=2.0)
+
+    mailbox = InMemoryPlanMailbox(tmp_path)
+    assert not first.is_alive() and not second.is_alive()
+    assert provider._session_id == "child-2"
+    assert mailbox.is_active(session_id="child-2")
+
+
+def test_shutdown_serializes_with_session_switch_callbacks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    document["planner"] = {"mode": "active"}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("root", hermes_home=str(tmp_path), platform="cli")
+
+    original_deactivate = InMemoryPlanMailbox.deactivate
+    mailbox_released = threading.Event()
+    release_shutdown = threading.Event()
+
+    def delayed_deactivate(mailbox: InMemoryPlanMailbox, *, token: str) -> None:
+        original_deactivate(mailbox, token=token)
+        mailbox_released.set()
+        release_shutdown.wait(timeout=2.0)
+
+    monkeypatch.setattr(InMemoryPlanMailbox, "deactivate", delayed_deactivate)
+    shutdown = threading.Thread(target=provider.shutdown)
+    switch = threading.Thread(
+        target=provider.on_session_switch,
+        args=("child",),
+        kwargs={"parent_session_id": "root"},
+    )
+    shutdown.start()
+    assert mailbox_released.wait(timeout=2.0)
+    switch.start()
+    release_shutdown.set()
+    shutdown.join(timeout=2.0)
+    switch.join(timeout=2.0)
+
+    assert not shutdown.is_alive() and not switch.is_alive()
+    assert provider._session_id == ""
+    assert provider._pending_session_switches == {}
+    assert provider._seen_session_ids == {}
+    assert not InMemoryPlanMailbox(tmp_path).is_active(session_id="child")
+
+
+def test_out_of_order_session_switch_callbacks_are_drained(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    document["planner"] = {"mode": "active"}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("root", hermes_home=str(tmp_path), platform="cli")
+    mailbox = InMemoryPlanMailbox(tmp_path)
+
+    provider.on_session_switch("child-2", parent_session_id="child-1")
+    assert mailbox.is_active(session_id="root")
+    provider.on_session_switch("child-1", parent_session_id="root")
+
+    assert provider._session_id == "child-2"
+    assert not mailbox.is_active(session_id="root")
+    assert not mailbox.is_active(session_id="child-1")
+    assert mailbox.is_active(session_id="child-2")
+
+    parent = "child-2"
+    for index in range(130):
+        child = f"later-{index}"
+        provider.on_session_switch(child, parent_session_id=parent)
+        parent = child
+    assert len(provider._seen_session_ids) == provider_module._MAX_SEEN_SESSION_IDS
+    assert parent in provider._seen_session_ids
+    assert mailbox.is_active(session_id=parent)
+
+
+def test_shadow_or_missing_plan_preserves_direct_query_recall(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
+    document["planner"] = {"mode": "shadow"}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    mailbox = InMemoryPlanMailbox(tmp_path)
+    _publish_plan(
+        mailbox,
+        source_query="Why?",
+        session_id="session-a",
+        turn_id="turn-a",
+        mode="shadow",
+        action="recall",
+        rewritten_query="rewritten only for shadow telemetry",
+    )
+
+    assert provider.prefetch("Why?")
+    assert handle.recalls[-1][0] == "Why?"
+    assert provider.prefetch("No mailbox plan")
+    assert handle.recalls[-1][0] == "No mailbox plan"
+
+
+def test_oversized_planner_query_bypasses_mailbox_consumption(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
+    document["planner"] = {"mode": "active", "history_max_chars": 10}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    monkeypatch.setattr(InMemoryPlanMailbox, "consume", _forbidden)
+
+    query = "x" * 11
+    assert provider.prefetch(query)
+    assert handle.recalls[-1][0] == query
+
+
+def test_reinitialization_replaces_the_provider_activation_without_leaking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    document["planner"] = {"mode": "active"}
+    _write_config(tmp_path, document)
+    handles: list[_RecordingHandle] = []
+
+    def acquire(_config: object) -> _RecordingHandle:
+        handle = _RecordingHandle()
+        handles.append(handle)
+        return handle
+
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", acquire)
+    provider = BetterHindsightMemoryProvider()
+    observer = InMemoryPlanMailbox(tmp_path)
+
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+
+    assert len(handles) == 2
+    assert handles[0].close_calls == 1
+    assert observer.is_active(session_id="session-a")
+
+    provider.shutdown()
+    assert handles[1].close_calls == 1
+    assert not observer.is_active(session_id="session-a")
+
+
+def test_shutdown_releases_only_its_own_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _base_config()
+    document["planner"] = {"mode": "active"}
+    _write_config(tmp_path, document)
+    monkeypatch.setattr(
+        provider_module,
+        "acquire_process_runtime",
+        lambda _config: _RecordingHandle(),
+    )
+    first = BetterHindsightMemoryProvider()
+    second = BetterHindsightMemoryProvider()
+    observer = InMemoryPlanMailbox(tmp_path)
+    first.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    second.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+
+    first.shutdown()
+    assert observer.is_active(session_id="session-a")
+
+    second.shutdown()
+    assert not observer.is_active(session_id="session-a")
 
 
 def test_configured_recall_deadline_covers_projection_runtime_and_formatting(

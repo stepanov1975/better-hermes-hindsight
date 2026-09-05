@@ -12,7 +12,7 @@ The provider ID is `better_hindsight`, deliberately separate from bundled `hinds
 You need a working Hermes installation and an external Hindsight 0.8.5, 0.9.1, or 0.9.2 service.
 
 ```bash
-hermes plugins install stepanov1975/better-hermes-hindsight
+hermes plugins install --enable stepanov1975/better-hermes-hindsight
 hermes memory setup better_hindsight
 ```
 
@@ -32,6 +32,9 @@ example, replace the placeholder principal with the platform and user ID used by
       "identifier": "YOUR_USER_ID"
     }
   ],
+  "planner": {
+    "mode": "off"
+  },
   "reflect": {
     "enabled": false
   },
@@ -60,7 +63,8 @@ remaining policy and verification options.
 
 Compared with bundled Hindsight, this plugin deliberately focuses on:
 
-- bounded recall for the **current** user query;
+- bounded recall for the **current** user query, with a default-off context-aware planner that can skip,
+  reuse existing conversational context, or issue one rewritten historical query;
 - four bounded model tools for recall, opt-in read-only reflection, durable retention admission, and
   compact passive queue status;
 - opt-in automatic retention through a durable SQLite outbox;
@@ -104,7 +108,7 @@ or retrieval quality.
 | Area | Better Hindsight | Bundled Hermes Hindsight |
 | --- | --- | --- |
 | Installation target | Standard Git plugin for a supported external Hindsight 0.8.5, 0.9.1, or 0.9.2 service | Included with Hermes; interactive setup supports Hindsight Cloud, a local embedded service, or an external service |
-| Automatic recall | When enabled, recalls against the current user query, synchronously under character, token, response-size, and total-time bounds | Background previous-query recall by default; optional synchronous current-query recall |
+| Automatic recall | Synchronous current-turn recall under character, token, response-size, and total-time bounds. Optional `pre_llm_call` planning uses bounded recent conversation context to skip/reuse or issue one self-contained rewritten query. | Background previous-query recall by default; optional synchronous current-query recall |
 | Recalled context | Complete byte-bounded JSONL records with recalled text and available time metadata; redacted and explicitly framed in a provider-neutral envelope as stale, untrusted evidence. Explicit recall results also retain the available type. | Formatted memory text or a reflect synthesis with configurable preamble, token budget, types, and tags |
 | Automatic retention | Opt-in; authorized, eligible turns are admitted all-or-none to a bounded private SQLite rollback-journal outbox before asynchronous delivery | Enabled by default; completed turns enter a process-local FIFO writer and then optional server-side async processing |
 | Retained payload | Pattern-redacted, independently decodable event records with a per-admission event ID and occurrence time, hashed session identity, and bounded provenance | Labeled user/assistant transcripts with richer session, platform, user, chat, and lineage metadata |
@@ -129,6 +133,30 @@ when upgrading either project because its behavior continues to evolve.
 ## Reliability boundary
 
 Recall fails open: timeout, service failure, invalid data, or unavailable runtime yields no external context rather than stopping Hermes. Queries are bounded by both characters and the exact `cl100k_base` token rule used by supported Hindsight servers. Recalled records are bounded, redacted, and framed as potentially stale historical evidence.
+
+The optional planner is disabled by default. In `shadow` mode it records only action/latency metadata and
+keeps direct-query recall. In `active` mode, `skip` and `reuse` avoid a Hindsight request while `recall`
+substitutes one validated self-contained query. The hook never stores the transcript; a short-lived
+process-local handoff stores only query hashes and the planned action/query in memory. Session-scoped
+reservations are consumed once, and recently consumed turn IDs remain tombstoned for the same bounded
+lifetime so a retried hook cannot republish them. After validating current session/turn identity, every hook
+clears that session's prior plans before testing whether the current payload is plannable, so an early return
+cannot expose an older plan. A provider query mismatch permanently closes and removes the current
+reservation.
+A first top-level turn after an asynchronous Hermes session rotation atomically bridges the exact active
+parent for only that turn; subagent lineage is excluded, a provider call that captured the old identity can
+still consume that turn's plan, and the delayed callback is idempotent. A stale callback whose expected parent
+no longer owns the activation is ignored, and mailbox rebinding is serialized with provider initialization,
+session updates, and shutdown; bounded pending and stale-parent state retain an out-of-order descendant until
+its parent arrives.
+Queries above the planner's absolute configured maximum skip planning without being hashed; direct-query
+recall remains available. A pending reservation fences out an abandoned late hook worker. Finalization
+samples the clock and rejects model-derived `recall` or `reuse` after the planner deadline while holding the
+registry lock, while still allowing the deterministic active-mode `skip` failure policy. Missing, stale, late,
+or mismatched handoff state falls back to direct current-query recall. Earlier branch-preview revisions wrote
+planner decisions to SQLite. The runtime deliberately leaves that legacy path untouched: stop every Hermes
+process using the profile, remove the configured database and sidecars offline, then remove the obsolete
+planner keys.
 
 Reflection is disabled by default and is never automatic. When enabled, `better_hindsight_reflect`
 accepts one nonblank bounded query for the configured bank under the authorized principal and returns
@@ -168,7 +196,7 @@ Better Hermes Hindsight is a regular, self-contained Hermes memory plugin. Insta
 current Hermes configuration with the same plugin commands used for other Git plugins:
 
 ```bash
-hermes plugins install stepanov1975/better-hermes-hindsight
+hermes plugins install --enable stepanov1975/better-hermes-hindsight
 hermes memory setup better_hindsight
 ```
 
@@ -210,8 +238,8 @@ See [operations](docs/operations.md) and [rollback](docs/rollback.md).
 The initial product is external-service-only, Linux/POSIX, one principal, one static bank, one
 Better-enabled profile per process, and normal-Hermes-loop-only. It does not support multiplexed
 multi-profile Better runtimes, `codex_app_server`, Windows sender election, hot reload, typed turn
-provenance, automatic migration, remote rewind, or exactly-once delivery. These are accepted limits,
-not prerequisites for a usable version.
+provenance, automatic bank/outbox migration, remote rewind, or exactly-once delivery. These are accepted
+limits, not prerequisites for a usable version.
 
 ## Development
 
