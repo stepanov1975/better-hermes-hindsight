@@ -70,9 +70,10 @@ branch/resume/reset/compression rotations; same-session rewind clears plans. Exa
 current-query identity plus monotonic expiry, an atomic publication deadline, and consume-once deletion
 prevent a consumed, late, or sibling plan from leaking into a later turn. Consuming a pending reservation
 removes it before an abandoned hook worker can publish late. Missing state falls back to direct-query
-recall, and process exit removes all handoff state automatically. Provider initialization also
-idempotently removes only a schema-verified obsolete branch-preview SQLite mailbox and its sidecars;
-its former settings are accepted only long enough to validate and locate that cleanup target. An
+recall, and process exit removes all handoff state automatically. Companion registration and provider
+initialization also idempotently remove only a schema-verified obsolete branch-preview SQLite mailbox
+and its sidecars; its former settings are accepted only long enough to validate and locate that cleanup
+target. An
 unrecognized file is preserved and produces a sanitized cleanup-failure event.
 
 The model-facing `better_hindsight_recall` tool reuses this configured path and returns structured

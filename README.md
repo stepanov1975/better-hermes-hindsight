@@ -141,8 +141,8 @@ process-local handoff stores only query hashes and the planned action/query in m
 reservations are consumed once, and consuming a pending reservation fences out an abandoned late hook
 worker. Finalization also checks the planner's publication deadline while holding the registry lock.
 Missing, stale, late, or mismatched handoff state falls back to direct current-query recall. Provider
-initialization removes schema-verified obsolete branch-preview SQLite planner mailboxes and sidecars;
-an unrecognized file is preserved.
+initialization or companion registration removes schema-verified obsolete branch-preview SQLite planner
+mailboxes and sidecars; an unrecognized file is preserved.
 
 Reflection is disabled by default and is never automatic. When enabled, `better_hindsight_reflect`
 accepts one nonblank bounded query for the configured bank under the authorized principal and returns

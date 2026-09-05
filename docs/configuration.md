@@ -149,10 +149,10 @@ database, file lock, PID lease, or cross-process coordination exists in normal o
 bounds stale plans, the planner deadline is checked atomically when a reservation is finalized,
 consume-once deletion prevents reuse, and process exit removes all handoff state.
 
-On the first provider initialization after upgrading from the branch-preview SQLite implementation, the
-provider idempotently removes the obsolete database and its SQLite sidecars only after its schema
-identifies it as the old planner mailbox. An unrecognized file is preserved and produces a sanitized
-cleanup-failure event. The old `planner.path`, `planner.mailbox_ttl_seconds`, and
+On companion registration or provider initialization after upgrading from the branch-preview SQLite
+implementation, the plugin idempotently removes the obsolete database and its SQLite sidecars only after
+its schema identifies it as the old planner mailbox. An unrecognized file is preserved and produces a
+sanitized cleanup-failure event. The old `planner.path`, `planner.mailbox_ttl_seconds`, and
 `planner.busy_timeout_seconds` keys remain accepted and validated only for this migration; they no longer
 configure the handoff and should be removed. Cleanup failure does not disable memory.
 

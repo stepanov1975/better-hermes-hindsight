@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import sqlite3
 import sys
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,25 @@ def _load_plugin_entrypoint() -> Any:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _create_legacy_mailbox(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE active_session (session_id TEXT NOT NULL);
+            CREATE TABLE recall_plan (
+                turn_id TEXT NOT NULL,
+                query_digest TEXT NOT NULL,
+                mode TEXT NOT NULL,
+                action TEXT,
+                rewritten_query TEXT,
+                expires_at REAL NOT NULL
+            );
+            PRAGMA user_version = 3;
+            """
+        )
 
 
 class _State:
@@ -86,6 +106,17 @@ def test_general_plugin_surface_registers_one_planner_hook_and_task(tmp_path: Pa
     assert len(context.hooks) == 1
     assert context.hooks[0][0] == "pre_llm_call"
     assert callable(context.hooks[0][1])
+
+
+def test_general_plugin_registration_removes_a_legacy_mailbox(tmp_path: Path) -> None:
+    path = tmp_path / "better_hindsight" / "recall_plans.sqlite3"
+    _create_legacy_mailbox(path)
+    plugin = _load_plugin_entrypoint()
+    context = _GeneralContext(tmp_path)
+
+    plugin.register(context)
+
+    assert not path.exists()
 
 
 def test_memory_surface_registers_provider_only() -> None:
