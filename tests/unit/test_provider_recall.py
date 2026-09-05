@@ -507,6 +507,17 @@ def test_session_switch_rebinds_planner_across_multiple_rotations(
 
     assert provider.prefetch("Why?")
     assert handle.recalls[-1][0] == "What backup policy did Alex choose?"
+    _publish_plan(
+        mailbox,
+        source_query="stale after reset",
+        session_id="child-2",
+        turn_id="reset-turn",
+        mode="active",
+        action="skip",
+        rewritten_query=None,
+    )
+    provider.on_session_switch("child-2", reset=True)
+    assert mailbox.consume(source_query="stale after reset", session_id="child-2") is None
 
 
 def test_shadow_or_missing_plan_preserves_direct_query_recall(

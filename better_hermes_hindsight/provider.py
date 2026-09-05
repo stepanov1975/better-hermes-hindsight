@@ -249,14 +249,14 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
     ) -> None:
         """Rebind planner correlation whenever Hermes rotates the live session."""
 
-        del parent_session_id, reset, kwargs
+        del parent_session_id, kwargs
         if not isinstance(new_session_id, str) or not new_session_id:
             return
         old_session_id = self._session_id
         mailbox = self._plan_mailbox
         activation = self._plan_mailbox_activation
         if new_session_id == old_session_id:
-            if rewound and mailbox is not None:
+            if (reset or rewound) and mailbox is not None:
                 try:
                     mailbox.clear_session_plans(session_id=new_session_id)
                 except PlanMailboxError:

@@ -225,8 +225,8 @@ See [operations](docs/operations.md) and [rollback](docs/rollback.md).
 The initial product is external-service-only, Linux/POSIX, one principal, one static bank, one
 Better-enabled profile per process, and normal-Hermes-loop-only. It does not support multiplexed
 multi-profile Better runtimes, `codex_app_server`, Windows sender election, hot reload, typed turn
-provenance, automatic migration, remote rewind, or exactly-once delivery. These are accepted limits,
-not prerequisites for a usable version.
+provenance, automatic bank/outbox migration, remote rewind, or exactly-once delivery. These are accepted
+limits, not prerequisites for a usable version.
 
 ## Development
 

@@ -64,6 +64,6 @@ Historical Hermes versions, PyPI publication, exact source/artifact equality, ch
 
 The first usable version remains Linux/POSIX, external-service-only, single-principal, single-bank, and
 normal-Hermes-loop-only. It does not promise exactly-once delivery, typed direct-turn provenance for
-provenance, automatic migration, multi-user routing, caller-selected reflection or policy changes,
-hot reload, or automatic remote deletion. These are accepted scope limits rather than
+provenance, automatic bank/outbox migration, multi-user routing, caller-selected reflection or policy
+changes, hot reload, or automatic remote deletion. These are accepted scope limits rather than
 incomplete release tasks.

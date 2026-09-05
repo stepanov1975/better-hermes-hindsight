@@ -159,8 +159,9 @@ configure the handoff and should be removed. Cleanup failure does not disable me
 
 The provider activates the handoff only for a session whose Better recall policy was authorized, and
 moves that activation through Hermes's public `on_session_switch` callback and invalidates plans on a
-same-session rewind. Planner authorization and provider consumption both require the exact rebound
-session identity, so sibling plans cannot cross; an incomplete switch falls back to direct-query recall.
+same-session reset or rewind. Planner authorization and provider consumption both require the exact
+rebound session identity, so sibling plans cannot cross; an incomplete switch falls back to direct-query
+recall.
 Opaque activation tokens let one provider handle shut down without deauthorizing a live sibling handle.
 A missing, stale, mismatched, malformed, or late plan preserves direct current-query recall rather than
 breaking the turn. In active mode, a planner timeout, exception, or invalid structured result finalizes a
