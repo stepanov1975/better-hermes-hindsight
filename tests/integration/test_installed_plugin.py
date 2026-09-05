@@ -99,7 +99,7 @@ def test_root_plugin_surface_is_self_contained_and_version_aligned() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
 
     assert root_manifest["name"] == "better_hindsight"
-    assert root_manifest["kind"] == "exclusive"
+    assert root_manifest["kind"] == "standalone"
     assert root_manifest["version"] == project["version"]
     assert root_manifest["manifest_version"] == 1
     assert root_manifest["pip_dependencies"] == [
@@ -128,6 +128,7 @@ def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
             "hermes_cli.main",
             "plugins",
             "install",
+            "--enable",
             source.as_uri(),
         ],
         cwd=tmp_path,
@@ -167,7 +168,9 @@ def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
     )
     assert install_metadata["better_hindsight"]["revision"] == installed_commit
 
-    assert "provider: better_hindsight" in (home / "config.yaml").read_text(encoding="utf-8")
+    installed_config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+    assert installed_config["memory"]["provider"] == "better_hindsight"
+    assert "better_hindsight" in installed_config["plugins"]["enabled"]
 
     probe = _run(
         [

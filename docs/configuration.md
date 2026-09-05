@@ -4,10 +4,11 @@ Better Hermes Hindsight configuration is explicit, Hermes-home-scoped, and local
 configuration does not contact Hindsight, create a client, import Hermes, discover a `.env` file, or
 search the current working directory.
 
-Recall is enabled by default. Reflection and automatic retention are disabled by default. Enable
-reflection only after reviewing the configured Hindsight LLM/data/cost boundary; enable retention only
-after fake-service proof and an isolated Hindsight development deployment. Capability is controlled
-directly by `recall.enabled`, `reflect.enabled`, and `retain.enabled`.
+Recall is enabled by default. Context-aware recall planning, reflection, and automatic retention are
+disabled by default. Enable the planner in `shadow` mode first; enable reflection only after reviewing
+the configured Hindsight LLM/data/cost boundary; enable retention only after fake-service proof and an
+isolated Hindsight development deployment. Capability is controlled directly by `recall.enabled`,
+`planner.mode`, `reflect.enabled`, and `retain.enabled`.
 
 ## Sources and precedence
 
@@ -58,6 +59,13 @@ This example uses only synthetic/local values and contains no API key. Retention
     "input_max_chars": 4096,
     "input_max_tokens": 500,
     "context_max_bytes": 8192
+  },
+  "planner": {
+    "mode": "off",
+    "timeout_seconds": 2.0,
+    "history_max_exchanges": 4,
+    "history_max_chars": 6000,
+    "query_max_chars": 1024
   },
   "reflect": {
     "enabled": false,
@@ -111,6 +119,86 @@ ordinary text. Keep this value at or below the server's
 `HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS`. The existing `recall.max_tokens` setting controls the
 response budget; it does not limit query input.
 
+## Context-aware recall planner
+
+The planner is a companion surface in the same standard Git plugin. Hermes loads it as a normal
+standalone plugin and loads the Better memory provider through the existing exclusive
+`memory.provider` path. The companion's public `pre_llm_call` hook runs before provider prefetch,
+uses `ctx.llm` for one structured decision, and transfers only that decision through a short-lived
+process-local handoff; no Hermes core patch or second package installation is required.
+
+`planner.mode` controls behavior:
+
+- `off` (default): do not call the planner and preserve direct current-query recall;
+- `shadow`: compute and consume a plan, emit only action/outcome/latency metadata, but still recall with
+  the original query;
+- `active`: `skip` and `reuse` make no Hindsight request; `recall` substitutes exactly one validated,
+  self-contained query before the normal provider bounds and request path.
+
+The planner receives Hermes's clean original `user_message` and preserves user-authored marker text. It
+reads only ordinary string-valued `content` from user/assistant history, never provider-expanded
+`api_content`; system/developer/tool roles, tool-call scaffolding, and non-text turns are excluded. It
+inspects at most eight history rows per configured exchange and clips each accepted text before
+whitespace checks or serialization. The compact JSON is checked against a derived UTF-8 byte ceiling
+before the model call. A current message larger than `planner.history_max_chars` skips planning and
+preserves direct-query recall. Full conversation history is never written to the handoff.
+The handoff stores an SHA-256 digest of the source query, session/turn correlation, action, and optional
+rewritten query only in process memory. Hermes imports the companion and provider under distinct module
+names, so they share a stable private `sys.modules` registry keyed by the resolved Hermes home. No planner
+database, file lock, PID lease, or cross-process coordination exists in normal operation. After validating
+current session/turn identity, every hook clears that session's prior plans before checking whether the
+current payload is plannable, so an early return cannot expose an older plan. Provider query mismatches
+remove and close the current reservation. Recently consumed turn IDs remain tombstoned for the same bounded
+lifetime as plans, preventing a retried hook from republishing an already consumed decision. Queries above
+the planner's absolute configured maximum skip planning before hashing and fall back to direct-query recall.
+Hermes acquires its conversation-scoped turn lease before this hook, so same-session turns cannot overlap.
+Monotonic expiry bounds stale plans, and the planner deadline clock is sampled and checked while the
+reservation registry lock is held. Consume-once deletion prevents reuse, and process exit removes all handoff
+state.
+
+Earlier branch-preview revisions wrote planner decisions to SQLite. The runtime deliberately does not touch
+that legacy path because an on-disk update can coexist with a still-running old gateway. To upgrade:
+
+1. Stop the gateway and every other Hermes process using the profile.
+2. Locate the old path from `planner.path` (default: `better_hindsight/recall_plans.sqlite3` under
+   `HERMES_HOME`) and verify it before deletion.
+3. Remove that database plus same-prefix `-journal`, `-wal`, and `-shm` sidecars while the profile is
+   offline.
+4. Remove the obsolete `planner.path`, `planner.mailbox_ttl_seconds`, and
+   `planner.busy_timeout_seconds` keys, then start Hermes again.
+
+The old keys remain accepted and validated for configuration compatibility, but they no longer configure
+the handoff. Cleanup is intentionally operator-driven and offline; initialization never mutates the legacy
+path.
+
+The provider activates the handoff only for a session whose Better recall policy was authorized, and
+moves that activation through Hermes's public `on_session_switch` callback. If Hermes has queued that
+callback behind old-session extraction, the first top-level child-session planner hook atomically bridges
+the exact active parent for that turn, including a provider call that captured the old identity. The delayed
+callback becomes an idempotent no-op, and the old identity cannot consume later plans. A callback whose
+expected parent no longer owns the activation is stale and ignored. Mailbox rebinding and the provider's
+local session update, initialization, and shutdown are serialized, so concurrent callbacks cannot restore or
+move identity backward. Bounded pending and stale-parent state retain an out-of-order descendant until its
+parent arrives. Subagent lineage is explicitly excluded.
+Same-session reset or rewind invalidates plans. Planner authorization and provider consumption both require
+the exact rebound session identity, so sibling plans cannot cross; an incomplete switch falls back to
+direct-query recall.
+Opaque activation tokens let one provider handle shut down without deauthorizing a live sibling handle.
+A missing, stale, mismatched, malformed, or late plan preserves direct current-query recall rather than
+breaking the turn. In active mode, a planner timeout, exception, or invalid structured result finalizes a
+bounded `skip` while that turn's reservation still exists. The atomic publication deadline rejects late
+model-derived `recall` or `reuse` decisions without blocking this deterministic failure policy. Provider
+consumption atomically cancels a pending reservation, so a hook thread abandoned by Hermes cannot publish
+a result into a later turn.
+
+When recall is enabled, `planner.timeout_seconds + recall.timeout_seconds` must not exceed 7.5 seconds
+in `shadow` or `active` mode; the defaults total 5.5 seconds. Dormant planner timing constraints are not
+applied while recall is disabled, so independently enabled reflection or retention can still initialize.
+Planner model routing is exposed as the auxiliary
+slot `better_hindsight_recall_planner`, so its provider/model can be configured through Hermes's normal
+auxiliary-model settings. Configuration is loaded for the process lifecycle; restart the owning Hermes
+process after changing planner activation or routing.
+
 `reflect.input_max_chars` and `reflect.input_max_tokens` independently bound the caller's projected
 nonblank query before the request. `reflect.max_tokens` is the fixed final-answer target sent to
 Hindsight; it is not a complete provider-cost cap. `reflect.output_max_bytes` bounds the complete
@@ -138,6 +226,11 @@ timeout does not guarantee backend model cancellation or refund work/cost alread
 | `recall.input_max_chars` | `4096` | 1 through 65,536 characters |
 | `recall.input_max_tokens` | `500` | 1 through 1,048,576 `cl100k_base` tokens; must not exceed the Hindsight server's `HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS` |
 | `recall.context_max_bytes` | `8192` | 1 through 1,048,576 bytes |
+| `planner.mode` | `off` | `off`, `shadow`, or `active`; explicit opt-in only |
+| `planner.timeout_seconds` | `2.0` | Greater than zero, at most 4 seconds; with recall timeout, at most 7.5 seconds when enabled |
+| `planner.history_max_exchanges` | `4` | Integer from 1 through 20 exchanges |
+| `planner.history_max_chars` | `6000` | Integer from 1 through 65,536 capsule characters; a larger current turn bypasses planning |
+| `planner.query_max_chars` | `1024` | Integer from 1 through 8,192 characters for a rewritten query |
 | `reflect.enabled` | `false` | Boolean; explicit opt-in only |
 | `reflect.timeout_seconds` | `60.0` | Greater than zero, at most 300 seconds; bounds the local Hermes wait |
 | `reflect.input_max_chars` | `4096` | 1 through 65,536 characters |
