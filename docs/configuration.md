@@ -149,13 +149,20 @@ database, file lock, PID lease, or cross-process coordination exists in normal o
 bounds stale plans, the planner deadline is checked atomically when a reservation is finalized,
 consume-once deletion prevents reuse, and process exit removes all handoff state.
 
-On companion registration or provider initialization after upgrading from the branch-preview SQLite
-implementation, the plugin idempotently removes the obsolete database and its SQLite sidecars only after
-its complete schema exactly identifies it as a supported old planner mailbox. An unrecognized file is
-preserved and produces a sanitized cleanup-failure event. The old `planner.path`,
-`planner.mailbox_ttl_seconds`, and
-`planner.busy_timeout_seconds` keys remain accepted and validated only for this migration; they no longer
-configure the handoff and should be removed. Cleanup failure does not disable memory.
+Earlier branch-preview revisions wrote planner decisions to SQLite. The runtime deliberately does not touch
+that legacy path because an on-disk update can coexist with a still-running old gateway. To upgrade:
+
+1. Stop the gateway and every other Hermes process using the profile.
+2. Locate the old path from `planner.path` (default: `better_hindsight/recall_plans.sqlite3` under
+   `HERMES_HOME`) and verify it before deletion.
+3. Remove that database plus same-prefix `-journal`, `-wal`, and `-shm` sidecars while the profile is
+   offline.
+4. Remove the obsolete `planner.path`, `planner.mailbox_ttl_seconds`, and
+   `planner.busy_timeout_seconds` keys, then start Hermes again.
+
+The old keys remain accepted and validated for configuration compatibility, but they no longer configure
+the handoff. Cleanup is intentionally operator-driven and offline; initialization never mutates the legacy
+path.
 
 The provider activates the handoff only for a session whose Better recall policy was authorized, and
 moves that activation through Hermes's public `on_session_switch` callback and invalidates plans on a

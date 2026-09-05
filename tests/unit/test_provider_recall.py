@@ -53,7 +53,6 @@ from better_hermes_hindsight.runtime import (
     finalize_process_runtime,
     reset_process_runtime_for_tests,
 )
-from tests.legacy_plan_mailbox import create_legacy_plan_mailbox
 
 _PLUGIN_SPEC = importlib.util.spec_from_file_location(
     "_better_hindsight_plugin_entrypoint",
@@ -356,7 +355,7 @@ def test_dormant_planner_creates_no_handoff_state_file(
     provider.shutdown()
 
 
-def test_provider_initialization_removes_legacy_sqlite_mailbox(
+def test_provider_initialization_preserves_legacy_mailbox_for_offline_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     document = _base_config()
@@ -368,39 +367,14 @@ def test_provider_initialization_removes_legacy_sqlite_mailbox(
     }
     _write_config(tmp_path, document)
     path = tmp_path / "better_hindsight" / "custom-plans.sqlite3"
-    create_legacy_plan_mailbox(path)
-    candidates = [path, Path(f"{path}-wal"), Path(f"{path}-shm"), Path(f"{path}-journal")]
-    for candidate in candidates[1:]:
-        candidate.write_bytes(b"private rewritten query")
+    path.write_bytes(b"legacy mailbox retained for explicit offline cleanup")
     handle = _RecordingHandle()
     monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
 
     provider = BetterHindsightMemoryProvider()
     provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
 
-    assert all(not candidate.exists() for candidate in candidates)
-    assert cast(object, provider._runtime) is handle
-    provider.shutdown()
-
-
-def test_unverified_legacy_path_is_preserved_without_disabling_provider(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    document = _base_config()
-    document["planner"] = {
-        "mode": "off",
-        "path": "better_hindsight/unrelated.sqlite3",
-    }
-    _write_config(tmp_path, document)
-    path = tmp_path / "better_hindsight" / "unrelated.sqlite3"
-    path.write_bytes(b"unrelated profile data")
-    handle = _RecordingHandle()
-    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
-
-    provider = BetterHindsightMemoryProvider()
-    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
-
-    assert path.read_bytes() == b"unrelated profile data"
+    assert path.read_bytes() == b"legacy mailbox retained for explicit offline cleanup"
     assert cast(object, provider._runtime) is handle
     provider.shutdown()
 

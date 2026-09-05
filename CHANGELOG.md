@@ -11,10 +11,9 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
   query from bounded ordinary user/assistant history, and hands the decision to the memory provider
   through a profile-keyed, short-lived process-local reservation registry. Pending reservations
   fence out late hook workers before provider consumption, publication deadlines are enforced while
-  finalizing under the registry lock, and finalized decisions are consume-once. Companion registration
-  or provider initialization idempotently removes only exact-schema-verified obsolete branch-preview
-  SQLite planner mailboxes and sidecars while continuing to accept their former settings only for
-  validated migration cleanup.
+  finalizing under the registry lock, and finalized decisions are consume-once. Legacy branch-preview
+  SQLite settings remain loadable but no longer configure the handoff. The runtime does not mutate those
+  paths; the documented upgrade requires stopping profile users before explicit offline file cleanup.
   Shadow mode records only safe action/latency metadata. Missing, stale, or mismatched handoff state
   preserves direct current-query recall. In active mode, a planner timeout, exception, or invalid result
   finalizes a bounded `skip` while the reservation remains. The atomic publication deadline rejects late

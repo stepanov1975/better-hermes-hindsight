@@ -180,7 +180,9 @@ def test_planner_configuration_is_bounded(tmp_path: Path) -> None:
         )
 
 
-def test_legacy_planner_mailbox_settings_remain_loadable_for_cleanup(tmp_path: Path) -> None:
+def test_legacy_planner_mailbox_settings_remain_loadable_for_offline_upgrade(
+    tmp_path: Path,
+) -> None:
     config = load_config(
         hermes_home=tmp_path,
         environ={},
@@ -194,9 +196,7 @@ def test_legacy_planner_mailbox_settings_remain_loadable_for_cleanup(tmp_path: P
         },
     )
 
-    assert config.planner.legacy_mailbox_path == (
-        tmp_path / "better_hindsight" / "custom-plans.sqlite3"
-    )
+    assert config.planner.mode == "active"
     with pytest.raises(ConfigError, match="planner.path must remain inside hermes_home"):
         load_config(
             hermes_home=tmp_path,

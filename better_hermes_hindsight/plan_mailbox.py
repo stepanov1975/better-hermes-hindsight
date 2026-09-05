@@ -8,10 +8,8 @@ without turning one-turn planner state into durable database state.
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import math
-import sqlite3
 import sys
 import threading
 import time
@@ -27,11 +25,6 @@ PlanAction = Literal["skip", "reuse", "recall"]
 
 _PLAN_MAX_AGE_SECONDS = 10.0
 _SHARED_REGISTRY_MODULE = "_better_hermes_hindsight_plan_registry_v1"
-# SHA-256 over sorted ``(type, name, sql)`` rows for the two branch-preview schemas.
-_LEGACY_SCHEMA_DIGESTS = {
-    2: "b030edfe05d197ef2d83ecd3623b70daf953bf0bbc5a9166c707fc1dab6bd626",
-    3: "957b5394c5b2457d9f5ee6f92c8327e6b46370ac303e6e2c70bbafa2080f7a48",
-}
 
 
 class PlanMailboxError(RuntimeError):
@@ -350,72 +343,10 @@ def _require_action(action: str, rewritten_query: str | None) -> None:
         raise ValueError("only recall action accepts rewritten_query")
 
 
-def remove_legacy_plan_mailbox(path: Path) -> bool:
-    """Remove a verified obsolete SQLite mailbox and its sidecars."""
-
-    if not path.is_absolute():
-        raise PlanMailboxError("legacy recall plan mailbox path is not absolute")
-    if not path.exists():
-        return False
-    if not _is_legacy_plan_mailbox(path):
-        raise PlanMailboxError("legacy recall plan mailbox cleanup refused an unverified file")
-    sidecars = (
-        Path(f"{path}-wal"),
-        Path(f"{path}-shm"),
-        Path(f"{path}-journal"),
-    )
-    removed_sidecar = False
-    for candidate in sidecars:
-        try:
-            candidate.unlink()
-        except FileNotFoundError:
-            continue
-        except OSError:
-            raise PlanMailboxError("legacy recall plan mailbox cleanup failed") from None
-        else:
-            removed_sidecar = True
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        return removed_sidecar
-    except OSError:
-        raise PlanMailboxError("legacy recall plan mailbox cleanup failed") from None
-    return True
-
-
-def _is_legacy_plan_mailbox(path: Path) -> bool:
-    try:
-        uri = f"{path.as_uri()}?mode=ro&immutable=1"
-        with contextlib.closing(sqlite3.connect(uri, uri=True, timeout=0.0)) as connection:
-            version_row = connection.execute("PRAGMA user_version").fetchone()
-            if version_row is None:
-                return False
-            version = int(version_row[0])
-            expected_digest = _LEGACY_SCHEMA_DIGESTS.get(version)
-            if expected_digest is None:
-                return False
-            schema_rows = connection.execute(
-                """
-                SELECT type, name, sql FROM sqlite_schema
-                WHERE name NOT LIKE 'sqlite_%'
-                  AND type IN ('table', 'index', 'view', 'trigger')
-                ORDER BY type, name
-                """
-            ).fetchall()
-            serialized = "\0".join("\x1f".join(str(value) for value in row) for row in schema_rows)
-            actual_digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-            if actual_digest != expected_digest:
-                return False
-    except (OSError, OverflowError, TypeError, ValueError, sqlite3.Error):
-        return False
-    return True
-
-
 __all__ = [
     "InMemoryPlanMailbox",
     "PlanAction",
     "PlanMailboxError",
     "PlanMode",
     "RecallPlan",
-    "remove_legacy_plan_mailbox",
 ]

@@ -26,7 +26,7 @@ from .formatting import (
 )
 from .management import status
 from .outbox import AdmissionStatus
-from .plan_mailbox import InMemoryPlanMailbox, PlanMailboxError, remove_legacy_plan_mailbox
+from .plan_mailbox import InMemoryPlanMailbox, PlanMailboxError
 from .runtime import (
     AsyncCallTimeoutError,
     ProcessRuntimeHandle,
@@ -164,17 +164,6 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         except Exception:
             logger.warning(CONFIG_INACTIVE_DIAGNOSTIC)
             return
-
-        legacy_mailbox_path = config.planner.legacy_mailbox_path
-        if legacy_mailbox_path is not None:
-            try:
-                remove_legacy_plan_mailbox(legacy_mailbox_path)
-            except PlanMailboxError:
-                emit_event(
-                    logger,
-                    "better_hindsight.recall_plan_mailbox",
-                    outcome="cleanup_failed",
-                )
 
         platform = _optional_string(kwargs.get("platform"))
         agent_context = _optional_string(kwargs.get("agent_context"))

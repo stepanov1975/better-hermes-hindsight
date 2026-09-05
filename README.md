@@ -141,9 +141,9 @@ process-local handoff stores only query hashes and the planned action/query in m
 reservations are consumed once, and consuming a pending reservation fences out an abandoned late hook
 worker. Finalization rejects model-derived `recall` or `reuse` after the planner deadline while still
 allowing the deterministic active-mode `skip` failure policy. Missing, stale, late, or mismatched handoff
-state falls back to direct current-query recall. Provider initialization or companion registration removes
-exact-schema-verified obsolete branch-preview SQLite planner mailboxes and sidecars; an unrecognized file
-is preserved.
+state falls back to direct current-query recall. Earlier branch-preview revisions wrote planner decisions
+to SQLite. The runtime deliberately leaves that legacy path untouched: stop every Hermes process using
+the profile, remove the configured database and sidecars offline, then remove the obsolete planner keys.
 
 Reflection is disabled by default and is never automatic. When enabled, `better_hindsight_reflect`
 accepts one nonblank bounded query for the configured bank under the authorized principal and returns

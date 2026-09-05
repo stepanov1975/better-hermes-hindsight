@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import sqlite3
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -13,11 +12,8 @@ import pytest
 
 from better_hermes_hindsight.plan_mailbox import (
     InMemoryPlanMailbox,
-    PlanMailboxError,
     RecallPlan,
-    remove_legacy_plan_mailbox,
 )
-from tests.legacy_plan_mailbox import create_legacy_plan_mailbox
 
 
 class _Clock:
@@ -286,56 +282,6 @@ def test_only_one_concurrent_consumer_wins(tmp_path: Path) -> None:
 
     assert sum(result is not None for result in results) == 1
     mailbox.deactivate(token=token)
-
-
-@pytest.mark.parametrize("version", [2, 3])
-def test_legacy_sqlite_mailbox_and_sidecars_are_removed(tmp_path: Path, version: int) -> None:
-    path = tmp_path / f"legacy-v{version}.sqlite3"
-    create_legacy_plan_mailbox(path, version=version)
-    candidates = [
-        path,
-        Path(f"{path}-wal"),
-        Path(f"{path}-shm"),
-        Path(f"{path}-journal"),
-    ]
-    for candidate in candidates[1:]:
-        candidate.write_bytes(b"private rewritten query")
-
-    assert remove_legacy_plan_mailbox(path)
-    assert all(not candidate.exists() for candidate in candidates)
-    assert not remove_legacy_plan_mailbox(path)
-
-
-def test_legacy_cleanup_refuses_an_unverified_file(tmp_path: Path) -> None:
-    path = tmp_path / "unrelated.sqlite3"
-    path.write_bytes(b"unrelated profile data")
-
-    with pytest.raises(PlanMailboxError, match="unverified"):
-        remove_legacy_plan_mailbox(path)
-    assert path.read_bytes() == b"unrelated profile data"
-
-
-def test_legacy_cleanup_refuses_a_database_with_extra_schema(tmp_path: Path) -> None:
-    path = tmp_path / "extended.sqlite3"
-    create_legacy_plan_mailbox(path)
-    with sqlite3.connect(path) as connection:
-        connection.execute("CREATE TABLE unrelated_valuable_data (value TEXT NOT NULL)")
-
-    with pytest.raises(PlanMailboxError, match="unverified"):
-        remove_legacy_plan_mailbox(path)
-    assert path.exists()
-
-
-def test_legacy_cleanup_keeps_main_database_when_a_sidecar_cannot_be_removed(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / "blocked-sidecar.sqlite3"
-    create_legacy_plan_mailbox(path)
-    Path(f"{path}-wal").mkdir()
-
-    with pytest.raises(PlanMailboxError, match="cleanup failed"):
-        remove_legacy_plan_mailbox(path)
-    assert path.exists()
 
 
 @pytest.mark.parametrize(

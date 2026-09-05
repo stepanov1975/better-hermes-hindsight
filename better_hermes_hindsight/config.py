@@ -262,7 +262,6 @@ class PlannerConfig:
     history_max_exchanges: int = DEFAULT_PLANNER_HISTORY_MAX_EXCHANGES
     history_max_chars: int = DEFAULT_PLANNER_HISTORY_MAX_CHARS
     query_max_chars: int = DEFAULT_PLANNER_QUERY_MAX_CHARS
-    legacy_mailbox_path: Path | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -930,6 +929,10 @@ def _parse_planner(home: Path, value: object) -> PlannerConfig:
             minimum=0.0,
             maximum=_LEGACY_MAX_PLANNER_BUSY_TIMEOUT_SECONDS,
         )
+    _parse_planner_path(
+        home,
+        values.get("path", _LEGACY_DEFAULT_PLANNER_MAILBOX_PATH),
+    )
     return PlannerConfig(
         mode=cast(
             PlannerMode,
@@ -950,10 +953,6 @@ def _parse_planner(home: Path, value: object) -> PlannerConfig:
             values.get("query_max_chars", DEFAULT_PLANNER_QUERY_MAX_CHARS),
             "planner.query_max_chars",
             maximum=MAX_PLANNER_QUERY_CHARS,
-        ),
-        legacy_mailbox_path=_parse_planner_path(
-            home,
-            values.get("path", _LEGACY_DEFAULT_PLANNER_MAILBOX_PATH),
         ),
     )
 

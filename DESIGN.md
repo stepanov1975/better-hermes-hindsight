@@ -72,10 +72,10 @@ session, and current-query identity plus monotonic expiry, an atomic publication
 consume-once deletion prevents a consumed, late, or sibling plan from leaking into a later turn.
 Consuming a pending reservation removes it before an abandoned hook worker can publish late. Missing
 state falls back to direct-query recall, and process exit removes all handoff state automatically.
-Companion registration and provider initialization also idempotently remove only an
-exact-schema-verified obsolete branch-preview SQLite mailbox and its sidecars. Its former settings are
-accepted only long enough to validate and locate that cleanup target. An unrecognized file is preserved
-and produces a sanitized cleanup-failure event.
+Earlier branch-preview revisions wrote planner decisions to SQLite. The runtime deliberately leaves that
+legacy path untouched because an install may coexist with a still-running old gateway. Upgrading operators
+must stop every Hermes process using the profile, remove the database and sidecars offline, and then remove
+the obsolete planner keys.
 
 The model-facing `better_hindsight_recall` tool reuses this configured path and returns structured
 records without internal ranking or source-count telemetry. It cannot select a different bank,

@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from better_hermes_hindsight.planner import RECALL_PLANNER_TASK
-from tests.legacy_plan_mailbox import create_legacy_plan_mailbox
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -89,15 +88,18 @@ def test_general_plugin_surface_registers_one_planner_hook_and_task(tmp_path: Pa
     assert callable(context.hooks[0][1])
 
 
-def test_general_plugin_registration_removes_a_legacy_mailbox(tmp_path: Path) -> None:
+def test_general_plugin_registration_preserves_legacy_mailbox_for_offline_cleanup(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "better_hindsight" / "recall_plans.sqlite3"
-    create_legacy_plan_mailbox(path)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"legacy mailbox retained for explicit offline cleanup")
     plugin = _load_plugin_entrypoint()
     context = _GeneralContext(tmp_path)
 
     plugin.register(context)
 
-    assert not path.exists()
+    assert path.read_bytes() == b"legacy mailbox retained for explicit offline cleanup"
 
 
 def test_memory_surface_registers_provider_only() -> None:

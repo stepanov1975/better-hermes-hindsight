@@ -15,7 +15,6 @@ from .plan_mailbox import (
     InMemoryPlanMailbox,
     PlanAction,
     PlanMailboxError,
-    remove_legacy_plan_mailbox,
 )
 from .telemetry import elapsed_milliseconds, emit_event
 
@@ -338,29 +337,9 @@ class RecallPlanner:
         )
 
 
-def _cleanup_legacy_mailbox(config: BetterHindsightConfig) -> None:
-    path = config.planner.legacy_mailbox_path
-    if path is None:
-        return
-    try:
-        remove_legacy_plan_mailbox(path)
-    except PlanMailboxError:
-        emit_event(
-            logger,
-            "better_hindsight.recall_plan_mailbox",
-            outcome="cleanup_failed",
-        )
-
-
 def register_companion(ctx: _RegistrationContext, hermes_home: Path) -> RecallPlanner:
     """Register the auxiliary task and exactly one ``pre_llm_call`` hook."""
 
-    try:
-        config = load_config(hermes_home)
-    except (ConfigError, OSError):
-        pass
-    else:
-        _cleanup_legacy_mailbox(config)
     ctx.register_auxiliary_task(
         AUXILIARY_TASK_KEY,
         display_name="Better Hindsight recall planner",
