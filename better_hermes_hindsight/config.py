@@ -905,6 +905,17 @@ def _parse_recall(value: object) -> RecallConfig:
 def _parse_planner(home: Path, value: object) -> PlannerConfig:
     values = _expect_mapping(value, "planner")
     _check_unknown_keys(values, _PLANNER_KEYS, "planner")
+    timeout_seconds = _parse_bounded_float(
+        values.get("timeout_seconds", DEFAULT_PLANNER_TIMEOUT_SECONDS),
+        "planner.timeout_seconds",
+        minimum=0.0,
+        maximum=MAX_PLANNER_TIMEOUT_SECONDS,
+    )
+    if timeout_seconds <= 0:
+        raise _error(
+            "planner.timeout_seconds must be greater than 0.0 and at most "
+            f"{MAX_PLANNER_TIMEOUT_SECONDS}"
+        )
     if "mailbox_ttl_seconds" in values:
         _parse_bounded_float(
             values["mailbox_ttl_seconds"],
@@ -924,12 +935,7 @@ def _parse_planner(home: Path, value: object) -> PlannerConfig:
             PlannerMode,
             _parse_literal(values.get("mode", "off"), "planner.mode", ("off", "shadow", "active")),
         ),
-        timeout_seconds=_parse_bounded_float(
-            values.get("timeout_seconds", DEFAULT_PLANNER_TIMEOUT_SECONDS),
-            "planner.timeout_seconds",
-            minimum=0.0,
-            maximum=MAX_PLANNER_TIMEOUT_SECONDS,
-        ),
+        timeout_seconds=timeout_seconds,
         history_max_exchanges=_parse_positive_int(
             values.get("history_max_exchanges", DEFAULT_PLANNER_HISTORY_MAX_EXCHANGES),
             "planner.history_max_exchanges",
