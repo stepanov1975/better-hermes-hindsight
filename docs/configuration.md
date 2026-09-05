@@ -163,12 +163,11 @@ same-session rewind. Planner authorization and provider consumption both require
 session identity, so sibling plans cannot cross; an incomplete switch falls back to direct-query recall.
 Opaque activation tokens let one provider handle shut down without deauthorizing a live sibling handle.
 A missing, stale, mismatched, malformed, or late plan preserves direct current-query recall rather than
-breaking the turn. In active
-mode, a planner timeout, exception, or invalid structured result finalizes a bounded `skip` decision only
-while that turn's reservation still exists and its publication deadline has not passed. Provider
+breaking the turn. In active mode, a planner timeout, exception, or invalid structured result finalizes a
+bounded `skip` while that turn's reservation still exists. The atomic publication deadline rejects late
+model-derived `recall` or `reuse` decisions without blocking this deterministic failure policy. Provider
 consumption atomically cancels a pending reservation, so a hook thread abandoned by Hermes cannot publish
-a result into a later turn. A decision that misses the publication deadline falls back to direct-query
-recall.
+a result into a later turn.
 
 When recall is enabled, `planner.timeout_seconds + recall.timeout_seconds` must not exceed 7.5 seconds
 in `shadow` or `active` mode; the defaults total 5.5 seconds. Dormant planner timing constraints are not

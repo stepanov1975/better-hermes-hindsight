@@ -16,9 +16,9 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
   SQLite planner mailboxes and sidecars while continuing to accept their former settings only for
   validated migration cleanup.
   Shadow mode records only safe action/latency metadata. Missing, stale, or mismatched handoff state
-  preserves direct current-query recall. In active mode, a planner timeout,
-  exception, or invalid result finalizes a bounded `skip` decision only while the reservation and its
-  publication deadline remain valid; otherwise direct-query recall is preserved.
+  preserves direct current-query recall. In active mode, a planner timeout, exception, or invalid result
+  finalizes a bounded `skip` while the reservation remains. The atomic publication deadline rejects late
+  model-derived `recall` or `reuse` decisions without blocking that deterministic failure policy.
 
 ### Changed
 

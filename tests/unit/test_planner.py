@@ -407,7 +407,7 @@ def test_active_invalid_plan_publishes_skip_instead_of_stale_recall(
     )
 
 
-def test_result_after_publication_deadline_falls_back_without_a_plan(tmp_path: Path) -> None:
+def test_active_timeout_publishes_skip_without_using_late_model_result(tmp_path: Path) -> None:
     _write_config(tmp_path, timeout_seconds=0.5)
     now = [10.0]
     mailbox = InMemoryPlanMailbox(tmp_path, monotonic=lambda: now[0])
@@ -434,7 +434,12 @@ def test_result_after_publication_deadline_falls_back_without_a_plan(tmp_path: P
     )
 
     assert len(llm.calls) == 1
-    assert mailbox.consume(source_query="question", session_id="session-a") is None
+    assert mailbox.consume(source_query="question", session_id="session-a") == RecallPlan(
+        mode="active",
+        action="skip",
+        rewritten_query=None,
+        turn_id="turn-a",
+    )
 
 
 def test_off_or_inactive_planner_makes_no_model_call_or_mailbox(tmp_path: Path) -> None:

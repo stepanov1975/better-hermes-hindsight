@@ -233,7 +233,8 @@ class InMemoryPlanMailbox:
             plan = state.plans.get(turn_id)
             if plan is None or plan.action is not None or plan.mode != mode:
                 return False
-            if plan.publish_before is not None and now >= plan.publish_before:
+            deadline_expired = plan.publish_before is not None and now >= plan.publish_before
+            if deadline_expired and not (mode == "active" and action == "skip"):
                 return False
             plan.action = action
             plan.rewritten_query = rewritten_query

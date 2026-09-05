@@ -163,6 +163,12 @@ def test_planner_configuration_is_bounded(tmp_path: Path) -> None:
             environ={},
             injected={"planner": {"mode": "invalid"}},
         )
+    with pytest.raises(ConfigError, match="planner.timeout_seconds"):
+        load_config(
+            hermes_home=tmp_path,
+            environ={},
+            injected={"planner": {"mode": "active", "timeout_seconds": 0}},
+        )
     with pytest.raises(ConfigError, match="combined planner and recall deadline"):
         load_config(
             hermes_home=tmp_path,

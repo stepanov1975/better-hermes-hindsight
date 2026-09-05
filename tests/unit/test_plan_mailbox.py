@@ -169,6 +169,36 @@ def test_publication_deadline_is_enforced_inside_finalize(tmp_path: Path) -> Non
     mailbox.deactivate(token=token)
 
 
+def test_active_skip_fallback_can_finalize_after_planner_deadline(tmp_path: Path) -> None:
+    clock = _Clock(10.0)
+    mailbox = InMemoryPlanMailbox(tmp_path, monotonic=clock)
+
+    token = mailbox.activate(session_id="session-a")
+    assert mailbox.reserve(
+        source_query="Why?",
+        session_id="session-a",
+        parent_session_id="",
+        turn_id="turn-timeout",
+        mode="active",
+        publish_timeout_seconds=0.5,
+    )
+
+    clock.value = 10.5
+    assert mailbox.finalize(
+        turn_id="turn-timeout",
+        mode="active",
+        action="skip",
+        rewritten_query=None,
+    )
+    assert mailbox.consume(source_query="Why?", session_id="session-a") == RecallPlan(
+        mode="active",
+        action="skip",
+        rewritten_query=None,
+        turn_id="turn-timeout",
+    )
+    mailbox.deactivate(token=token)
+
+
 def test_newest_matching_pending_turn_fences_an_older_ready_plan(tmp_path: Path) -> None:
     mailbox = InMemoryPlanMailbox(tmp_path)
     token = _ready_plan(mailbox, turn_id="turn-old")

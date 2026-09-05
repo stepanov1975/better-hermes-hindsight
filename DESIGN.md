@@ -59,8 +59,9 @@ important.
    as untrusted evidence, and enforces the output-byte limit.
 7. Errors and timeouts return no external context rather than failing Hermes. Missing, stale, or malformed
    handoff state preserves direct current-query recall. A shadow planner failure does the
-   same; an active planner's invalid or timed-out decision becomes `skip` only while its reservation and
-   atomic publication deadline remain valid.
+   same; an active planner failure finalizes a deterministic `skip` while its reservation remains. The
+   atomic publication deadline rejects late model-derived `recall` or `reuse` decisions without blocking
+   that safe fallback.
 
 Hermes may import the standalone companion and exclusive memory provider under distinct module names,
 but both execute in the same interpreter. A stable private `sys.modules` registry therefore provides the
