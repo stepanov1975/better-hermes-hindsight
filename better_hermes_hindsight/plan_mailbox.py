@@ -1,412 +1,175 @@
-"""Short-lived one-shot SQLite handoff for contextual recall plans."""
+"""Process-local, consume-once handoff for contextual recall plans.
+
+Hermes loads the standalone companion and the exclusive memory provider under
+different module names, but both run in the same interpreter.  A tiny registry
+stored under a stable ``sys.modules`` key bridges those import namespaces
+without turning one-turn planner state into durable database state.
+"""
 
 from __future__ import annotations
 
 import contextlib
 import hashlib
 import math
-import os
 import sqlite3
+import sys
+import threading
 import time
+import types
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, cast
 
-from .config import PlannerMode
-
+PlanMode = Literal["shadow", "active"]
 PlanAction = Literal["skip", "reuse", "recall"]
-PlanState = Literal["pending", "ready"]
-_SCHEMA_VERSION = 3
-_ALLOWED_MODES = frozenset({"shadow", "active"})
-_ALLOWED_ACTIONS = frozenset({"skip", "reuse", "recall"})
-_PROCESS_NONCE_ENV = "BETTER_HINDSIGHT_RUNTIME_NONCE"
-_OWNER_CLEANUP_BATCH = 128
-_PREVIOUS_SCHEMA_OBJECTS = frozenset({"active_session", "recall_plan", "recall_plan_lookup"})
-_SCHEMA_OBJECTS = frozenset(
-    {"process_owner", "active_session", "recall_plan", "recall_plan_lookup"}
-)
 
-_SCHEMA_SQL = """
-CREATE TABLE IF NOT EXISTS process_owner (
-    process_identity TEXT PRIMARY KEY,
-    process_id INTEGER NOT NULL CHECK (process_id > 0),
-    boot_token TEXT NOT NULL,
-    start_token TEXT NOT NULL,
-    observed_at REAL NOT NULL
-);
-CREATE TABLE IF NOT EXISTS active_session (
-    process_identity TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    activated_at REAL NOT NULL,
-    ref_count INTEGER NOT NULL CHECK (ref_count > 0),
-    PRIMARY KEY (process_identity, session_id)
-);
-CREATE TABLE IF NOT EXISTS recall_plan (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    process_identity TEXT NOT NULL,
-    session_id TEXT NOT NULL,
-    parent_session_id TEXT NOT NULL,
-    turn_id TEXT NOT NULL,
-    query_digest TEXT NOT NULL,
-    mode TEXT NOT NULL CHECK (mode IN ('shadow', 'active')),
-    state TEXT NOT NULL CHECK (state IN ('pending', 'ready')),
-    action TEXT CHECK (action IN ('skip', 'reuse', 'recall')),
-    rewritten_query TEXT,
-    created_at REAL NOT NULL,
-    expires_at REAL NOT NULL,
-    UNIQUE (process_identity, turn_id),
-    CHECK (
-        (state = 'pending' AND action IS NULL AND rewritten_query IS NULL)
-        OR
-        (
-            state = 'ready'
-            AND action IS NOT NULL
-            AND (
-                (action = 'recall' AND rewritten_query IS NOT NULL)
-                OR (action IN ('skip', 'reuse') AND rewritten_query IS NULL)
-            )
-        )
-    )
-);
-CREATE INDEX IF NOT EXISTS recall_plan_lookup
-ON recall_plan (process_identity, query_digest, session_id, expires_at);
-"""
+_PLAN_MAX_AGE_SECONDS = 10.0
+_SHARED_REGISTRY_MODULE = "_better_hermes_hindsight_plan_registry_v1"
+_LEGACY_SCHEMA_VERSIONS = frozenset({1, 2, 3})
+_LEGACY_REQUIRED_COLUMNS = {
+    "active_session": frozenset({"session_id"}),
+    "recall_plan": frozenset(
+        {"turn_id", "query_digest", "mode", "action", "rewritten_query", "expires_at"}
+    ),
+}
 
 
 class PlanMailboxError(RuntimeError):
-    """A sanitized local recall-plan mailbox failure."""
+    """The process-local recall-plan handoff is unavailable."""
 
 
 @dataclass(frozen=True, slots=True)
 class RecallPlan:
-    """One validated plan atomically removed from the mailbox."""
+    """One validated planner decision consumed by the provider."""
 
-    mode: PlannerMode
+    mode: PlanMode
     action: PlanAction
     rewritten_query: str | None
     turn_id: str
 
 
-@dataclass(frozen=True, slots=True)
-class _ProcessOwner:
-    process_id: int
-    boot_token: str
-    start_token: str
+@dataclass(slots=True)
+class _StoredPlan:
+    sequence: int
+    query_digest: str
+    session_id: str
+    mode: PlanMode
+    expires_at: float
+    publish_before: float | None = None
+    action: PlanAction | None = None
+    rewritten_query: str | None = None
 
 
-def _read_boot_token() -> str:
-    try:
-        value = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip()
-    except (OSError, UnicodeError):
-        return ""
-    if not value:
-        return ""
-    return hashlib.sha256(value.encode("ascii")).hexdigest()[:16]
+@dataclass(slots=True)
+class _HomeState:
+    activations: dict[str, str] = field(default_factory=dict)
+    plans: dict[str, _StoredPlan] = field(default_factory=dict)
+    sequence: int = 0
 
 
-_BOOT_TOKEN = _read_boot_token()
+@dataclass(slots=True)
+class _RegistryState:
+    lock: threading.RLock
+    homes: dict[str, _HomeState]
 
 
-def _process_start_token(process_id: int) -> str:
-    try:
-        stat_text = Path(f"/proc/{process_id}/stat").read_text(encoding="ascii")
-    except (OSError, UnicodeError):
-        return ""
-    _, separator, suffix = stat_text.rpartition(")")
-    fields = suffix.split() if separator else []
-    return fields[19] if len(fields) > 19 else ""
+def _shared_registry() -> _RegistryState:
+    """Return one registry even when this file has multiple import names."""
 
-
-def _current_process_owner() -> _ProcessOwner:
-    process_id = os.getpid()
-    return _ProcessOwner(
-        process_id=process_id,
-        boot_token=_BOOT_TOKEN,
-        start_token=_process_start_token(process_id),
-    )
-
-
-def _process_owner_is_live(owner: _ProcessOwner) -> bool:
-    if owner.boot_token and _BOOT_TOKEN and owner.boot_token != _BOOT_TOKEN:
-        return False
-    observed_start = _process_start_token(owner.process_id)
-    if observed_start:
-        return not owner.start_token or observed_start == owner.start_token
-    if os.name == "nt":
-        return True
-    try:
-        os.kill(owner.process_id, 0)
-    except ProcessLookupError:
-        return False
-    except (OSError, OverflowError, ValueError):
-        return True
-    return True
+    candidate = types.ModuleType(_SHARED_REGISTRY_MODULE)
+    candidate.__dict__["state"] = _RegistryState(lock=threading.RLock(), homes={})
+    shared = sys.modules.setdefault(_SHARED_REGISTRY_MODULE, candidate)
+    state = getattr(shared, "state", None)
+    lock = getattr(state, "lock", None)
+    homes = getattr(state, "homes", None)
+    if lock is None or not hasattr(lock, "__enter__") or not isinstance(homes, dict):
+        raise PlanMailboxError("recall plan handoff unavailable")
+    return cast(_RegistryState, state)
 
 
 def _query_digest(query: str) -> str:
     return hashlib.sha256(query.encode("utf-8", errors="surrogatepass")).hexdigest()
 
 
-def _process_identity() -> str:
-    """Return a same-process, restart-distinct identity without exposing a PID."""
+class InMemoryPlanMailbox:
+    """A profile-scoped, thread-safe, consume-once plan rendezvous."""
 
-    nonce = os.environ.get(_PROCESS_NONCE_ENV, "")
-    if len(nonce) != 32 or any(character not in "0123456789abcdef" for character in nonce):
-        nonce = uuid.uuid4().hex
-        os.environ[_PROCESS_NONCE_ENV] = nonce
-    material = f"{os.getpid()}:{nonce}".encode()
-    return hashlib.sha256(material).hexdigest()
-
-
-class SQLitePlanMailbox:
-    """A profile-local, process-bound, consume-once plan rendezvous."""
-
-    __slots__ = (
-        "_busy_timeout_seconds",
-        "_clock",
-        "_monotonic",
-        "_path",
-        "_process_identity",
-        "_process_owner",
-    )
+    __slots__ = ("_clock", "_home_key", "_registry")
 
     def __init__(
         self,
-        path: Path,
+        hermes_home: Path,
         *,
-        busy_timeout_seconds: float,
-        process_identity: str | None = None,
-        clock: Callable[[], float] = time.time,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
-        self._path = path
-        self._busy_timeout_seconds = busy_timeout_seconds
-        self._process_identity = process_identity or _process_identity()
-        self._process_owner = _current_process_owner()
-        self._clock = clock
-        self._monotonic = monotonic
-
-    @property
-    def process_identity(self) -> str:
-        """Return the opaque identity used to reject prior-process rows."""
-
-        return self._process_identity
-
-    def purge_stale(self) -> None:
-        """Remove expired plans and dead-owner leases without activating this process."""
-
-        if not self._path.exists():
-            return
         try:
-            with contextlib.closing(self._connect()) as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                now = self._clock()
-                self._delete_stale(connection, now)
-                self._delete_dead_owners(connection, now)
-                connection.commit()
-        except (OSError, sqlite3.Error, UnicodeError) as exc:
-            raise PlanMailboxError("recall plan mailbox unavailable") from exc
+            home = hermes_home.resolve(strict=False)
+        except (OSError, RuntimeError, ValueError):
+            raise PlanMailboxError("recall plan handoff unavailable") from None
+        if not home.is_absolute():
+            raise PlanMailboxError("recall plan handoff unavailable")
+        self._home_key = str(home)
+        self._clock = monotonic
+        self._registry = _shared_registry()
 
-    def activate(self, *, session_id: str) -> None:
-        """Mark one authorized provider session as active in this process."""
+    def activate(self, *, session_id: str) -> str:
+        """Activate one provider handle and return its exact release token."""
 
-        _validate_identifier(session_id, "session_id")
-        try:
-            with contextlib.closing(self._connect()) as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                now = self._clock()
-                self._delete_stale(connection, now)
-                self._delete_dead_owners(connection, now)
-                connection.execute(
-                    """
-                    INSERT INTO process_owner (
-                        process_identity, process_id, boot_token, start_token, observed_at
-                    ) VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(process_identity) DO UPDATE SET
-                        process_id = excluded.process_id,
-                        boot_token = excluded.boot_token,
-                        start_token = excluded.start_token,
-                        observed_at = excluded.observed_at
-                    """,
-                    (
-                        self._process_identity,
-                        self._process_owner.process_id,
-                        self._process_owner.boot_token,
-                        self._process_owner.start_token,
-                        now,
-                    ),
-                )
-                connection.execute(
-                    """
-                    INSERT INTO active_session (
-                        process_identity, session_id, activated_at, ref_count
-                    ) VALUES (?, ?, ?, 1)
-                    ON CONFLICT(process_identity, session_id) DO UPDATE SET
-                        activated_at = excluded.activated_at,
-                        ref_count = active_session.ref_count + 1
-                    """,
-                    (self._process_identity, session_id, now),
-                )
-                connection.commit()
-        except (OSError, sqlite3.Error, UnicodeError) as exc:
-            raise PlanMailboxError(
-                "Better Hindsight recall-plan mailbox activation failed."
-            ) from exc
+        _require_text(session_id, "session_id")
+        token = uuid.uuid4().hex
+        now = self._clock()
+        with self._registry.lock:
+            state = self._home_state(create=True)
+            assert state is not None
+            self._purge_expired(state, now)
+            state.activations[token] = session_id
+        return token
 
-    def deactivate(self, *, session_id: str) -> None:
-        """Release one provider owner's activation reference."""
+    def deactivate(self, *, token: str) -> None:
+        """Release exactly one provider handle and its orphaned session plans."""
 
-        _validate_identifier(session_id, "session_id")
-        try:
-            with contextlib.closing(self._connect()) as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                row = connection.execute(
-                    """
-                    SELECT ref_count FROM active_session
-                    WHERE process_identity = ? AND session_id = ?
-                    """,
-                    (self._process_identity, session_id),
-                ).fetchone()
-                if row is not None:
-                    if int(row[0]) <= 1:
-                        connection.execute(
-                            """
-                            DELETE FROM active_session
-                            WHERE process_identity = ? AND session_id = ?
-                            """,
-                            (self._process_identity, session_id),
-                        )
-                        connection.execute(
-                            """
-                            DELETE FROM recall_plan
-                            WHERE process_identity = ? AND session_id = ?
-                            """,
-                            (self._process_identity, session_id),
-                        )
-                    else:
-                        connection.execute(
-                            """
-                            UPDATE active_session
-                            SET ref_count = ref_count - 1
-                            WHERE process_identity = ? AND session_id = ?
-                            """,
-                            (self._process_identity, session_id),
-                        )
-                connection.execute(
-                    """
-                    DELETE FROM process_owner
-                    WHERE process_identity = ?
-                      AND NOT EXISTS (
-                          SELECT 1 FROM active_session WHERE process_identity = ?
-                      )
-                    """,
-                    (self._process_identity, self._process_identity),
-                )
-                connection.commit()
-        except (OSError, sqlite3.Error, UnicodeError) as exc:
-            raise PlanMailboxError(
-                "Better Hindsight recall-plan mailbox deactivation failed."
-            ) from exc
+        _require_text(token, "token")
+        now = self._clock()
+        with self._registry.lock:
+            state = self._home_state(create=False)
+            if state is None:
+                return
+            self._purge_expired(state, now)
+            session_id = state.activations.pop(token, None)
+            if session_id is not None and session_id not in state.activations.values():
+                self._clear_session(state, session_id)
+            self._drop_empty_home(state)
 
-    def rebind(self, *, old_session_id: str, new_session_id: str) -> None:
-        """Move one provider activation reference to its new Hermes session."""
+    def rebind(self, *, token: str, new_session_id: str) -> None:
+        """Move one provider activation to a new Hermes session atomically."""
 
-        _validate_identifier(old_session_id, "old_session_id")
-        _validate_identifier(new_session_id, "new_session_id")
-        if old_session_id == new_session_id:
-            return
-        try:
-            with contextlib.closing(self._connect()) as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                row = connection.execute(
-                    """
-                    SELECT ref_count FROM active_session
-                    WHERE process_identity = ? AND session_id = ?
-                    """,
-                    (self._process_identity, old_session_id),
-                ).fetchone()
-                if row is not None and int(row[0]) > 1:
-                    connection.execute(
-                        """
-                        UPDATE active_session
-                        SET ref_count = ref_count - 1
-                        WHERE process_identity = ? AND session_id = ?
-                        """,
-                        (self._process_identity, old_session_id),
-                    )
-                elif row is not None:
-                    connection.execute(
-                        """
-                        DELETE FROM active_session
-                        WHERE process_identity = ? AND session_id = ?
-                        """,
-                        (self._process_identity, old_session_id),
-                    )
-                    connection.execute(
-                        """
-                        DELETE FROM recall_plan
-                        WHERE process_identity = ? AND session_id = ?
-                        """,
-                        (self._process_identity, old_session_id),
-                    )
-                connection.execute(
-                    """
-                    INSERT INTO active_session (
-                        process_identity, session_id, activated_at, ref_count
-                    ) VALUES (?, ?, ?, 1)
-                    ON CONFLICT(process_identity, session_id) DO UPDATE SET
-                        activated_at = excluded.activated_at,
-                        ref_count = active_session.ref_count + 1
-                    """,
-                    (self._process_identity, new_session_id, self._clock()),
-                )
-                connection.commit()
-        except (OSError, sqlite3.Error, UnicodeError) as exc:
-            raise PlanMailboxError(
-                "Better Hindsight recall-plan mailbox session rebind failed."
-            ) from exc
-
-    def clear_session_plans(self, *, session_id: str) -> None:
-        """Invalidate pending and ready plans tied to one rewound session."""
-
-        _validate_identifier(session_id, "session_id")
-        try:
-            with contextlib.closing(self._connect()) as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                connection.execute(
-                    """
-                    DELETE FROM recall_plan
-                    WHERE process_identity = ? AND session_id = ?
-                    """,
-                    (self._process_identity, session_id),
-                )
-                connection.commit()
-        except (OSError, sqlite3.Error, UnicodeError) as exc:
-            raise PlanMailboxError(
-                "Better Hindsight recall-plan mailbox session cleanup failed."
-            ) from exc
+        _require_text(token, "token")
+        _require_text(new_session_id, "new_session_id")
+        now = self._clock()
+        with self._registry.lock:
+            state = self._home_state(create=False)
+            if state is None or token not in state.activations:
+                raise PlanMailboxError("recall plan handoff unavailable")
+            self._purge_expired(state, now)
+            old_session_id = state.activations[token]
+            state.activations[token] = new_session_id
+            if old_session_id not in state.activations.values():
+                self._clear_session(state, old_session_id)
+            self._clear_session(state, new_session_id)
 
     def is_active(self, *, session_id: str) -> bool:
-        """Return whether this exact provider session is authorized."""
+        """Return whether an authorized provider handle owns this session."""
 
-        if not session_id:
-            return False
-        _validate_identifier(session_id, "session_id")
-        try:
-            with contextlib.closing(self._connect()) as connection:
-                row = connection.execute(
-                    """
-                    SELECT 1 FROM active_session
-                    WHERE process_identity = ? AND session_id = ?
-                    LIMIT 1
-                    """,
-                    (self._process_identity, session_id),
-                ).fetchone()
-                return row is not None
-        except (OSError, sqlite3.Error, UnicodeError) as exc:
-            raise PlanMailboxError("Better Hindsight recall-plan mailbox read failed.") from exc
+        _require_text(session_id, "session_id")
+        now = self._clock()
+        with self._registry.lock:
+            state = self._home_state(create=False)
+            if state is None:
+                return False
+            self._purge_expired(state, now)
+            return session_id in state.activations.values()
 
     def reserve(
         self,
@@ -415,482 +178,233 @@ class SQLitePlanMailbox:
         session_id: str,
         parent_session_id: str,
         turn_id: str,
-        mode: str,
-        ttl_seconds: float,
+        mode: PlanMode,
+        publish_timeout_seconds: float | None = None,
     ) -> bool:
-        """Reserve this turn before model work so provider consumption fences late writers."""
+        """Reserve one active turn before starting its bounded planner call."""
 
-        _validate_reservation(
-            source_query=source_query,
-            session_id=session_id,
-            parent_session_id=parent_session_id,
-            turn_id=turn_id,
-            mode=mode,
-            ttl_seconds=ttl_seconds,
-        )
-        try:
-            with contextlib.closing(self._connect()) as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                now = self._clock()
-                self._delete_stale(connection, now)
-                active = connection.execute(
-                    """
-                    SELECT 1 FROM active_session
-                    WHERE process_identity = ? AND session_id = ?
-                    LIMIT 1
-                    """,
-                    (self._process_identity, session_id),
-                ).fetchone()
-                if active is None:
-                    connection.commit()
-                    return False
-                cursor = connection.execute(
-                    """
-                    INSERT INTO recall_plan (
-                        process_identity, session_id, parent_session_id, turn_id,
-                        query_digest, mode, state, action, rewritten_query,
-                        created_at, expires_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, ?, ?)
-                    ON CONFLICT(process_identity, turn_id) DO NOTHING
-                    """,
-                    (
-                        self._process_identity,
-                        session_id,
-                        parent_session_id,
-                        turn_id,
-                        _query_digest(source_query),
-                        mode,
-                        now,
-                        now + ttl_seconds,
-                    ),
-                )
-                connection.commit()
-                return cursor.rowcount == 1
-        except (OSError, sqlite3.Error, UnicodeError) as exc:
-            raise PlanMailboxError(
-                "Better Hindsight recall-plan mailbox reservation failed."
-            ) from exc
+        del parent_session_id
+        _require_text(source_query, "source_query")
+        _require_text(session_id, "session_id")
+        _require_text(turn_id, "turn_id")
+        _require_mode(mode)
+        if publish_timeout_seconds is not None and (
+            not math.isfinite(publish_timeout_seconds) or publish_timeout_seconds <= 0
+        ):
+            raise ValueError("publish_timeout_seconds must be finite and positive")
+        now = self._clock()
+        with self._registry.lock:
+            state = self._home_state(create=False)
+            if state is None:
+                return False
+            self._purge_expired(state, now)
+            if session_id not in state.activations.values() or turn_id in state.plans:
+                return False
+            state.sequence += 1
+            state.plans[turn_id] = _StoredPlan(
+                sequence=state.sequence,
+                query_digest=_query_digest(source_query),
+                session_id=session_id,
+                mode=mode,
+                expires_at=now + _PLAN_MAX_AGE_SECONDS,
+                publish_before=(
+                    None if publish_timeout_seconds is None else now + publish_timeout_seconds
+                ),
+            )
+            return True
 
     def finalize(
         self,
         *,
         turn_id: str,
-        mode: str,
-        action: str,
+        mode: PlanMode,
+        action: PlanAction,
         rewritten_query: str | None,
-        publish_deadline: float | None = None,
     ) -> bool:
-        """Atomically publish a ready plan only while its reservation still exists."""
+        """Finalize an existing reservation unless it was consumed or expired."""
 
-        _validate_ready_plan(
-            turn_id=turn_id,
-            mode=mode,
-            action=action,
-            rewritten_query=rewritten_query,
-        )
-        try:
-            with contextlib.closing(self._connect()) as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                now = self._clock()
-                self._delete_stale(connection, now)
-                if publish_deadline is not None and self._monotonic() >= publish_deadline:
-                    connection.execute(
-                        "DELETE FROM recall_plan WHERE process_identity = ? AND turn_id = ?",
-                        (self._process_identity, turn_id),
-                    )
-                    connection.commit()
-                    return False
-                cursor = connection.execute(
-                    """
-                    UPDATE recall_plan
-                    SET state = 'ready', action = ?, rewritten_query = ?
-                    WHERE process_identity = ? AND turn_id = ?
-                      AND state = 'pending' AND mode = ? AND expires_at > ?
-                    """,
-                    (
-                        action,
-                        rewritten_query,
-                        self._process_identity,
-                        turn_id,
-                        mode,
-                        now,
-                    ),
-                )
-                connection.commit()
-                return cursor.rowcount == 1
-        except (OSError, sqlite3.Error, UnicodeError) as exc:
-            raise PlanMailboxError(
-                "Better Hindsight recall-plan mailbox publication failed."
-            ) from exc
+        _require_text(turn_id, "turn_id")
+        _require_mode(mode)
+        _require_action(action, rewritten_query)
+        now = self._clock()
+        with self._registry.lock:
+            state = self._home_state(create=False)
+            if state is None:
+                return False
+            self._purge_expired(state, now)
+            plan = state.plans.get(turn_id)
+            if plan is None or plan.action is not None or plan.mode != mode:
+                return False
+            if plan.publish_before is not None and now >= plan.publish_before:
+                return False
+            plan.action = action
+            plan.rewritten_query = rewritten_query
+            return True
 
     def cancel(self, *, turn_id: str) -> None:
-        """Delete this turn's reservation after a shadow-mode planner failure."""
+        """Cancel one reservation after a shadow planner failure."""
 
-        _validate_identifier(turn_id, "turn_id")
-        try:
-            with contextlib.closing(self._connect()) as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                connection.execute(
-                    "DELETE FROM recall_plan WHERE process_identity = ? AND turn_id = ?",
-                    (self._process_identity, turn_id),
-                )
-                connection.commit()
-        except (OSError, sqlite3.Error, UnicodeError) as exc:
-            raise PlanMailboxError(
-                "Better Hindsight recall-plan mailbox cancellation failed."
-            ) from exc
-
-    def publish(
-        self,
-        *,
-        source_query: str,
-        session_id: str,
-        parent_session_id: str,
-        turn_id: str,
-        mode: str,
-        action: str,
-        rewritten_query: str | None,
-        ttl_seconds: float,
-        publish_deadline: float | None = None,
-    ) -> bool:
-        """Reserve then publish a ready plan; useful for non-hook producers and tests."""
-
-        _validate_ready_plan(
-            turn_id=turn_id,
-            mode=mode,
-            action=action,
-            rewritten_query=rewritten_query,
-        )
-        if not self.reserve(
-            source_query=source_query,
-            session_id=session_id,
-            parent_session_id=parent_session_id,
-            turn_id=turn_id,
-            mode=mode,
-            ttl_seconds=ttl_seconds,
-        ):
-            return False
-        return self.finalize(
-            turn_id=turn_id,
-            mode=mode,
-            action=action,
-            rewritten_query=rewritten_query,
-            publish_deadline=publish_deadline,
-        )
-
-    def consume(
-        self,
-        *,
-        source_query: str,
-        session_id: str = "",
-        deadline: float | None = None,
-    ) -> RecallPlan | None:
-        """Atomically remove the newest exact-session plan, ready or pending."""
-
-        if not session_id:
-            return None
-        try:
-            with contextlib.closing(self._connect(deadline=deadline)) as connection:
-                self._set_busy_timeout(connection, deadline=deadline)
-                connection.execute("BEGIN IMMEDIATE")
-                now = self._clock()
-                self._delete_stale(connection, now)
-                rows = connection.execute(
-                    """
-                    SELECT id, mode, state, action, rewritten_query, turn_id
-                    FROM recall_plan
-                    WHERE process_identity = ? AND query_digest = ? AND expires_at > ?
-                      AND session_id = ?
-                    ORDER BY id DESC
-                    """,
-                    (
-                        self._process_identity,
-                        _query_digest(source_query),
-                        now,
-                        session_id,
-                    ),
-                ).fetchall()
-                if not rows:
-                    self._set_busy_timeout(connection, deadline=deadline)
-                    connection.commit()
-                    return None
-                selected = rows[0]
-                connection.execute(
-                    """
-                    DELETE FROM recall_plan
-                    WHERE process_identity = ? AND query_digest = ? AND session_id = ?
-                    """,
-                    (
-                        self._process_identity,
-                        _query_digest(source_query),
-                        session_id,
-                    ),
-                )
-                self._set_busy_timeout(connection, deadline=deadline)
-                connection.commit()
-                return self._decode_plan(selected)
-        except (OSError, sqlite3.Error, UnicodeError) as exc:
-            raise PlanMailboxError("Better Hindsight recall-plan mailbox consume failed.") from exc
-
-    def _connect(self, *, deadline: float | None = None) -> sqlite3.Connection:
-        self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self._path.parent, 0o700)
-        busy_timeout_seconds = self._remaining_busy_timeout(deadline)
-        connection = sqlite3.connect(
-            self._path,
-            timeout=busy_timeout_seconds,
-            isolation_level=None,
-        )
-        try:
-            connection.row_factory = sqlite3.Row
-            self._set_busy_timeout(connection, deadline=deadline)
-            connection.execute("PRAGMA foreign_keys = ON")
-            connection.execute("PRAGMA secure_delete = ON")
-            self._prepare_schema(connection, deadline=deadline)
-            os.chmod(self._path, 0o600)
-            return connection
-        except BaseException:
-            connection.close()
-            raise
-
-    def _remaining_busy_timeout(self, deadline: float | None) -> float:
-        if deadline is None:
-            return self._busy_timeout_seconds
-        remaining = deadline - self._monotonic()
-        if not math.isfinite(remaining) or remaining <= 0:
-            return 0.0
-        return min(self._busy_timeout_seconds, remaining)
-
-    def _set_busy_timeout(
-        self,
-        connection: sqlite3.Connection,
-        *,
-        deadline: float | None,
-    ) -> None:
-        deadline_remaining = None if deadline is None else deadline - self._monotonic()
-        if deadline_remaining is None:
-            milliseconds = max(1, math.ceil(self._busy_timeout_seconds * 1000))
-        else:
-            if not math.isfinite(deadline_remaining) or deadline_remaining <= 0:
-                connection.execute("PRAGMA busy_timeout = 0")
-                raise PlanMailboxError("Better Hindsight recall-plan mailbox deadline elapsed.")
-            configured_ms = max(1, math.ceil(self._busy_timeout_seconds * 1000))
-            deadline_ms = max(0, int(deadline_remaining * 1000))
-            milliseconds = min(configured_ms, deadline_ms)
-        connection.execute(f"PRAGMA busy_timeout = {milliseconds}")
-
-    def _prepare_schema(
-        self,
-        connection: sqlite3.Connection,
-        *,
-        deadline: float | None,
-    ) -> None:
-        connection.execute("BEGIN")
-        try:
-            current, objects = SQLitePlanMailbox._schema_state(connection)
-            connection.commit()
-        except BaseException:
-            if connection.in_transaction:
-                connection.rollback()
-            raise
-        if current == _SCHEMA_VERSION and objects == _SCHEMA_OBJECTS:
-            return
-        if not (
-            (current == 0 and not objects) or (current == 2 and objects == _PREVIOUS_SCHEMA_OBJECTS)
-        ):
-            raise PlanMailboxError("Better Hindsight recall-plan mailbox schema is unsupported.")
-
-        self._set_busy_timeout(connection, deadline=deadline)
-        connection.execute("BEGIN IMMEDIATE")
-        try:
-            current, objects = SQLitePlanMailbox._schema_state(connection)
-            if current == _SCHEMA_VERSION and objects == _SCHEMA_OBJECTS:
-                self._set_busy_timeout(connection, deadline=deadline)
-                connection.commit()
+        _require_text(turn_id, "turn_id")
+        with self._registry.lock:
+            state = self._home_state(create=False)
+            if state is None:
                 return
-            if current == 0 and not objects:
-                self._execute_schema_sql(connection, deadline=deadline)
-            elif current == 2 and objects == _PREVIOUS_SCHEMA_OBJECTS:
-                self._execute_schema_sql(connection, deadline=deadline)
-                self._set_busy_timeout(connection, deadline=deadline)
-                connection.execute("DELETE FROM recall_plan")
-                self._set_busy_timeout(connection, deadline=deadline)
-                connection.execute("DELETE FROM active_session")
-            else:
-                raise PlanMailboxError(
-                    "Better Hindsight recall-plan mailbox schema is unsupported."
-                )
-            self._set_busy_timeout(connection, deadline=deadline)
-            connection.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
-            self._set_busy_timeout(connection, deadline=deadline)
-            connection.commit()
-        except BaseException:
-            if connection.in_transaction:
-                connection.rollback()
-            raise
+            state.plans.pop(turn_id, None)
+            self._drop_empty_home(state)
 
-    @staticmethod
-    def _schema_state(connection: sqlite3.Connection) -> tuple[int, frozenset[str]]:
-        current = int(connection.execute("PRAGMA user_version").fetchone()[0])
-        objects = frozenset(
-            str(row[0])
-            for row in connection.execute(
-                """
-                SELECT name FROM sqlite_master
-                WHERE name NOT LIKE 'sqlite_%'
-                  AND type IN ('table', 'index', 'view', 'trigger')
-                """
-            ).fetchall()
-        )
-        return current, objects
+    def consume(self, *, source_query: str, session_id: str) -> RecallPlan | None:
+        """Consume the newest exact plan and fence all matching late workers."""
 
-    def _execute_schema_sql(
-        self,
-        connection: sqlite3.Connection,
-        *,
-        deadline: float | None,
-    ) -> None:
-        for statement in _SCHEMA_SQL.split(";"):
-            if statement.strip():
-                self._set_busy_timeout(connection, deadline=deadline)
-                connection.execute(statement)
-
-    def _delete_stale(self, connection: sqlite3.Connection, now: float) -> None:
-        connection.execute("DELETE FROM recall_plan WHERE expires_at <= ?", (now,))
-
-    def _delete_dead_owners(self, connection: sqlite3.Connection, now: float) -> None:
-        rows = connection.execute(
-            """
-            SELECT process_identity, process_id, boot_token, start_token
-            FROM process_owner
-            WHERE process_identity <> ?
-            ORDER BY observed_at ASC
-            LIMIT ?
-            """,
-            (self._process_identity, _OWNER_CLEANUP_BATCH),
-        ).fetchall()
-        for row in rows:
-            try:
-                identity = str(row["process_identity"])
-                owner = _ProcessOwner(
-                    process_id=int(row["process_id"]),
-                    boot_token=str(row["boot_token"]),
-                    start_token=str(row["start_token"]),
-                )
-            except (KeyError, TypeError, ValueError):
-                continue
-            if _process_owner_is_live(owner):
-                connection.execute(
-                    "UPDATE process_owner SET observed_at = ? WHERE process_identity = ?",
-                    (now, identity),
-                )
-                continue
-            connection.execute(
-                "DELETE FROM recall_plan WHERE process_identity = ?",
-                (identity,),
-            )
-            connection.execute(
-                "DELETE FROM active_session WHERE process_identity = ?",
-                (identity,),
-            )
-            connection.execute(
-                "DELETE FROM process_owner WHERE process_identity = ?",
-                (identity,),
-            )
-
-    @staticmethod
-    def _decode_plan(row: sqlite3.Row) -> RecallPlan | None:
-        if row["state"] != "ready":
-            return None
-        mode = row["mode"]
-        action = row["action"]
-        rewritten_query = row["rewritten_query"]
-        turn_id = row["turn_id"]
-        if mode not in _ALLOWED_MODES or action not in _ALLOWED_ACTIONS:
-            return None
-        if action == "recall":
-            if not isinstance(rewritten_query, str) or not rewritten_query.strip():
+        _require_text(source_query, "source_query")
+        _require_text(session_id, "session_id")
+        now = self._clock()
+        digest = _query_digest(source_query)
+        with self._registry.lock:
+            state = self._home_state(create=False)
+            if state is None:
                 return None
-        elif rewritten_query is not None:
-            return None
-        if not isinstance(turn_id, str) or not turn_id:
-            return None
-        return RecallPlan(
-            mode=cast(PlannerMode, mode),
-            action=cast(PlanAction, action),
-            rewritten_query=rewritten_query,
-            turn_id=turn_id,
-        )
+            self._purge_expired(state, now)
+            if session_id not in state.activations.values():
+                return None
+            matches = [
+                (turn_id, plan)
+                for turn_id, plan in state.plans.items()
+                if plan.session_id == session_id and plan.query_digest == digest
+            ]
+            if not matches:
+                return None
+            newest_turn_id, newest = max(matches, key=lambda item: item[1].sequence)
+            for turn_id, _plan in matches:
+                del state.plans[turn_id]
+            if newest.action is None:
+                return None
+            return RecallPlan(
+                mode=newest.mode,
+                action=newest.action,
+                rewritten_query=newest.rewritten_query,
+                turn_id=newest_turn_id,
+            )
+
+    def clear_session_plans(self, *, session_id: str) -> None:
+        """Invalidate pending and ready plans after a same-session rewind."""
+
+        _require_text(session_id, "session_id")
+        with self._registry.lock:
+            state = self._home_state(create=False)
+            if state is None:
+                return
+            self._clear_session(state, session_id)
+            self._drop_empty_home(state)
+
+    def purge_stale(self) -> None:
+        """Drop expired process-local plans for this profile."""
+
+        now = self._clock()
+        with self._registry.lock:
+            state = self._home_state(create=False)
+            if state is None:
+                return
+            self._purge_expired(state, now)
+            self._drop_empty_home(state)
+
+    def _home_state(self, *, create: bool) -> _HomeState | None:
+        state = self._registry.homes.get(self._home_key)
+        if state is None and create:
+            state = _HomeState()
+            self._registry.homes[self._home_key] = state
+        return state
+
+    def _drop_empty_home(self, state: _HomeState) -> None:
+        if not state.activations and not state.plans:
+            self._registry.homes.pop(self._home_key, None)
+
+    @staticmethod
+    def _clear_session(state: _HomeState, session_id: str) -> None:
+        stale = [turn_id for turn_id, plan in state.plans.items() if plan.session_id == session_id]
+        for turn_id in stale:
+            del state.plans[turn_id]
+
+    @staticmethod
+    def _purge_expired(state: _HomeState, now: float) -> None:
+        stale = [turn_id for turn_id, plan in state.plans.items() if plan.expires_at <= now]
+        for turn_id in stale:
+            del state.plans[turn_id]
 
 
-def _session_scope(session_id: str, parent_session_id: str) -> tuple[str, ...]:
-    _validate_identifier(session_id, "session_id")
-    if parent_session_id:
-        _validate_identifier(parent_session_id, "parent_session_id")
-        if parent_session_id != session_id:
-            return session_id, parent_session_id
-    return (session_id,)
-
-
-def _validate_identifier(value: str, name: str) -> None:
+def _require_text(value: str, field_name: str) -> None:
     if not isinstance(value, str) or not value:
-        raise ValueError(f"{name} must be a non-empty string")
-    try:
-        value.encode("utf-8")
-    except UnicodeEncodeError as exc:
-        raise ValueError(f"{name} must be valid UTF-8") from exc
+        raise ValueError(f"{field_name} must be a non-empty string")
 
 
-def _validate_reservation(
-    *,
-    source_query: str,
-    session_id: str,
-    parent_session_id: str,
-    turn_id: str,
-    mode: str,
-    ttl_seconds: float,
-) -> None:
-    if not isinstance(source_query, str) or not source_query:
-        raise ValueError("source_query must be a non-empty string")
-    _session_scope(session_id, parent_session_id)
-    _validate_identifier(turn_id, "turn_id")
-    if mode not in _ALLOWED_MODES:
+def _require_mode(mode: str) -> None:
+    if mode not in {"shadow", "active"}:
         raise ValueError("mode must be shadow or active")
-    if (
-        isinstance(ttl_seconds, bool)
-        or not isinstance(ttl_seconds, (int, float))
-        or not math.isfinite(ttl_seconds)
-        or ttl_seconds <= 0
-    ):
-        raise ValueError("ttl_seconds must be positive and finite")
 
 
-def _validate_ready_plan(
-    *,
-    turn_id: str,
-    mode: str,
-    action: str,
-    rewritten_query: str | None,
-) -> None:
-    _validate_identifier(turn_id, "turn_id")
-    if mode not in _ALLOWED_MODES:
-        raise ValueError("mode must be shadow or active")
-    if action not in _ALLOWED_ACTIONS:
+def _require_action(action: str, rewritten_query: str | None) -> None:
+    if action not in {"skip", "reuse", "recall"}:
         raise ValueError("action must be skip, reuse, or recall")
     if action == "recall":
-        if not isinstance(rewritten_query, str) or not rewritten_query.strip():
-            raise ValueError("recall plans require a rewritten query")
-        try:
-            rewritten_query.encode("utf-8")
-        except UnicodeEncodeError as exc:
-            raise ValueError("rewritten_query must be valid UTF-8") from exc
+        if not isinstance(rewritten_query, str) or not rewritten_query:
+            raise ValueError("recall action requires rewritten_query")
     elif rewritten_query is not None:
-        raise ValueError("skip and reuse plans must not carry a rewritten query")
+        raise ValueError("only recall action accepts rewritten_query")
+
+
+def remove_legacy_plan_mailbox(path: Path) -> bool:
+    """Remove a verified obsolete SQLite mailbox and its sidecars."""
+
+    if not path.is_absolute():
+        raise PlanMailboxError("legacy recall plan mailbox path is not absolute")
+    if not path.exists():
+        return False
+    if not _is_legacy_plan_mailbox(path):
+        raise PlanMailboxError("legacy recall plan mailbox cleanup refused an unverified file")
+    removed = False
+    failed = False
+    for candidate in (
+        path,
+        Path(f"{path}-wal"),
+        Path(f"{path}-shm"),
+        Path(f"{path}-journal"),
+    ):
+        try:
+            candidate.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError:
+            failed = True
+        else:
+            removed = True
+    if failed:
+        raise PlanMailboxError("legacy recall plan mailbox cleanup failed")
+    return removed
+
+
+def _is_legacy_plan_mailbox(path: Path) -> bool:
+    try:
+        uri = f"{path.as_uri()}?mode=ro&immutable=1"
+        with contextlib.closing(sqlite3.connect(uri, uri=True, timeout=0.0)) as connection:
+            version_row = connection.execute("PRAGMA user_version").fetchone()
+            if version_row is None or int(version_row[0]) not in _LEGACY_SCHEMA_VERSIONS:
+                return False
+            for table, required in _LEGACY_REQUIRED_COLUMNS.items():
+                columns = {
+                    str(row[1])
+                    for row in connection.execute(f'PRAGMA table_info("{table}")').fetchall()
+                }
+                if not required.issubset(columns):
+                    return False
+    except (OSError, ValueError, sqlite3.Error):
+        return False
+    return True
 
 
 __all__ = [
+    "InMemoryPlanMailbox",
     "PlanAction",
     "PlanMailboxError",
+    "PlanMode",
     "RecallPlan",
-    "SQLitePlanMailbox",
+    "remove_legacy_plan_mailbox",
 ]

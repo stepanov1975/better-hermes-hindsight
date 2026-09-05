@@ -34,8 +34,9 @@ DEFAULT_PLANNER_TIMEOUT_SECONDS = 2.0
 DEFAULT_PLANNER_HISTORY_MAX_EXCHANGES = 4
 DEFAULT_PLANNER_HISTORY_MAX_CHARS = 6_000
 DEFAULT_PLANNER_QUERY_MAX_CHARS = 1_024
-DEFAULT_PLANNER_MAILBOX_TTL_SECONDS = 10.0
-DEFAULT_PLANNER_BUSY_TIMEOUT_SECONDS = 0.1
+_LEGACY_DEFAULT_PLANNER_MAILBOX_PATH = "better_hindsight/recall_plans.sqlite3"
+_LEGACY_MAX_PLANNER_MAILBOX_TTL_SECONDS = 60.0
+_LEGACY_MAX_PLANNER_BUSY_TIMEOUT_SECONDS = 1.0
 PLANNER_AND_RECALL_BUDGET_SECONDS = 7.5
 DEFAULT_REFLECT_TIMEOUT_SECONDS = 60.0
 DEFAULT_REFLECT_INPUT_MAX_CHARS = 4096
@@ -65,8 +66,6 @@ MAX_PLANNER_TIMEOUT_SECONDS = 4.0
 MAX_PLANNER_HISTORY_EXCHANGES = 20
 MAX_PLANNER_HISTORY_CHARS = 65_536
 MAX_PLANNER_QUERY_CHARS = 8_192
-MAX_PLANNER_MAILBOX_TTL_SECONDS = 60.0
-MAX_PLANNER_BUSY_TIMEOUT_SECONDS = 1.0
 MAX_REFLECT_TIMEOUT_SECONDS = 300.0
 MAX_REFLECT_INPUT_CHARS = 65_536
 MAX_REFLECT_INPUT_TOKENS = 1_048_576
@@ -130,6 +129,7 @@ _RECALL_KEYS = {
     "max_source_facts_tokens",
 }
 _PLANNER_KEYS = {
+    "path",
     "mode",
     "timeout_seconds",
     "history_max_exchanges",
@@ -137,7 +137,6 @@ _PLANNER_KEYS = {
     "query_max_chars",
     "mailbox_ttl_seconds",
     "busy_timeout_seconds",
-    "path",
 }
 _REFLECT_KEYS = {
     "enabled",
@@ -256,22 +255,14 @@ class RecallConfig:
 
 @dataclass(frozen=True, slots=True)
 class PlannerConfig:
-    """Bounded context planner and one-shot mailbox policy."""
+    """Bounded context-aware recall planner policy."""
 
-    path: Path = field(repr=False)
     mode: PlannerMode = "off"
     timeout_seconds: float = DEFAULT_PLANNER_TIMEOUT_SECONDS
     history_max_exchanges: int = DEFAULT_PLANNER_HISTORY_MAX_EXCHANGES
     history_max_chars: int = DEFAULT_PLANNER_HISTORY_MAX_CHARS
     query_max_chars: int = DEFAULT_PLANNER_QUERY_MAX_CHARS
-    mailbox_ttl_seconds: float = DEFAULT_PLANNER_MAILBOX_TTL_SECONDS
-    busy_timeout_seconds: float = DEFAULT_PLANNER_BUSY_TIMEOUT_SECONDS
-
-    @property
-    def busy_timeout_ms(self) -> int:
-        """Return the SQLite busy timeout in whole milliseconds."""
-
-        return math.ceil(self.busy_timeout_seconds * 1000)
+    legacy_mailbox_path: Path | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,9 +360,7 @@ class BetterHindsightConfig:
     single_principal: bool = False
     allowed_principals: tuple[AllowedPrincipal, ...] = field(default=(), repr=False)
     recall: RecallConfig = field(default_factory=RecallConfig)
-    planner: PlannerConfig = field(
-        default_factory=lambda: PlannerConfig(Path("better_hindsight/recall_plans.sqlite3"))
-    )
+    planner: PlannerConfig = field(default_factory=PlannerConfig)
     reflect: ReflectConfig = field(default_factory=ReflectConfig)
     retain: RetainConfig = field(default_factory=RetainConfig)
     missions: MissionConfig = field(default_factory=MissionConfig)
@@ -487,16 +476,6 @@ def load_config(
         raise _error(
             "combined planner and recall deadline must not exceed "
             f"{PLANNER_AND_RECALL_BUDGET_SECONDS} seconds"
-        )
-    if (
-        recall.enabled
-        and planner.mode != "off"
-        and planner.mailbox_ttl_seconds
-        <= (planner.timeout_seconds + (2.0 * planner.busy_timeout_seconds))
-    ):
-        raise _error(
-            "planner.mailbox_ttl_seconds must be greater than planner.timeout_seconds plus "
-            "twice planner.busy_timeout_seconds"
         )
     minimum_segment_bytes = _minimum_retained_segment_bytes(
         retain.tags,
@@ -926,8 +905,21 @@ def _parse_recall(value: object) -> RecallConfig:
 def _parse_planner(home: Path, value: object) -> PlannerConfig:
     values = _expect_mapping(value, "planner")
     _check_unknown_keys(values, _PLANNER_KEYS, "planner")
+    if "mailbox_ttl_seconds" in values:
+        _parse_bounded_float(
+            values["mailbox_ttl_seconds"],
+            "planner.mailbox_ttl_seconds",
+            minimum=0.0,
+            maximum=_LEGACY_MAX_PLANNER_MAILBOX_TTL_SECONDS,
+        )
+    if "busy_timeout_seconds" in values:
+        _parse_bounded_float(
+            values["busy_timeout_seconds"],
+            "planner.busy_timeout_seconds",
+            minimum=0.0,
+            maximum=_LEGACY_MAX_PLANNER_BUSY_TIMEOUT_SECONDS,
+        )
     return PlannerConfig(
-        path=_parse_planner_path(home, values.get("path", "better_hindsight/recall_plans.sqlite3")),
         mode=cast(
             PlannerMode,
             _parse_literal(values.get("mode", "off"), "planner.mode", ("off", "shadow", "active")),
@@ -953,19 +945,27 @@ def _parse_planner(home: Path, value: object) -> PlannerConfig:
             "planner.query_max_chars",
             maximum=MAX_PLANNER_QUERY_CHARS,
         ),
-        mailbox_ttl_seconds=_parse_bounded_float(
-            values.get("mailbox_ttl_seconds", DEFAULT_PLANNER_MAILBOX_TTL_SECONDS),
-            "planner.mailbox_ttl_seconds",
-            minimum=0.0,
-            maximum=MAX_PLANNER_MAILBOX_TTL_SECONDS,
-        ),
-        busy_timeout_seconds=_parse_bounded_float(
-            values.get("busy_timeout_seconds", DEFAULT_PLANNER_BUSY_TIMEOUT_SECONDS),
-            "planner.busy_timeout_seconds",
-            minimum=0.0,
-            maximum=MAX_PLANNER_BUSY_TIMEOUT_SECONDS,
+        legacy_mailbox_path=_parse_planner_path(
+            home,
+            values.get("path", _LEGACY_DEFAULT_PLANNER_MAILBOX_PATH),
         ),
     )
+
+
+def _parse_planner_path(home: Path, value: object) -> Path:
+    if not isinstance(value, (str, Path)) or not str(value):
+        raise _error("planner.path must be a non-empty profile-local path")
+    configured = Path(value)
+    candidate = configured if configured.is_absolute() else home / configured
+    try:
+        normalized = candidate.resolve(strict=False)
+    except (OSError, RuntimeError, ValueError):
+        raise _error("planner.path must resolve inside hermes_home") from None
+    try:
+        normalized.relative_to(home)
+    except ValueError:
+        raise _error("planner.path must remain inside hermes_home") from None
+    return normalized
 
 
 def _parse_reflect(value: object) -> ReflectConfig:
@@ -1169,22 +1169,6 @@ def _parse_missions(value: object) -> MissionConfig:
             values.get("observations_mission"), "missions.observations_mission"
         ),
     )
-
-
-def _parse_planner_path(home: Path, value: object) -> Path:
-    if not isinstance(value, (str, Path)) or not str(value):
-        raise _error("planner.path must be a non-empty profile-local path")
-    configured = Path(value)
-    candidate = configured if configured.is_absolute() else home / configured
-    try:
-        normalized = candidate.resolve(strict=False)
-    except (OSError, RuntimeError, ValueError):
-        raise _error("planner.path must resolve inside hermes_home") from None
-    try:
-        normalized.relative_to(home)
-    except ValueError:
-        raise _error("planner.path must remain inside hermes_home") from None
-    return normalized
 
 
 def _parse_outbox(home: Path, value: object) -> OutboxConfig:

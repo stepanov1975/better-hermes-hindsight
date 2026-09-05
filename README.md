@@ -137,9 +137,12 @@ Recall fails open: timeout, service failure, invalid data, or unavailable runtim
 The optional planner is disabled by default. In `shadow` mode it records only action/latency metadata and
 keeps direct-query recall. In `active` mode, `skip` and `reuse` avoid a Hindsight request while `recall`
 substitutes one validated self-contained query. The hook never stores the transcript; a short-lived
-profile-local SQLite mailbox stores only query hashes and the planned action/query. Session-scoped
+process-local handoff stores only query hashes and the planned action/query in memory. Session-scoped
 reservations are consumed once, and consuming a pending reservation fences out an abandoned late hook
-worker. Missing, stale, contended, or malformed mailbox state falls back to direct current-query recall.
+worker. Finalization also checks the planner's publication deadline while holding the registry lock.
+Missing, stale, late, or mismatched handoff state falls back to direct current-query recall. Provider
+initialization removes schema-verified obsolete branch-preview SQLite planner mailboxes and sidecars;
+an unrecognized file is preserved.
 
 Reflection is disabled by default and is never automatic. When enabled, `better_hindsight_reflect`
 accepts one nonblank bounded query for the configured bank under the authorized principal and returns

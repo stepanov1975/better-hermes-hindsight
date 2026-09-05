@@ -10,7 +10,7 @@ The provider currently includes:
 
 - external Hindsight 0.8.5, 0.9.1, and 0.9.2 connectivity;
 - bounded, fail-open current-query recall plus a default-off context-aware `pre_llm_call` companion
-  planner with a one-shot SQLite decision mailbox;
+  planner with a one-shot process-local decision handoff;
 - model tools for bounded recall, default-off read-only reflection, durable retention admission, and
   compact passive queue status;
 - optional redacted automatic retention;

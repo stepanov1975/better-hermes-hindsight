@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from .config import BetterHindsightConfig, ConfigError, PlannerConfig, load_config
-from .plan_mailbox import PlanMailboxError, SQLitePlanMailbox
+from .plan_mailbox import InMemoryPlanMailbox, PlanAction, PlanMailboxError
 from .telemetry import elapsed_milliseconds, emit_event
 
 logger = logging.getLogger(__name__)
@@ -72,7 +72,7 @@ class _RegistrationContext(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class _PlanDecision:
-    action: str
+    action: PlanAction
     rewritten_query: str | None = None
 
 
@@ -166,7 +166,7 @@ def _parse_decision(parsed: object, *, query_max_chars: int) -> _PlanDecision | 
     if action in {"skip", "reuse"}:
         if "query" in parsed:
             return None
-        return _PlanDecision(cast(str, action))
+        return _PlanDecision(cast(PlanAction, action))
     if action != "recall" or set(parsed) != {"action", "query"}:
         return None
     query = parsed.get("query")
@@ -192,12 +192,10 @@ class RecallPlanner:
         hermes_home: Path,
         llm: _StructuredLlm,
         *,
-        process_identity: str | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
         self._hermes_home = hermes_home
         self._llm = llm
-        self._process_identity = process_identity
         self._monotonic = monotonic
 
     def on_pre_llm_call(self, **kwargs: object) -> None:
@@ -223,12 +221,10 @@ class RecallPlanner:
         if not session:
             return
 
-        mailbox = SQLitePlanMailbox(
-            config.planner.path,
-            busy_timeout_seconds=config.planner.busy_timeout_seconds,
-            process_identity=self._process_identity,
-            monotonic=self._monotonic,
-        )
+        try:
+            mailbox = InMemoryPlanMailbox(self._hermes_home, monotonic=self._monotonic)
+        except PlanMailboxError:
+            return
         try:
             if not mailbox.is_active(session_id=session):
                 return
@@ -238,7 +234,7 @@ class RecallPlanner:
                 parent_session_id=parent,
                 turn_id=turn_id,
                 mode=config.planner.mode,
-                ttl_seconds=config.planner.mailbox_ttl_seconds,
+                publish_timeout_seconds=config.planner.timeout_seconds,
             ):
                 return
         except (PlanMailboxError, ValueError):
@@ -298,14 +294,12 @@ class RecallPlanner:
                 return
             decision = _PlanDecision("skip")
 
-        publish_deadline = deadline if outcome == "planned" else None
         try:
             published = mailbox.finalize(
                 turn_id=turn_id,
                 mode=config.planner.mode,
                 action=decision.action,
                 rewritten_query=decision.rewritten_query,
-                publish_deadline=publish_deadline,
             )
         except PlanMailboxError:
             published = False

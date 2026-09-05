@@ -18,8 +18,6 @@ ROOT = Path(__file__).resolve().parents[2]
 
 _COMPANION_HANDOFF_SCRIPT = r"""
 import json
-import os
-import sqlite3
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -62,6 +60,7 @@ provider = load_memory_provider("better_hindsight")
 runtime = FakeRuntime()
 provider_module = sys.modules[type(provider).__module__]
 provider_module.acquire_process_runtime = lambda _config: runtime
+observer = provider_module.InMemoryPlanMailbox(Path(manager.scope_key))
 provider.initialize(
     "root-session",
     hermes_home=manager.scope_key,
@@ -87,16 +86,17 @@ manager.invoke_hook(
 )
 provider.prefetch("What did we decide?")
 provider.shutdown()
-mailbox_path = Path(os.environ["HERMES_HOME"]) / "better_hindsight" / "recall_plans.sqlite3"
-with sqlite3.connect(mailbox_path) as connection:
-    active_count = connection.execute("SELECT COUNT(*) FROM active_session").fetchone()[0]
 assert len(fake_llm.calls) == 1
 assert runtime.calls[0][0] == "What backup policy did Alex choose?"
 assert runtime.close_calls == 1
-assert active_count == 0
+assert not observer.is_active(session_id="child-2")
+assert not (Path(manager.scope_key) / "better_hindsight" / "recall_plans.sqlite3").exists()
 print(json.dumps({
-    "active_count": active_count,
+    "active_after_shutdown": observer.is_active(session_id="child-2"),
     "llm_calls": len(fake_llm.calls),
+    "planner_state_file_exists": (
+        Path(manager.scope_key) / "better_hindsight" / "recall_plans.sqlite3"
+    ).exists(),
     "recall_query": runtime.calls[0][0],
 }, sort_keys=True))
 """
@@ -399,8 +399,9 @@ def test_current_hermes_hook_to_provider_mailbox_handoff_uses_rewritten_query(
 
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout.strip().splitlines()[-1]) == {
-        "active_count": 0,
+        "active_after_shutdown": False,
         "llm_calls": 1,
+        "planner_state_file_exists": False,
         "recall_query": "What backup policy did Alex choose?",
     }
 

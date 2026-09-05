@@ -65,10 +65,7 @@ This example uses only synthetic/local values and contains no API key. Retention
     "timeout_seconds": 2.0,
     "history_max_exchanges": 4,
     "history_max_chars": 6000,
-    "query_max_chars": 1024,
-    "mailbox_ttl_seconds": 10.0,
-    "busy_timeout_seconds": 0.1,
-    "path": "better_hindsight/recall_plans.sqlite3"
+    "query_max_chars": 1024
   },
   "reflect": {
     "enabled": false,
@@ -127,8 +124,8 @@ response budget; it does not limit query input.
 The planner is a companion surface in the same standard Git plugin. Hermes loads it as a normal
 standalone plugin and loads the Better memory provider through the existing exclusive
 `memory.provider` path. The companion's public `pre_llm_call` hook runs before provider prefetch,
-uses `ctx.llm` for one structured decision, and transfers only that decision through SQLite; no Hermes
-core patch or second package installation is required.
+uses `ctx.llm` for one structured decision, and transfers only that decision through a short-lived
+process-local handoff; no Hermes core patch or second package installation is required.
 
 `planner.mode` controls behavior:
 
@@ -144,35 +141,33 @@ reads only ordinary string-valued `content` from user/assistant history, never p
 inspects at most eight history rows per configured exchange and clips each accepted text before
 whitespace checks or serialization. The compact JSON is checked against a derived UTF-8 byte ceiling
 before the model call. A current message larger than `planner.history_max_chars` skips planning and
-preserves direct-query recall. Full conversation history is never written to the mailbox.
-The mailbox stores an SHA-256 digest of the source query, session/turn correlation, action, and only the
-optional rewritten query. Rows use restart-comparable wall-clock expiration, are atomically consumed
-and deleted, and use SQLite `secure_delete`; normal filesystem and backup residue caveats still apply.
-Provider initialization purges an existing mailbox even when planning or recall is now disabled, while a
-missing dormant mailbox is not created. Expiration is rechecked after acquiring the write lock.
-When planning is enabled, `planner.mailbox_ttl_seconds` must be greater than
-`planner.timeout_seconds + (2 × planner.busy_timeout_seconds)`, covering bounded contention while the
-reservation is created and finalized so an on-time result cannot expire before provider consumption.
-Mailbox consumption receives the provider's absolute `recall.timeout_seconds` deadline, so every SQLite
-lock wait is capped by the smaller remaining budget; elapsed mailbox work is charged to the same total.
-Schema creation and the owned version-2 migration run in one write transaction. Foreign/nonempty schemas
-are rejected without mutation; never share `planner.path` with `outbox.path` or another application
-database.
+preserves direct-query recall. Full conversation history is never written to the handoff.
+The handoff stores an SHA-256 digest of the source query, session/turn correlation, action, and optional
+rewritten query only in process memory. Hermes imports the companion and provider under distinct module
+names, so they share a stable private `sys.modules` registry keyed by the resolved Hermes home. No planner
+database, file lock, PID lease, or cross-process coordination exists in normal operation. Monotonic expiry
+bounds stale plans, the planner deadline is checked atomically when a reservation is finalized,
+consume-once deletion prevents reuse, and process exit removes all handoff state.
 
-The provider activates the mailbox only for a session whose Better recall policy was authorized, and
+On the first provider initialization after upgrading from the branch-preview SQLite implementation, the
+provider idempotently removes the obsolete database and its SQLite sidecars only after its schema
+identifies it as the old planner mailbox. An unrecognized file is preserved and produces a sanitized
+cleanup-failure event. The old `planner.path`, `planner.mailbox_ttl_seconds`, and
+`planner.busy_timeout_seconds` keys remain accepted and validated only for this migration; they no longer
+configure the handoff and should be removed. Cleanup failure does not disable memory.
+
+The provider activates the handoff only for a session whose Better recall policy was authorized, and
 moves that activation through Hermes's public `on_session_switch` callback and invalidates plans on a
 same-session rewind. Planner authorization and provider consumption both require the exact rebound
 session identity, so sibling plans cannot cross; an incomplete switch falls back to direct-query recall.
-Concurrently active processes sharing one profile retain separate authorization and plans. The mailbox
-stores bounded local owner metadata (PID, hashed boot identity, and process-start token); activation
-removes rows for processes confirmed dead while preserving every live foreign process, and separately
-purges expired plans by restart-comparable TTL. If deactivation is contended, the provider stays inactive
-and retains that release for retry before any reinitialization. A missing, stale, mismatched, contended,
-malformed, or late plan preserves direct current-query recall rather than breaking the turn. In active
+Opaque activation tokens let one provider handle shut down without deauthorizing a live sibling handle.
+A missing, stale, mismatched, malformed, or late plan preserves direct current-query recall rather than
+breaking the turn. In active
 mode, a planner timeout, exception, or invalid structured result finalizes a bounded `skip` decision only
-while that turn's reservation still exists. Provider consumption atomically cancels a pending reservation,
-so a hook thread abandoned by Hermes cannot publish a result into a later turn; successful results also
-recheck the planner deadline inside the finalize transaction.
+while that turn's reservation still exists and its publication deadline has not passed. Provider
+consumption atomically cancels a pending reservation, so a hook thread abandoned by Hermes cannot publish
+a result into a later turn. A decision that misses the publication deadline falls back to direct-query
+recall.
 
 When recall is enabled, `planner.timeout_seconds + recall.timeout_seconds` must not exceed 7.5 seconds
 in `shadow` or `active` mode; the defaults total 5.5 seconds. Dormant planner timing constraints are not
@@ -214,9 +209,6 @@ timeout does not guarantee backend model cancellation or refund work/cost alread
 | `planner.history_max_exchanges` | `4` | Integer from 1 through 20 exchanges |
 | `planner.history_max_chars` | `6000` | Integer from 1 through 65,536 capsule characters; a larger current turn bypasses planning |
 | `planner.query_max_chars` | `1024` | Integer from 1 through 8,192 characters for a rewritten query |
-| `planner.mailbox_ttl_seconds` | `10.0` | Greater than zero, at most 60 seconds |
-| `planner.busy_timeout_seconds` | `0.1` | Greater than zero, at most 1 second |
-| `planner.path` | `better_hindsight/recall_plans.sqlite3` | Must resolve inside `hermes_home` |
 | `reflect.enabled` | `false` | Boolean; explicit opt-in only |
 | `reflect.timeout_seconds` | `60.0` | Greater than zero, at most 300 seconds; bounds the local Hermes wait |
 | `reflect.input_max_chars` | `4096` | 1 through 65,536 characters |

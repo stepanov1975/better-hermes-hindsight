@@ -11,7 +11,7 @@ import pytest
 
 import better_hermes_hindsight.planner as planner_module
 from better_hermes_hindsight.config import PlannerConfig, load_config
-from better_hermes_hindsight.plan_mailbox import RecallPlan, SQLitePlanMailbox
+from better_hermes_hindsight.plan_mailbox import InMemoryPlanMailbox, RecallPlan
 from better_hermes_hindsight.planner import RECALL_PLANNER_TASK, RecallPlanner
 
 
@@ -29,8 +29,6 @@ def _write_config(home: Path, *, mode: str = "active", timeout_seconds: float = 
                     "history_max_exchanges": 3,
                     "history_max_chars": 2048,
                     "query_max_chars": 512,
-                    "mailbox_ttl_seconds": 10.0,
-                    "busy_timeout_seconds": 0.1,
                 },
             }
         ),
@@ -48,12 +46,8 @@ class _FakeLlm:
         return SimpleNamespace(parsed=self.parsed)
 
 
-def _mailbox(home: Path) -> SQLitePlanMailbox:
-    return SQLitePlanMailbox(
-        home / "better_hindsight" / "recall_plans.sqlite3",
-        busy_timeout_seconds=0.1,
-        process_identity="fixture-process",
-    )
+def _mailbox(home: Path) -> InMemoryPlanMailbox:
+    return InMemoryPlanMailbox(home)
 
 
 def test_planner_uses_only_bounded_plain_user_assistant_context(tmp_path: Path) -> None:
@@ -64,7 +58,6 @@ def test_planner_uses_only_bounded_plain_user_assistant_context(tmp_path: Path) 
     planner = RecallPlanner(
         hermes_home=tmp_path,
         llm=llm,
-        process_identity="fixture-process",
     )
 
     planner.on_pre_llm_call(
@@ -130,7 +123,6 @@ def test_history_scan_has_a_hard_row_bound(
     planner = RecallPlanner(
         hermes_home=tmp_path,
         llm=llm,
-        process_identity="fixture-process",
     )
     inspected = 0
     original = planner_module._safe_history_message
@@ -172,7 +164,6 @@ def test_history_message_is_bounded_before_strip_or_marker_search(tmp_path: Path
     planner = RecallPlanner(
         hermes_home=tmp_path,
         llm=llm,
-        process_identity="fixture-process",
     )
     planner.on_pre_llm_call(
         user_message="current",
@@ -193,9 +184,9 @@ def test_capsule_build_time_is_charged_to_the_planner_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _write_config(tmp_path, timeout_seconds=2.0)
-    mailbox = _mailbox(tmp_path)
-    mailbox.activate(session_id="session-a")
     now = [100.0]
+    mailbox = InMemoryPlanMailbox(tmp_path, monotonic=lambda: now[0])
+    mailbox.activate(session_id="session-a")
     original_build = planner_module._build_capsule
 
     def delayed_build(
@@ -211,7 +202,6 @@ def test_capsule_build_time_is_charged_to_the_planner_deadline(
     planner = RecallPlanner(
         hermes_home=tmp_path,
         llm=llm,
-        process_identity="fixture-process",
         monotonic=lambda: now[0],
     )
 
@@ -246,7 +236,6 @@ def test_serialized_capsule_rejects_content_beyond_derived_byte_limit(
     planner = RecallPlanner(
         hermes_home=tmp_path,
         llm=llm,
-        process_identity="fixture-process",
     )
     planner.on_pre_llm_call(
         user_message="Current direct query",
@@ -269,7 +258,6 @@ def test_valid_capsule_stays_within_derived_utf8_byte_limit(tmp_path: Path) -> N
     planner = RecallPlanner(
         hermes_home=tmp_path,
         llm=llm,
-        process_identity="fixture-process",
     )
     source_query = "\x00" * 2048
 
@@ -293,7 +281,6 @@ def test_latest_current_copy_is_removed_when_a_later_user_row_exists(tmp_path: P
     planner = RecallPlanner(
         hermes_home=tmp_path,
         llm=llm,
-        process_identity="fixture-process",
     )
 
     planner.on_pre_llm_call(
@@ -324,7 +311,6 @@ def test_planner_preserves_user_authored_memory_context_literal(tmp_path: Path) 
     planner = RecallPlanner(
         hermes_home=tmp_path,
         llm=llm,
-        process_identity="fixture-process",
     )
     source_query = (
         "What did we decide?\n\n<memory-context>\nprivate recalled memory\n</memory-context>"
@@ -356,7 +342,6 @@ def test_user_authored_memory_marker_in_clean_history_is_preserved(tmp_path: Pat
     planner = RecallPlanner(
         hermes_home=tmp_path,
         llm=llm,
-        process_identity="fixture-process",
     )
     literal = "Analyze <memory-context>literal XML</memory-context>."
 
@@ -388,21 +373,23 @@ def test_active_invalid_plan_publishes_skip_instead_of_stale_recall(
     _write_config(tmp_path)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
-    mailbox.publish(
+    assert mailbox.reserve(
         source_query="same question",
         session_id="session-a",
         parent_session_id="",
         turn_id="old-turn",
         mode="active",
+    )
+    assert mailbox.finalize(
+        turn_id="old-turn",
+        mode="active",
         action="recall",
         rewritten_query="stale query",
-        ttl_seconds=10.0,
     )
     llm = _FakeLlm({"action": "recall", "query": invalid_query})
     planner = RecallPlanner(
         hermes_home=tmp_path,
         llm=llm,
-        process_identity="fixture-process",
     )
 
     planner.on_pre_llm_call(
@@ -420,17 +407,23 @@ def test_active_invalid_plan_publishes_skip_instead_of_stale_recall(
     )
 
 
-def test_late_result_is_replaced_with_skip_and_never_published_as_recall(tmp_path: Path) -> None:
+def test_result_after_publication_deadline_falls_back_without_a_plan(tmp_path: Path) -> None:
     _write_config(tmp_path, timeout_seconds=0.5)
-    mailbox = _mailbox(tmp_path)
+    now = [10.0]
+    mailbox = InMemoryPlanMailbox(tmp_path, monotonic=lambda: now[0])
     mailbox.activate(session_id="session-a")
-    llm = _FakeLlm({"action": "recall", "query": "late rewritten query"})
-    readings = iter((10.0, 10.1, 10.6, 10.6))
+
+    class _LateLlm(_FakeLlm):
+        def complete_structured(self, **kwargs: Any) -> object:
+            result = super().complete_structured(**kwargs)
+            now[0] = 10.6
+            return result
+
+    llm = _LateLlm({"action": "recall", "query": "late rewritten query"})
     planner = RecallPlanner(
         hermes_home=tmp_path,
         llm=llm,
-        process_identity="fixture-process",
-        monotonic=lambda: next(readings),
+        monotonic=lambda: now[0],
     )
 
     planner.on_pre_llm_call(
@@ -440,12 +433,8 @@ def test_late_result_is_replaced_with_skip_and_never_published_as_recall(tmp_pat
         turn_id="turn-a",
     )
 
-    assert mailbox.consume(source_query="question", session_id="session-a") == RecallPlan(
-        mode="active",
-        action="skip",
-        rewritten_query=None,
-        turn_id="turn-a",
-    )
+    assert len(llm.calls) == 1
+    assert mailbox.consume(source_query="question", session_id="session-a") is None
 
 
 def test_off_or_inactive_planner_makes_no_model_call_or_mailbox(tmp_path: Path) -> None:
@@ -454,7 +443,6 @@ def test_off_or_inactive_planner_makes_no_model_call_or_mailbox(tmp_path: Path) 
     planner = RecallPlanner(
         hermes_home=tmp_path,
         llm=llm,
-        process_identity="fixture-process",
     )
     planner.on_pre_llm_call(
         user_message="question",
@@ -464,7 +452,6 @@ def test_off_or_inactive_planner_makes_no_model_call_or_mailbox(tmp_path: Path) 
     )
 
     assert llm.calls == []
-    assert not (tmp_path / "better_hindsight" / "recall_plans.sqlite3").exists()
 
     _write_config(tmp_path, mode="active")
     _mailbox(tmp_path).activate(session_id="different-session")
@@ -485,7 +472,6 @@ def test_shadow_plan_is_marked_for_observation_without_changing_action(tmp_path:
     planner = RecallPlanner(
         hermes_home=tmp_path,
         llm=llm,
-        process_identity="fixture-process",
     )
 
     planner.on_pre_llm_call(
@@ -515,7 +501,6 @@ def test_oversized_current_turn_falls_back_without_planning(tmp_path: Path) -> N
     planner = RecallPlanner(
         hermes_home=tmp_path,
         llm=llm,
-        process_identity="fixture-process",
     )
 
     planner.on_pre_llm_call(
@@ -537,7 +522,6 @@ def test_non_text_current_turn_is_not_planned(tmp_path: Path) -> None:
     planner = RecallPlanner(
         hermes_home=tmp_path,
         llm=llm,
-        process_identity="fixture-process",
     )
 
     planner.on_pre_llm_call(

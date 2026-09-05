@@ -113,9 +113,6 @@ def test_defaults_follow_the_best_effort_product_contract(tmp_path: Path) -> Non
     assert config.planner.history_max_exchanges == 4
     assert config.planner.history_max_chars == 6_000
     assert config.planner.query_max_chars == 1_024
-    assert config.planner.mailbox_ttl_seconds == 10.0
-    assert config.planner.busy_timeout_seconds == 0.1
-    assert config.planner.path == (tmp_path / "better_hindsight" / "recall_plans.sqlite3").resolve()
     assert config.reflect.enabled is False
     assert config.reflect.timeout_seconds == DEFAULT_REFLECT_TIMEOUT_SECONDS == 60.0
     assert config.reflect.input_max_chars == DEFAULT_REFLECT_INPUT_MAX_CHARS == 4096
@@ -140,7 +137,7 @@ def test_defaults_follow_the_best_effort_product_contract(tmp_path: Path) -> Non
     assert not hasattr(config.missions, "policy")
 
 
-def test_planner_configuration_is_bounded_and_profile_local(tmp_path: Path) -> None:
+def test_planner_configuration_is_bounded(tmp_path: Path) -> None:
     config = load_config(
         hermes_home=tmp_path,
         environ={},
@@ -151,9 +148,6 @@ def test_planner_configuration_is_bounded_and_profile_local(tmp_path: Path) -> N
                 "history_max_exchanges": 2,
                 "history_max_chars": 3_000,
                 "query_max_chars": 700,
-                "mailbox_ttl_seconds": 8.0,
-                "busy_timeout_seconds": 0.2,
-                "path": "better_hindsight/custom-plans.sqlite3",
             }
         },
     )
@@ -163,16 +157,6 @@ def test_planner_configuration_is_bounded_and_profile_local(tmp_path: Path) -> N
     assert config.planner.history_max_exchanges == 2
     assert config.planner.history_max_chars == 3_000
     assert config.planner.query_max_chars == 700
-    assert config.planner.mailbox_ttl_seconds == 8.0
-    assert config.planner.busy_timeout_seconds == 0.2
-    assert config.planner.path == (tmp_path / "better_hindsight" / "custom-plans.sqlite3").resolve()
-
-    with pytest.raises(ConfigError, match="planner.path must remain inside hermes_home"):
-        load_config(
-            hermes_home=tmp_path,
-            environ={},
-            injected={"planner": {"path": "../outside.sqlite3"}},
-        )
     with pytest.raises(ConfigError, match="planner.mode"):
         load_config(
             hermes_home=tmp_path,
@@ -190,40 +174,29 @@ def test_planner_configuration_is_bounded_and_profile_local(tmp_path: Path) -> N
         )
 
 
-@pytest.mark.parametrize("mode", ["shadow", "active"])
-@pytest.mark.parametrize("mailbox_ttl_seconds", [1.49, 1.5])
-def test_enabled_planner_mailbox_ttl_covers_bounded_writes(
-    tmp_path: Path,
-    mode: str,
-    mailbox_ttl_seconds: float,
-) -> None:
-    with pytest.raises(ConfigError, match="planner.mailbox_ttl_seconds"):
-        load_config(
-            hermes_home=tmp_path,
-            environ={},
-            injected={
-                "planner": {
-                    "mode": mode,
-                    "timeout_seconds": 1.0,
-                    "busy_timeout_seconds": 0.25,
-                    "mailbox_ttl_seconds": mailbox_ttl_seconds,
-                }
-            },
-        )
-
+def test_legacy_planner_mailbox_settings_remain_loadable_for_cleanup(tmp_path: Path) -> None:
     config = load_config(
         hermes_home=tmp_path,
         environ={},
         injected={
             "planner": {
-                "mode": mode,
-                "timeout_seconds": 1.0,
-                "busy_timeout_seconds": 0.25,
-                "mailbox_ttl_seconds": 1.500001,
+                "mode": "active",
+                "path": "better_hindsight/custom-plans.sqlite3",
+                "mailbox_ttl_seconds": 12.0,
+                "busy_timeout_seconds": 0.2,
             }
         },
     )
-    assert config.planner.mailbox_ttl_seconds == 1.500001
+
+    assert config.planner.legacy_mailbox_path == (
+        tmp_path / "better_hindsight" / "custom-plans.sqlite3"
+    )
+    with pytest.raises(ConfigError, match="planner.path must remain inside hermes_home"):
+        load_config(
+            hermes_home=tmp_path,
+            environ={},
+            injected={"planner": {"path": "../outside.sqlite3"}},
+        )
 
 
 def test_disabled_recall_skips_dormant_planner_deadline_constraints(tmp_path: Path) -> None:
@@ -235,8 +208,6 @@ def test_disabled_recall_skips_dormant_planner_deadline_constraints(tmp_path: Pa
             "planner": {
                 "mode": "active",
                 "timeout_seconds": 4.0,
-                "busy_timeout_seconds": 1.0,
-                "mailbox_ttl_seconds": 0.1,
             },
             "reflect": {"enabled": True},
             "retain": {"enabled": True},

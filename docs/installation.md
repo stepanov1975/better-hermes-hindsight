@@ -87,9 +87,13 @@ Use Hermes's standard plugin update command:
 
 ```bash
 hermes plugins update better_hindsight
+hermes plugins enable better_hindsight
 hermes memory setup better_hindsight
 hermes better_hindsight status
 ```
+
+The explicit enable step is required for installations created before the standalone planner companion
+was added; update preserves existing enablement state and does not opt an older installation in.
 
 If upgrading from a pre-0.2.0 installation that copied only bridge files, replace it once with the
 standard Git plugin:

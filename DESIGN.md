@@ -44,11 +44,11 @@ important.
    host-owned `ctx.llm` for `skip`, `reuse`, or one self-contained recall query using
    only the remaining planner deadline.
 2. After verifying that Better recall is active for the exact session, the hook reserves that turn's
-   source-query digest in a short-lived profile-local SQLite mailbox. It never writes the conversation
+   source-query digest in a short-lived profile-keyed process-local registry. It never stores the conversation
    capsule, and it finalizes the reservation with only the action and optional rewritten query.
 3. Hermes invokes the normal Better provider prefetch. The provider atomically consumes at most one
    matching session/query plan and also cancels a still-pending reservation, fencing out an abandoned
-   late hook thread. Shadow or missing/invalid mailbox state preserves the original current query,
+   late hook thread. Shadow or missing/invalid handoff state preserves the original current query,
    while active `skip`/`reuse` returns without a Hindsight request.
 4. The provider verifies enabled context and principal policy, then projects and bounds the selected
    query by characters and by Hindsight's exact `cl100k_base` input-token rule, preserving bounded
@@ -57,20 +57,23 @@ important.
 6. The formatter projects allowlisted fields, redacts likely credentials, removes later exact
    duplicates using normalized model-facing text plus identical occurrence metadata, frames records
    as untrusted evidence, and enforces the output-byte limit.
-7. Errors and timeouts return no external context rather than failing Hermes. Missing, stale, malformed,
-   or contended mailbox state preserves direct current-query recall. A shadow planner failure does the
-   same; an active planner's invalid or timed-out decision becomes `skip` while its reservation remains.
+7. Errors and timeouts return no external context rather than failing Hermes. Missing, stale, or malformed
+   handoff state preserves direct current-query recall. A shadow planner failure does the
+   same; an active planner's invalid or timed-out decision becomes `skip` only while its reservation and
+   atomic publication deadline remain valid.
 
-The planner and provider communicate through SQLite because Hermes may import the standalone companion
-and exclusive memory provider under distinct module namespaces. The provider's public
-`on_session_switch` callback moves its authorization reference across branch/resume/reset/compression
-rotations and clears plans on same-session rewind. Profile path, process identity, exact current session,
-current-query digest, restart-comparable TTL, and atomic deletion prevent a consumed, sibling-session, or
-prior-process plan from leaking into a later turn. Atomic schema initialization avoids partial migration;
-bounded owner metadata lets a later startup reclaim confirmed-dead process rows without touching a live
-concurrent process. Provider consumption caps each SQLite wait by the remaining recall deadline. Planner
-authorization and provider consumption both require the exact rebound session identity; an incomplete
-switch therefore falls back to direct-query recall.
+Hermes may import the standalone companion and exclusive memory provider under distinct module names,
+but both execute in the same interpreter. A stable private `sys.modules` registry therefore provides the
+shared process-local handoff without durable or cross-process coordination. The provider owns an opaque
+activation token and its public `on_session_switch` callback rebinds that token across
+branch/resume/reset/compression rotations; same-session rewind clears plans. Exact profile, session, and
+current-query identity plus monotonic expiry, an atomic publication deadline, and consume-once deletion
+prevent a consumed, late, or sibling plan from leaking into a later turn. Consuming a pending reservation
+removes it before an abandoned hook worker can publish late. Missing state falls back to direct-query
+recall, and process exit removes all handoff state automatically. Provider initialization also
+idempotently removes only a schema-verified obsolete branch-preview SQLite mailbox and its sidecars;
+its former settings are accepted only long enough to validate and locate that cleanup target. An
+unrecognized file is preserved and produces a sanitized cleanup-failure event.
 
 The model-facing `better_hindsight_recall` tool reuses this configured path and returns structured
 records without internal ranking or source-count telemetry. It cannot select a different bank,
@@ -134,7 +137,7 @@ Durability begins only after admission commits. A network timeout may be ambiguo
 ## Safety boundary
 
 - The planner uses only bounded ordinary user/assistant text, treats it as untrusted data, and never
-  stores the capsule; the mailbox persists only a source-query digest and the small decision payload.
+  stores the capsule; the process-local handoff retains only a source-query digest and small decision.
 - API credentials come from the environment and are not part of destination fingerprints or persisted payload metadata.
 - Reflection is explicit, default-off, fixed to the configured destination/policy, and returned only as
   untrusted generated evidence; its source records, traces, directives, and usage metadata are not
@@ -152,8 +155,8 @@ Durability begins only after admission commits. A network timeout may be ambiguo
 Better is a self-contained standard Hermes Git plugin. Its root manifest is standalone so Hermes's
 general plugin loader can register the context planner; the same root entry point detects the separate
 memory-provider collector and registers only the exclusive Better provider on that path. Each
-Better-enabled Hermes profile may run in its own process with profile-local configuration, plan
-mailbox, outbox, and diagnostics. One process owns one exact Better configuration and runtime; another
+Better-enabled Hermes profile may run in its own process with profile-local configuration, outbox, and
+diagnostics. One process owns one exact Better configuration and runtime; another
 profile in that process fails open rather than crossing the profile boundary. The root entry point and
 `better_hermes_hindsight` implementation package are installed together by `hermes plugins install`;
 no second package installation or runtime environment is part of deployment. Better implements its
