@@ -37,8 +37,9 @@ important.
 
 ### Recall
 
-1. When planner mode is `shadow` or `active`, the standalone companion's `pre_llm_call` hook builds a
-   bounded capsule from Hermes's original current user text and a capped scan of clean user/assistant
+1. When planner mode is `shadow` or `active`, the standalone companion's `pre_llm_call` hook bypasses
+   Hermes-identified first turns so the provider performs ordinary direct-query recall. On later turns it
+   builds a bounded capsule from Hermes's original current user text and a capped scan of clean user/assistant
    `content` fields. Provider-expanded sidecars are ignored, user-authored marker text is preserved, and
    compact serialization is rejected if it exceeds its derived UTF-8 byte ceiling. The hook asks the
    host-owned `ctx.llm` for `skip`, `reuse`, or one self-contained recall query using

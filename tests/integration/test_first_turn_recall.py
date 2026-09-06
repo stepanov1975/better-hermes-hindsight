@@ -91,6 +91,7 @@ async def scenario():
                         "context_max_bytes": 4096,
                     },
                     "retain": {"enabled": False},
+                    "planner": {"mode": "active", "timeout_seconds": 0.1},
                 },
                 sort_keys=True,
             ),
@@ -101,6 +102,9 @@ async def scenario():
   provider: better_hindsight
   memory_enabled: false
   user_profile_enabled: false
+plugins:
+  enabled:
+    - better_hindsight
 agent:
   environment_probe: false
   parallel_tool_call_guidance: false
@@ -138,6 +142,12 @@ sessions:
                 disabled_toolsets=[],
             )
         agent.client = MagicMock()
+        from hermes_cli.plugins import get_plugin_auxiliary_tasks
+
+        assert any(
+            task.get("key") == "better_hindsight_recall_planner"
+            for task in get_plugin_auxiliary_tasks()
+        )
         manager = agent._memory_manager
         assert manager is not None
         assert [provider.name for provider in manager.providers] == ["better_hindsight"]

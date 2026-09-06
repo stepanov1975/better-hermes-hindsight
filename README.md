@@ -63,8 +63,9 @@ remaining policy and verification options.
 
 Compared with bundled Hindsight, this plugin deliberately focuses on:
 
-- bounded recall for the **current** user query, with a default-off context-aware planner that can skip,
-  reuse existing conversational context, or issue one rewritten historical query;
+- bounded recall for the **current** user query, with a default-off context-aware planner that bypasses
+  first turns and can later skip, reuse existing conversational context, or issue one rewritten historical
+  query;
 - four bounded model tools for recall, opt-in read-only reflection, durable retention admission, and
   compact passive queue status;
 - opt-in automatic retention through a durable SQLite outbox;
@@ -108,7 +109,7 @@ or retrieval quality.
 | Area | Better Hindsight | Bundled Hermes Hindsight |
 | --- | --- | --- |
 | Installation target | Standard Git plugin for a supported external Hindsight 0.8.5, 0.9.1, or 0.9.2 service | Included with Hermes; interactive setup supports Hindsight Cloud, a local embedded service, or an external service |
-| Automatic recall | Synchronous current-turn recall under character, token, response-size, and total-time bounds. Optional `pre_llm_call` planning uses bounded recent conversation context to skip/reuse or issue one self-contained rewritten query. | Background previous-query recall by default; optional synchronous current-query recall |
+| Automatic recall | Synchronous current-turn recall under character, token, response-size, and total-time bounds. Optional `pre_llm_call` planning bypasses the first turn, then uses bounded recent conversation context to skip/reuse or issue one self-contained rewritten query. | Background previous-query recall by default; optional synchronous current-query recall |
 | Recalled context | Complete byte-bounded JSONL records with recalled text and available time metadata; redacted and explicitly framed in a provider-neutral envelope as stale, untrusted evidence. Explicit recall results also retain the available type. | Formatted memory text or a reflect synthesis with configurable preamble, token budget, types, and tags |
 | Automatic retention | Opt-in; authorized, eligible turns are admitted all-or-none to a bounded private SQLite rollback-journal outbox before asynchronous delivery | Enabled by default; completed turns enter a process-local FIFO writer and then optional server-side async processing |
 | Retained payload | Pattern-redacted, independently decodable event records with a per-admission event ID and occurrence time, hashed session identity, and bounded provenance | Labeled user/assistant transcripts with richer session, platform, user, chat, and lineage metadata |

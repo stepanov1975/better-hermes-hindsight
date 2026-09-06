@@ -135,6 +135,10 @@ process-local handoff; no Hermes core patch or second package installation is re
 - `active`: `skip` and `reuse` make no Hindsight request; `recall` substitutes exactly one validated,
   self-contained query before the normal provider bounds and request path.
 
+In every mode, a turn that Hermes identifies as the session's first turn bypasses the planner and follows
+the ordinary direct-query recall path. First-turn rewriting is intentionally excluded until a controlled
+original-query-versus-rewritten-query evaluation demonstrates better retrieval quality.
+
 The planner receives Hermes's clean original `user_message` and preserves user-authored marker text. It
 reads only ordinary string-valued `content` from user/assistant history, never provider-expanded
 `api_content`; system/developer/tool roles, tool-call scaffolding, and non-text turns are excluded. It

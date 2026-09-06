@@ -4,6 +4,11 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+### Changed
+
+- Bypass context-aware planning on Hermes-identified first turns and preserve ordinary direct-query recall;
+  first-turn rewriting remains excluded until retrieval-quality evaluation demonstrates a benefit.
+
 ## 0.6.0 - 2026-09-05
 
 ### Added

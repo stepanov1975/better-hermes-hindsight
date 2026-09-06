@@ -117,6 +117,28 @@ def test_planner_uses_only_bounded_plain_user_assistant_context(tmp_path: Path) 
     )
 
 
+@pytest.mark.parametrize("mode", ["shadow", "active"])
+def test_first_turn_bypasses_planner_and_preserves_direct_recall(
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    _write_config(tmp_path, mode=mode)
+    mailbox = _mailbox(tmp_path)
+    mailbox.activate(session_id="session-a")
+    llm = _FakeLlm({"action": "skip"})
+
+    RecallPlanner(hermes_home=tmp_path, llm=llm).on_pre_llm_call(
+        user_message="Current direct query",
+        conversation_history=[{"role": "user", "content": "Current direct query"}],
+        is_first_turn=True,
+        session_id="session-a",
+        turn_id="turn-a",
+    )
+
+    assert llm.calls == []
+    assert mailbox.consume(source_query="Current direct query", session_id="session-a") is None
+
+
 def test_history_scan_has_a_hard_row_bound(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
