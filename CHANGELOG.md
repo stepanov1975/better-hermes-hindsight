@@ -4,6 +4,11 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+### Changed
+
+- Expanded the supported tokenizer range through `tiktoken` 0.14 and aligned the host-facing plugin
+  manifest, package metadata, lockfile, installation guide, and contract tests.
+
 ## 0.6.1 - 2026-09-06
 
 ### Changed

@@ -38,6 +38,10 @@ def _manifest(path: Path) -> dict[str, object]:
 def test_package_and_plugin_metadata_are_consistent() -> None:
     project = _project()
     root_manifest = _manifest(ROOT / "plugin.yaml")
+    expected_dependencies = [
+        "aiohttp>=3.14.1,<4",
+        "tiktoken>=0.12,<0.15",
+    ]
 
     assert project["name"] == "better-hermes-hindsight"
     assert better_hermes_hindsight.PROVIDER_ID == "better_hindsight"
@@ -46,10 +50,8 @@ def test_package_and_plugin_metadata_are_consistent() -> None:
     assert root_manifest["kind"] == "standalone"
     assert root_manifest["version"] == project["version"]
     assert root_manifest["manifest_version"] == 1
-    assert root_manifest["pip_dependencies"] == [
-        "aiohttp>=3.14.1,<4",
-        "tiktoken>=0.12,<0.14",
-    ]
+    assert project["dependencies"] == expected_dependencies
+    assert root_manifest["pip_dependencies"] == expected_dependencies
 
 
 def test_current_hermes_security_scanner_accepts_the_tracked_plugin_tree(
