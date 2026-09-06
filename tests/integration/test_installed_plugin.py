@@ -97,15 +97,17 @@ def _hermes_environment(home: Path) -> dict[str, str]:
 def test_root_plugin_surface_is_self_contained_and_version_aligned() -> None:
     root_manifest = yaml.safe_load((ROOT / "plugin.yaml").read_text(encoding="utf-8"))
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    expected_dependencies = [
+        "aiohttp>=3.14.1,<4",
+        "tiktoken>=0.12,<0.15",
+    ]
 
     assert root_manifest["name"] == "better_hindsight"
     assert root_manifest["kind"] == "standalone"
     assert root_manifest["version"] == project["version"]
     assert root_manifest["manifest_version"] == 1
-    assert root_manifest["pip_dependencies"] == [
-        "aiohttp>=3.14.1,<4",
-        "tiktoken>=0.12,<0.14",
-    ]
+    assert project["dependencies"] == expected_dependencies
+    assert root_manifest["pip_dependencies"] == expected_dependencies
     assert "scripts" not in project
     assert all((ROOT / name).is_file() for name in ROOT_PLUGIN_FILES)
     assert (ROOT / "better_hermes_hindsight" / "provider.py").is_file()
