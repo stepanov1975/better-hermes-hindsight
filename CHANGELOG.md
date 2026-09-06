@@ -4,6 +4,8 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+## 0.6.0 - 2026-09-05
+
 ### Added
 
 - Added a default-off context-aware automatic-recall planner that runs through Hermes's public

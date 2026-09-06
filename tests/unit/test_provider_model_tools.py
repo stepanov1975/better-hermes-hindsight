@@ -537,7 +537,7 @@ def test_status_tool_returns_minimal_healthy_queue_health(
             payload={
                 "command": "status",
                 "counts": {"mismatch": 0, "pending": 0, "retry": 0, "sending": 0},
-                "deployed": {"commit": "opaque", "version": "0.5.0"},
+                "deployed": {"commit": "opaque", "version": "0.6.0"},
                 "error_counts": {"retain_failed": 0},
                 "outbox": "ready",
                 "result": "ok",
