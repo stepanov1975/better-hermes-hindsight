@@ -232,6 +232,8 @@ class RecallPlanner:
                 return
         except (PlanMailboxError, ValueError):
             return
+        if kwargs.get("is_first_turn") is True:
+            return
         if not isinstance(current, str) or not current:
             return
         if len(current) > MAX_PLANNER_QUERY_CHARS:
