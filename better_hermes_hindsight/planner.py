@@ -109,10 +109,10 @@ def _safe_history_message(message: object, *, maximum: int) -> tuple[str, str] |
     if role == "assistant" and message.get("tool_calls"):
         return None
     content = message.get("content")
-    if role == "user":
-        content = extract_user_instruction_from_skill_message(content)
     if not isinstance(content, str):
         return None
+    if role == "user":
+        content = extract_user_instruction_from_skill_message(content)
     bounded = _clip_text(content, maximum)
     if not bounded.strip():
         return None

@@ -350,6 +350,35 @@ def test_input_bearing_retention_error_is_recanonicalized_at_the_public_boundary
     assert caught.value.__cause__ is None
 
 
+def test_paragraph_packing_encoding_work_is_linear(monkeypatch: pytest.MonkeyPatch) -> None:
+    paragraph = 'é "\\\t🙂'
+    text = "\n\n".join([paragraph] * 10000)
+    encoded_bytes = 0
+    real_encode = retention_module._canonical_json
+
+    def measured_encode(value: object) -> str:
+        nonlocal encoded_bytes
+        result = real_encode(value)
+        encoded_bytes += len(result.encode("utf-8"))
+        return result
+
+    monkeypatch.setattr(retention_module, "_canonical_json", measured_encode)
+    segments = _build(user_content=text, segment_max_bytes=65536)
+    assert len(segments) > 1
+    assert all(len(segment.content.encode("utf-8")) <= 65536 for segment in segments)
+    assert (
+        "\n\n".join(
+            role["content"]
+            for segment in segments
+            for role in json.loads(segment.content)["roles"]
+            if role["role"] == "user"
+        )
+        == text
+    )
+    # Count actual serialization work, not wall-clock time on a variable-speed CI host.
+    assert encoded_bytes < 32 * len(text.encode("utf-8"))
+
+
 def test_unicode_segments_are_self_contained_and_split_only_at_semantic_boundaries() -> None:
     entity_paragraph = "Mira visited 東京. She bought tea 🙂."
     second_paragraph = "Résumé notes: café 漢字."

@@ -55,7 +55,19 @@ def _mailbox(home: Path) -> InMemoryPlanMailbox:
     return InMemoryPlanMailbox(home)
 
 
-def test_planner_uses_only_bounded_plain_user_assistant_context(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "history_content", [None, [{"type": "text", "text": "ignored"}], {"text": "ignored"}, 42]
+)
+def test_planner_uses_only_bounded_plain_user_assistant_context(
+    tmp_path: Path,
+    history_content: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def require_text(content: str) -> str:
+        assert isinstance(content, str)
+        return content
+
+    monkeypatch.setattr(planner_module, "extract_user_instruction_from_skill_message", require_text)
     _write_config(tmp_path)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
@@ -76,6 +88,7 @@ def test_planner_uses_only_bounded_plain_user_assistant_context(tmp_path: Path) 
                 "api_content": "[RECALLED_MEMORY_EVIDENCE_BEGIN]private[/...END]",
             },
             {"role": "tool", "content": "private tool output"},
+            {"role": "user", "content": history_content},
             {
                 "role": "assistant",
                 "content": "tool-call scaffolding",

@@ -280,28 +280,35 @@ def _semantic_contents(
                 raise _RetentionCapacityExceeded from None
             continue
 
-        packed = ""
-        packed_content = ""
+        packed: list[str] = []
+        overhead = len(
+            _event_content(common=common, roles=(_role_payload(role, content=""),)).encode("utf-8")
+        )
+        packed_bytes = overhead
         for separator, paragraph in _semantic_paragraphs(role.content):
-            candidate = packed + separator + paragraph if packed else paragraph
-            content = _event_content(
-                common=common,
-                roles=(_role_payload(role, content=candidate),),
-            )
-            if len(content.encode("utf-8")) > max_bytes:
-                if packed:
-                    contents.append(packed_content)
-                    if segment_count_limit is not None and len(contents) >= segment_count_limit:
-                        raise _RetentionCapacityExceeded from None
-                candidate = paragraph
-                content = _event_content(
-                    common=common, roles=(_role_payload(role, content=paragraph),)
+            # JSON string escaping is additive; omit the two surrounding quotes.
+            paragraph_bytes = len(_canonical_json(paragraph).encode("utf-8")) - 2
+            separator_bytes = len(_canonical_json(separator).encode("utf-8")) - 2
+            if overhead + paragraph_bytes > max_bytes:
+                raise _RetentionCapacityExceeded from None
+            if packed and packed_bytes + separator_bytes + paragraph_bytes > max_bytes:
+                contents.append(
+                    _event_content(
+                        common=common, roles=(_role_payload(role, content="".join(packed)),)
+                    )
                 )
-                if len(content.encode("utf-8")) > max_bytes:
+                if segment_count_limit is not None and len(contents) >= segment_count_limit:
                     raise _RetentionCapacityExceeded from None
-            packed = candidate
-            packed_content = content
-        contents.append(packed_content)
+                packed = []
+                packed_bytes = overhead
+            if packed:
+                packed.append(separator)
+                packed_bytes += separator_bytes
+            packed.append(paragraph)
+            packed_bytes += paragraph_bytes
+        contents.append(
+            _event_content(common=common, roles=(_role_payload(role, content="".join(packed)),))
+        )
         if segment_count_limit is not None and len(contents) > segment_count_limit:
             raise _RetentionCapacityExceeded from None
     if not contents:
