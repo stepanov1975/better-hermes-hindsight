@@ -44,9 +44,10 @@ forensic snapshot across concurrent pathname or topology replacement.
 The result includes queue counts, logical queued bytes, oldest-item age bucket, per-category error
 counts, maximum attempt count, next-retry bucket, plugin identity, and a point-in-time
 sender-ownership probe. It reports `result: "degraded"` and exits 1 for a destination mismatch,
-retrying or sending work, first-attempt work aged at least one hour, or due work when sender
-ownership cannot be probed. `sender_ownership: "held"` is only a lock snapshot, not a sender
-heartbeat.
+retrying work, sending work without a held sender lock or with a recorded failure, queued work aged
+at least one hour, or due work when sender ownership cannot be probed. A fresh error-free in-flight
+write with a held sender lock is healthy. `sender_ownership: "held"` is only a lock snapshot, not a
+sender heartbeat.
 
 A destination mismatch normally means the endpoint, bank, payload schema, tags, or observation scopes changed while rows remained queued. Restore the original configuration to let those rows drain, or preserve the outbox and perform a separately reviewed manual recovery. Better never re-targets or deletes them automatically.
 
@@ -127,10 +128,13 @@ fixed canary bank. It accepts only supported Hindsight API versions (`0.8.5`, `0
 `0.9.2`) and reports the exact observed version, then uses the installed
 `HindsightClientAdapter` for synchronous retention and recall. That exercises the production
 `aiohttp` transport, wire defaults, strict response decoding, and client lifecycle rather than a
-parallel canary implementation. Raw bounded HTTP remains only for health/version preflight and exact
-document cleanup, which are outside Better's narrow adapter surface. Cleanup is attempted after every
-retain dispatch and has reserved time within one overall deadline. Output is one bounded JSON object
-containing fixed error categories, fixed adapter reasons, and numeric timing only.
+parallel canary implementation. Direct `aiohttp` requests with unrounded total timeouts and bounded
+bodies remain only for health/version preflight and exact document cleanup, outside Better's narrow
+adapter surface. Cleanup is attempted after every retain dispatch while time remains and has
+reserved time within one overall deadline. Output is one bounded JSON object containing fixed error
+categories, fixed adapter reasons, and numeric timing. On cleanup failure only, `cleanup_document_id`
+identifies the exact synthetic document for manual recovery in the configured canary bank; no bank,
+endpoint, content, tags, or credentials are printed.
 
 The command is inert unless `BETTER_HINDSIGHT_CANARY_ENABLED=1`. Configure only a reviewed
 canary/dedicated bank; do not point it at an ordinary memory bank. Supported environment variables:
@@ -194,7 +198,12 @@ hermes better_hindsight missions check
 hermes better_hindsight missions apply --confirm
 ```
 
-`check` performs a read and reports `equal`, `drift`, or `missing`. `apply --confirm` patches only configured drifted mission fields and requires an exact GET readback before reporting success. Mission commands use a client-only runtime and never start the retention sender.
+`check` performs a read and reports `equal`, `drift`, or `missing` for configured fields.
+Unconfigured fields are `unmanaged` and do not cause a partial configuration to fail. With neither
+field configured, the overall result is `unmanaged`; `equal` and `unmanaged` exit successfully.
+Remote read errors still fail the operation. `apply --confirm` patches only configured drifted
+mission fields and requires an exact GET readback before reporting success. Mission commands use
+a client-only runtime and never start the retention sender.
 
 There is no automatic mission application, retry-now, drain, arbitrary-row, row-deletion, or bank-selection command.
 

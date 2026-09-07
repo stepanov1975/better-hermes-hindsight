@@ -20,7 +20,7 @@ import sys
 
 class BlockRuntimeDependencies:
     def find_spec(self, fullname, path=None, target=None):
-        roots = ("aiohttp", "tiktoken")
+        roots = ("aiohttp", "aiodns", "tiktoken")
         if any(fullname == root or fullname.startswith(root + ".") for root in roots):
             raise ModuleNotFoundError(fullname)
         return None
@@ -99,6 +99,7 @@ def test_root_plugin_surface_is_self_contained_and_version_aligned() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     expected_dependencies = [
         "aiohttp>=3.14.1,<4",
+        "aiodns>=4.0.4,<5",
         "tiktoken>=0.12,<0.15",
     ]
 

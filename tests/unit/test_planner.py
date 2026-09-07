@@ -55,7 +55,19 @@ def _mailbox(home: Path) -> InMemoryPlanMailbox:
     return InMemoryPlanMailbox(home)
 
 
-def test_planner_uses_only_bounded_plain_user_assistant_context(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "history_content", [None, [{"type": "text", "text": "ignored"}], {"text": "ignored"}, 42]
+)
+def test_planner_uses_only_bounded_plain_user_assistant_context(
+    tmp_path: Path,
+    history_content: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def require_text(content: str) -> str:
+        assert isinstance(content, str)
+        return content
+
+    monkeypatch.setattr(planner_module, "extract_user_instruction_from_skill_message", require_text)
     _write_config(tmp_path)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
@@ -76,6 +88,7 @@ def test_planner_uses_only_bounded_plain_user_assistant_context(tmp_path: Path) 
                 "api_content": "[RECALLED_MEMORY_EVIDENCE_BEGIN]private[/...END]",
             },
             {"role": "tool", "content": "private tool output"},
+            {"role": "user", "content": history_content},
             {
                 "role": "assistant",
                 "content": "tool-call scaffolding",
@@ -137,6 +150,32 @@ def test_first_turn_bypasses_planner_and_preserves_direct_recall(
 
     assert llm.calls == []
     assert mailbox.consume(source_query="Current direct query", session_id="session-a") is None
+
+
+@pytest.mark.parametrize("query", ["thanks!", "Hi", "OK.", "/help", "  "])
+@pytest.mark.parametrize("mode", ["shadow", "active"])
+def test_trivial_turn_clears_stale_plan_without_auxiliary_call(
+    tmp_path: Path, query: str, mode: str
+) -> None:
+    _write_config(tmp_path, mode=mode)
+    mailbox = _mailbox(tmp_path)
+    mailbox.activate(session_id="session-a")
+    assert mailbox.reserve(
+        source_query=query,
+        session_id="session-a",
+        parent_session_id="",
+        turn_id="stale-turn",
+        mode="active",
+    )
+    assert mailbox.finalize(
+        turn_id="stale-turn", mode="active", action="recall", rewritten_query="stale rewrite"
+    )
+    llm = _FakeLlm({"action": "recall", "query": "must not run"})
+    RecallPlanner(tmp_path, llm).on_pre_llm_call(
+        user_message=query, session_id="session-a", turn_id="trivial-turn"
+    )
+    assert llm.calls == []
+    assert mailbox.consume(source_query=query, session_id="session-a") is None
 
 
 def test_history_scan_has_a_hard_row_bound(
@@ -338,9 +377,7 @@ def test_serialized_capsule_rejects_content_beyond_derived_byte_limit(
     )
 
     assert llm.calls == []
-    assert mailbox.consume(
-        source_query="Current direct query", session_id="session-a"
-    ) == RecallPlan(mode="active", action="skip", rewritten_query=None, turn_id="turn-a")
+    assert mailbox.consume(source_query="Current direct query", session_id="session-a") is None
 
 
 def test_valid_capsule_stays_within_derived_utf8_byte_limit(tmp_path: Path) -> None:
@@ -459,7 +496,7 @@ def test_user_authored_memory_marker_in_clean_history_is_preserved(tmp_path: Pat
 
 
 @pytest.mark.parametrize("invalid_query", ["   ", chr(0xD800)])
-def test_active_invalid_plan_publishes_skip_instead_of_stale_recall(
+def test_active_invalid_plan_preserves_direct_recall_instead_of_stale_recall(
     tmp_path: Path,
     invalid_query: str,
 ) -> None:
@@ -492,15 +529,12 @@ def test_active_invalid_plan_publishes_skip_instead_of_stale_recall(
         turn_id="new-turn",
     )
 
-    assert mailbox.consume(source_query="same question", session_id="session-a") == RecallPlan(
-        mode="active",
-        action="skip",
-        rewritten_query=None,
-        turn_id="new-turn",
-    )
+    assert mailbox.consume(source_query="same question", session_id="session-a") is None
 
 
-def test_active_timeout_publishes_skip_without_using_late_model_result(tmp_path: Path) -> None:
+def test_active_timeout_preserves_direct_recall_without_using_late_model_result(
+    tmp_path: Path,
+) -> None:
     _write_config(tmp_path, timeout_seconds=0.5)
     now = [10.0]
     mailbox = InMemoryPlanMailbox(tmp_path, monotonic=lambda: now[0])
@@ -527,12 +561,7 @@ def test_active_timeout_publishes_skip_without_using_late_model_result(tmp_path:
     )
 
     assert len(llm.calls) == 1
-    assert mailbox.consume(source_query="question", session_id="session-a") == RecallPlan(
-        mode="active",
-        action="skip",
-        rewritten_query=None,
-        turn_id="turn-a",
-    )
+    assert mailbox.consume(source_query="question", session_id="session-a") is None
 
 
 def test_invalid_turn_identity_does_not_mutate_the_mailbox(tmp_path: Path) -> None:

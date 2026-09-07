@@ -4,10 +4,27 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+- Require `aiodns` so HTTP deadlines also bound DNS resolution without waiting for a system-resolver executor during event-loop shutdown.
+
 ### Changed
 
 - Expanded the supported tokenizer range through `tiktoken` 0.14 and aligned the host-facing plugin
   manifest, package metadata, lockfile, installation guide, and contract tests.
+
+### Fixed
+
+- Pack adjacent retention paragraphs into bounded documents instead of emitting one request per
+  paragraph after an oversized turn; retain existing semantic-unit and queue-capacity checks.
+- Treat fresh error-free in-flight sends as healthy while preserving alerts for retries, missing
+  sender ownership, stale work, and destination mismatches.
+- Normalize skill-expanded planner queries using Hermes's instruction extraction, skip trivial
+  prompts, and fall back to direct recall on planner failure in both shadow and active mode.
+- Bound canary health/version/cleanup HTTP requests by total deadlines and report the exact
+  synthetic document ID when cleanup fails.
+- Carry the runtime shutdown deadline through client close and event-loop join, preserving
+  unsettled-operation safety; share the existing capped retry-delay calculation.
+- Report unconfigured mission fields as `unmanaged`, so checks of a partial configuration succeed
+  when its managed field matches.
 
 ## 0.6.1 - 2026-09-06
 

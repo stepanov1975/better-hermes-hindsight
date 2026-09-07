@@ -10,6 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
 
+from agent.memory_provider import is_trivial_prompt
+from agent.skill_commands import extract_user_instruction_from_skill_message
+
 from .config import (
     MAX_PLANNER_QUERY_CHARS,
     BetterHindsightConfig,
@@ -108,6 +111,8 @@ def _safe_history_message(message: object, *, maximum: int) -> tuple[str, str] |
     content = message.get("content")
     if not isinstance(content, str):
         return None
+    if role == "user":
+        content = extract_user_instruction_from_skill_message(content)
     bounded = _clip_text(content, maximum)
     if not bounded.strip():
         return None
@@ -236,7 +241,14 @@ class RecallPlanner:
             return
         if not isinstance(current, str) or not current:
             return
+        # Match MemoryManager.prefetch_all's query identity before bounding,
+        # hashing, or sending user text to the auxiliary model.
+        current = extract_user_instruction_from_skill_message(current)
+        if not current:
+            return
         if len(current) > MAX_PLANNER_QUERY_CHARS:
+            return
+        if is_trivial_prompt(current):
             return
 
         try:
@@ -301,20 +313,18 @@ class RecallPlanner:
             decision = None
             outcome = "timeout"
         if decision is None:
-            if config.planner.mode != "active":
-                try:
-                    mailbox.cancel(turn_id=turn_id, owner_token=owner_token)
-                except PlanMailboxError:
-                    outcome = "mailbox_unavailable"
-                self._emit(
-                    config,
-                    started_at,
-                    outcome=outcome,
-                    action="none",
-                    history=capsule,
-                )
-                return
-            decision = _PlanDecision("skip")
+            try:
+                mailbox.cancel(turn_id=turn_id, owner_token=owner_token)
+            except PlanMailboxError:
+                outcome = "mailbox_unavailable"
+            self._emit(
+                config,
+                started_at,
+                outcome=outcome,
+                action="none",
+                history=capsule,
+            )
+            return
 
         try:
             published = mailbox.finalize(

@@ -36,6 +36,9 @@ from .outbox import (
     ProfileLockStatus,
     SQLiteOutbox,
 )
+from .outbox import (
+    _retry_delay_seconds as _bounded_retry_delay,
+)
 from .retention import (
     RetainedSegment,
     RetentionCapacityError,
@@ -46,17 +49,6 @@ from .telemetry import elapsed_milliseconds, emit_event
 
 ASYNC_CANCELLATION_DRAIN_SECONDS = 0.05
 logger = logging.getLogger(__name__)
-
-
-def _bounded_retry_delay(*, attempt_count: int, initial: float, maximum: float) -> float:
-    """Mirror the outbox retry schedule without unbounded exponentiation."""
-
-    delay = initial
-    remaining = attempt_count - 1
-    while remaining > 0 and delay < maximum:
-        delay = min(delay * 2.0, maximum)
-        remaining -= 1
-    return delay
 
 
 class AsyncCallTimeoutError(TimeoutError):
@@ -140,6 +132,7 @@ class AsyncRunner:
         operation: Callable[[], Awaitable[_T]],
         *,
         timeout: float | None = None,
+        cancellation_drain_seconds: float = ASYNC_CANCELLATION_DRAIN_SECONDS,
     ) -> _T:
         """Run one async operation under a total deadline and return its result synchronously."""
 
@@ -171,14 +164,14 @@ class AsyncRunner:
         except concurrent.futures.TimeoutError:
             if state.result.done():
                 return state.result.result()
-            self._cancel_and_wait(loop, state)
+            self._cancel_and_wait(loop, state, timeout=cancellation_drain_seconds)
             self._publish_unsettled(state)
             raise AsyncCallTimeoutError(
                 "Better Hindsight operation exceeded its total deadline."
             ) from None
         except BaseException:
             if not state.done.is_set() and not state.result.done():
-                self._cancel_and_wait(loop, state)
+                self._cancel_and_wait(loop, state, timeout=cancellation_drain_seconds)
                 self._publish_unsettled(state)
             raise
 
@@ -196,26 +189,28 @@ class AsyncRunner:
                 self._condition.wait(timeout=remaining)
             return True
 
-    def shutdown(self) -> bool:
-        """Stop the event loop after cancelling any remaining owned tasks."""
+    def shutdown(self, *, timeout: float | None = None) -> bool:
+        """Stop the loop and join within the budget; a timed-out join can be retried."""
 
         if self.in_owning_loop:
             raise AsyncRunnerReentrancyError(
                 "Better Hindsight async runner cannot shut down from its owning event loop."
             )
         with self._condition:
-            if self._shutdown:
+            if self._shutdown and not self._thread.is_alive():
                 return False
             if self._unsettled_tokens:
                 raise AsyncRunnerUnsettledError(
                     "Better Hindsight async runner is waiting for prior work to settle."
                 ) from None
+            loop = None if self._shutdown else self._loop
             self._shutdown = True
-            loop = self._loop
         if loop is not None:
             with contextlib.suppress(RuntimeError):
                 loop.call_soon_threadsafe(loop.stop)
-        self._thread.join()
+        self._thread.join(timeout=timeout)
+        if self._thread.is_alive():
+            raise SenderStopError("Better Hindsight event loop exceeded shutdown deadline.")
         return True
 
     def _run_loop(self) -> None:
@@ -290,12 +285,14 @@ class AsyncRunner:
         self,
         loop: asyncio.AbstractEventLoop,
         state: _ScheduledCall[_T],
+        *,
+        timeout: float,
     ) -> None:
         try:
             loop.call_soon_threadsafe(self._cancel, state)
         except RuntimeError:
             return
-        state.done.wait(timeout=ASYNC_CANCELLATION_DRAIN_SECONDS)
+        state.done.wait(timeout=timeout)
 
 
 class OutboxProtocol(Protocol):
@@ -657,6 +654,7 @@ class ProcessRuntime:
         "__weakref__",
         "_active_calls",
         "_client",
+        "_client_closed",
         "_closed",
         "_finalizing",
         "_lifecycle",
@@ -681,6 +679,7 @@ class ProcessRuntime:
         self._lifecycle = threading.Condition()
         self._active_calls = 0
         self._closed = False
+        self._client_closed = False
         self._finalizing = False
         self._outbox: OutboxProtocol | None = None
         self._sender: SenderProtocol | None = None
@@ -860,15 +859,28 @@ class ProcessRuntime:
         if outbox is not None:
             try:
                 outbox.close()
+                self._outbox = None
             except BaseException as error:
                 failure = error
+        if not self._client_closed:
+            remaining = _remaining_until(deadline)
+            if remaining <= 0:
+                self._raise_sender_stop()
+            try:
+                self._runner.run(
+                    self._close_client,
+                    timeout=remaining,
+                    cancellation_drain_seconds=0.0,
+                )
+            except (AsyncCallTimeoutError, AsyncRunnerUnsettledError):
+                self._raise_sender_stop()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
         try:
-            self._runner.run(self._client.close)
-        except BaseException as error:
-            if failure is None:
-                failure = error
-        try:
-            self._runner.shutdown()
+            self._runner.shutdown(timeout=_remaining_until(deadline))
+        except SenderStopError:
+            raise
         except BaseException as error:
             if failure is None:
                 failure = error
@@ -878,6 +890,10 @@ class ProcessRuntime:
         if failure is not None:
             raise failure
         return True
+
+    async def _close_client(self) -> None:
+        await self._client.close()
+        self._client_closed = True
 
     @staticmethod
     def _raise_sender_stop() -> NoReturn:

@@ -11,7 +11,7 @@ procedure.
 - an external Hindsight 0.8.5, 0.9.1, or 0.9.2 service;
 - `git` available for Hermes's Git-plugin installer.
 
-The plugin declares `aiohttp>=3.14.1,<4` and `tiktoken>=0.12,<0.15` in `plugin.yaml`. Hermes checks
+The plugin declares `aiohttp>=3.14.1,<4`, `aiodns>=4.0.4,<5`, and `tiktoken>=0.12,<0.15` in `plugin.yaml`. Hermes checks
 and installs declared memory-plugin dependencies through its normal memory setup command. Better
 uses `tiktoken` for bounded recall and reflection query projection; it does not import or
 replace Hermes's bundled Hindsight client.

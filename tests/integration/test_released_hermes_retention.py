@@ -383,9 +383,8 @@ def test_released_model_retain_and_status_tools_route_through_durable_runtime(
         tool_status = json.loads(harness.manager.handle_tool_call("better_hindsight_status", {}))
         assert tool_status == {
             "queued": 1,
-            "result": "degraded",
+            "result": "ok",
             "retention_queue": "ready",
-            "sending": 1,
         }
 
         records = harness.loop.run(_retain_records(harness.server))

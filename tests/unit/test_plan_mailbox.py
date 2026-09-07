@@ -13,6 +13,7 @@ import pytest
 
 from better_hermes_hindsight.plan_mailbox import (
     InMemoryPlanMailbox,
+    PlanAction,
     RecallPlan,
 )
 
@@ -496,7 +497,10 @@ def test_query_mismatch_closes_and_removes_the_current_reservation(tmp_path: Pat
     mailbox.deactivate(token=activation)
 
 
-def test_active_skip_fallback_can_finalize_after_planner_deadline(tmp_path: Path) -> None:
+@pytest.mark.parametrize("action", ["skip", "reuse"])
+def test_suppression_cannot_finalize_after_planner_deadline(
+    tmp_path: Path, action: PlanAction
+) -> None:
     clock = _Clock(10.0)
     mailbox = InMemoryPlanMailbox(tmp_path, monotonic=clock)
 
@@ -511,18 +515,13 @@ def test_active_skip_fallback_can_finalize_after_planner_deadline(tmp_path: Path
     )
 
     clock.value = 10.5
-    assert mailbox.finalize(
+    assert not mailbox.finalize(
         turn_id="turn-timeout",
         mode="active",
-        action="skip",
+        action=action,
         rewritten_query=None,
     )
-    assert mailbox.consume(source_query="Why?", session_id="session-a") == RecallPlan(
-        mode="active",
-        action="skip",
-        rewritten_query=None,
-        turn_id="turn-timeout",
-    )
+    assert mailbox.consume(source_query="Why?", session_id="session-a") is None
     mailbox.deactivate(token=token)
 
 
