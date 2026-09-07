@@ -40,6 +40,7 @@ def test_package_and_plugin_metadata_are_consistent() -> None:
     root_manifest = _manifest(ROOT / "plugin.yaml")
     expected_dependencies = [
         "aiohttp>=3.14.1,<4",
+        "aiodns>=4.0.4,<5",
         "tiktoken>=0.12,<0.15",
     ]
 

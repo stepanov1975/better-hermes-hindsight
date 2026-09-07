@@ -1015,11 +1015,14 @@ def test_blocked_sender_preserves_runtime_and_zero_closes_until_repeated_cleanup
     runner_shutdown_calls = 0
     real_shutdown = runtime_module.AsyncRunner.shutdown
 
-    def shutdown_with_order(runner: runtime_module.AsyncRunner) -> bool:
+    def shutdown_with_order(
+        runner: runtime_module.AsyncRunner, *, timeout: float | None = None
+    ) -> bool:
         nonlocal runner_shutdown_calls
         runner_shutdown_calls += 1
         order.append("runner")
-        return real_shutdown(runner)
+        assert timeout is not None and 0 <= timeout <= expected_deadline + 1e-9
+        return real_shutdown(runner, timeout=timeout)
 
     monkeypatch.setattr(runtime_module.AsyncRunner, "shutdown", shutdown_with_order)
     monkeypatch.setattr(runtime_module, "_monotonic_now", lambda: 100.0)
@@ -1086,11 +1089,14 @@ def test_idle_joined_sender_still_waits_for_unrelated_runner_settlement_before_c
     release_operation = threading.Event()
     operation_errors: list[BaseException] = []
 
-    def shutdown_with_order(runner: runtime_module.AsyncRunner) -> bool:
+    def shutdown_with_order(
+        runner: runtime_module.AsyncRunner, *, timeout: float | None = None
+    ) -> bool:
         nonlocal runner_shutdown_calls
         runner_shutdown_calls += 1
         order.append("runner")
-        return real_shutdown(runner)
+        assert timeout is not None and 0 <= timeout <= expected_deadline + 1e-9
+        return real_shutdown(runner, timeout=timeout)
 
     monkeypatch.setattr(runtime_module.AsyncRunner, "shutdown", shutdown_with_order)
     handle = acquire_process_runtime(
@@ -1203,11 +1209,14 @@ def test_actual_sender_late_success_preserves_runtime_then_replays_after_cleanup
         outboxes.append(outbox)
         return cast(runtime_module.OutboxProtocol, outbox)
 
-    def shutdown_with_order(runner: runtime_module.AsyncRunner) -> bool:
+    def shutdown_with_order(
+        runner: runtime_module.AsyncRunner, *, timeout: float | None = None
+    ) -> bool:
         nonlocal runner_shutdown_calls
         runner_shutdown_calls += 1
         order.append("runner")
-        return real_shutdown(runner)
+        assert timeout is not None and 0 <= timeout <= expected_deadline + 1e-9
+        return real_shutdown(runner, timeout=timeout)
 
     def read_rows() -> tuple[OutboxRow, ...]:
         inspector = SQLiteOutbox.open(config)

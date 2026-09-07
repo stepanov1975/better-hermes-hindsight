@@ -311,15 +311,14 @@ class InMemoryPlanMailbox:
                 or plan.owner_token != owner_token
             ):
                 return False
-            deadline_expired = plan.publish_before is not None and now >= plan.publish_before
-            if deadline_expired and not (mode == "active" and action == "skip"):
+            if plan.publish_before is not None and now >= plan.publish_before:
                 return False
             plan.action = action
             plan.rewritten_query = rewritten_query
             return True
 
     def cancel(self, *, turn_id: str, owner_token: str | None = None) -> None:
-        """Cancel one reservation after a shadow planner failure."""
+        """Cancel one reservation so planner failure preserves direct recall."""
 
         _require_text(turn_id, "turn_id")
         with self._registry.lock:

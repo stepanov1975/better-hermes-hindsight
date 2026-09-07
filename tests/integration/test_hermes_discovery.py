@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from tests.hermes_compat import EXPECTED_HERMES_COMMIT, EXPECTED_HERMES_VERSION
 from tests.integration.helpers import (
     clean_subprocess_env,
@@ -22,8 +24,21 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+from agent.memory_manager import MemoryManager
+from agent.skill_commands import _build_skill_message
 from hermes_cli.plugins import PluginManager
 from plugins.memory import load_memory_provider
+
+scenario, action = sys.argv[1:]
+current = "What did we decide?"
+if scenario != "plain":
+    current = _build_skill_message(
+        {"content": "SYNTHETIC SKILL BODY " * (10000 if scenario == "large-skill" else 1)},
+        None,
+        '[IMPORTANT: The user has invoked the "backup" skill. '
+        'The full skill content is loaded below.]',
+        user_instruction="" if scenario == "bare-skill" else current,
+    )
 
 
 class FakeLlm:
@@ -32,6 +47,14 @@ class FakeLlm:
 
     def complete_structured(self, **kwargs):
         self.calls.append(kwargs)
+        if action == "failure":
+            raise RuntimeError("synthetic auxiliary failure")
+        if action == "timeout":
+            raise TimeoutError("synthetic auxiliary timeout")
+        if action == "invalid":
+            return SimpleNamespace(parsed={"action": "recall", "query": ""})
+        if action in {"skip", "reuse"}:
+            return SimpleNamespace(parsed={"action": action})
         return SimpleNamespace(parsed={
             "action": "recall",
             "query": "What backup policy did Alex choose?",
@@ -75,19 +98,27 @@ manager.invoke_hook(
     parent_session_id="child-1",
     task_id="task-a",
     turn_id="turn-a",
-    user_message="What did we decide?",
+    user_message=current,
     conversation_history=[
         {"role": "user", "content": "We discussed backup policy."},
         {"role": "assistant", "content": "Keep seven daily backups."},
-        {"role": "user", "content": "What did we decide?"},
+        {"role": "user", "content": current},
     ],
     provider="fixture",
     model="fixture",
 )
-provider.prefetch("What did we decide?")
+# Real host fan-out strips skill scaffolding and forwards session identity.
+memory_manager = MemoryManager()
+memory_manager.add_provider(provider)
+memory_manager.prefetch_all(current, session_id="child-2")
+if fake_llm.calls:
+    capsule = json.loads(fake_llm.calls[0]["input"][0]["text"])
+    assert capsule["current_user_message"] == "What did we decide?"
+    assert len(capsule["recent_conversation"]) == 2
+    assert "SYNTHETIC SKILL BODY" not in str(capsule)
+assert observer.consume(source_query="What did we decide?", session_id="child-2") is None
 provider.shutdown()
-assert len(fake_llm.calls) == 1
-assert runtime.calls[0][0] == "What backup policy did Alex choose?"
+assert len(fake_llm.calls) == (0 if scenario == "bare-skill" else 1)
 assert runtime.close_calls == 1
 assert not observer.is_active(session_id="child-2")
 assert not (Path(manager.scope_key) / "better_hindsight" / "recall_plans.sqlite3").exists()
@@ -97,7 +128,7 @@ print(json.dumps({
     "planner_state_file_exists": (
         Path(manager.scope_key) / "better_hindsight" / "recall_plans.sqlite3"
     ).exists(),
-    "recall_query": runtime.calls[0][0],
+    "recall_queries": [query for query, timeout in runtime.calls],
 }, sort_keys=True))
 """
 
@@ -360,8 +391,25 @@ def test_current_loader_registers_companion_once_alongside_memory_provider(
     }
 
 
-def test_current_hermes_hook_to_provider_mailbox_handoff_uses_rewritten_query(
+@pytest.mark.parametrize(
+    ("scenario", "action", "expected_queries"),
+    [
+        ("plain", "recall", ["What backup policy did Alex choose?"]),
+        ("skill", "recall", ["What backup policy did Alex choose?"]),
+        ("large-skill", "recall", ["What backup policy did Alex choose?"]),
+        ("skill", "skip", []),
+        ("skill", "reuse", []),
+        ("bare-skill", "recall", []),
+        ("skill", "failure", ["What did we decide?"]),
+        ("skill", "timeout", ["What did we decide?"]),
+        ("skill", "invalid", ["What did we decide?"]),
+    ],
+)
+def test_current_hermes_hook_to_provider_mailbox_handoff(
     tmp_path: Path,
+    scenario: str,
+    action: str,
+    expected_queries: list[str],
 ) -> None:
     hermes_home = tmp_path / "hermes-home"
     hermes_home.mkdir()
@@ -384,7 +432,7 @@ def test_current_hermes_hook_to_provider_mailbox_handoff_uses_rewritten_query(
     )
     materialize_standard_plugin(source=ROOT, hermes_home=hermes_home)
     completed = subprocess.run(
-        [sys.executable, "-c", _COMPANION_HANDOFF_SCRIPT],
+        [sys.executable, "-c", _COMPANION_HANDOFF_SCRIPT, scenario, action],
         cwd=tmp_path,
         env=clean_subprocess_env(
             tmp_path,
@@ -400,9 +448,9 @@ def test_current_hermes_hook_to_provider_mailbox_handoff_uses_rewritten_query(
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout.strip().splitlines()[-1]) == {
         "active_after_shutdown": False,
-        "llm_calls": 1,
+        "llm_calls": 0 if scenario == "bare-skill" else 1,
         "planner_state_file_exists": False,
-        "recall_query": "What backup policy did Alex choose?",
+        "recall_queries": expected_queries,
     }
 
 

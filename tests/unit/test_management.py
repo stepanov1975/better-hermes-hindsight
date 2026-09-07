@@ -39,6 +39,7 @@ from better_hermes_hindsight.management import (
 )
 from better_hermes_hindsight.outbox import SQLiteOutbox
 from better_hermes_hindsight.runtime import create_operator_runtime
+from better_hermes_hindsight.watchdog import evaluate_watchdog
 
 _RETAIN_DESIRED = "Retain durable synthetic preferences exactly."
 _OBSERVATIONS_DESIRED = "Consolidate stable synthetic observations exactly."
@@ -946,6 +947,59 @@ def test_status_sender_probe_error_is_bounded_unavailable_not_snapshot_failure(
     assert outside.read_text(encoding="utf-8") == "synthetic lock target\n"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="sender ownership is POSIX-only")
+@pytest.mark.parametrize(
+    "held,age,retried,healthy",
+    [
+        (True, 1.0, False, True),
+        (False, 1.0, False, False),
+        (True, 3600.0, False, False),
+        (True, 1.0, True, False),
+    ],
+)
+def test_status_and_watchdog_distinguish_inflight_progress_from_stalled_work(
+    tmp_path: Path,
+    held: bool,
+    age: float,
+    retried: bool,
+    healthy: bool,
+) -> None:
+    import fcntl
+
+    config = _config(tmp_path)
+    lock_path = _initialize_outbox(config)
+    _insert_row(
+        config,
+        index=1,
+        content="synthetic memory",
+        state="sending",
+        attempt_count=2 if retried else 1,
+        last_error_category="retain_failed" if retried else None,
+    )
+    descriptor = os.open(lock_path, os.O_RDWR)
+    try:
+        if held:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = status(config, now=1000.0 + age)
+        assert result.payload["counts"] == {"mismatch": 0, "pending": 0, "retry": 0, "sending": 1}
+        assert result.payload["result"] == ("ok" if healthy else "degraded")
+        assert result.exit_code == (0 if healthy else 1)
+        alert = evaluate_watchdog(
+            status=result.payload,
+            canary={"result": "ok"},
+            events=(),
+            state_path=tmp_path / "watchdog.json",
+        )
+        if healthy:
+            assert alert is None
+        else:
+            assert alert is not None
+            assert alert["reasons"] == ["local_status_degraded"]
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
 # Mission check ----------------------------------------------------------------
 
 
@@ -1029,9 +1083,9 @@ def test_mission_check_handles_zero_one_or_two_configured_fields(
 
     result = check_missions(config, runtime_factory=factory)
 
-    expected_retain = "equal" if configured_count >= 1 else "missing"
-    expected_observations = "equal" if configured_count >= 2 else "missing"
-    expected_result = "equal" if configured_count == 2 else "missing"
+    expected_retain = "equal" if configured_count >= 1 else "unmanaged"
+    expected_observations = "equal" if configured_count >= 2 else "unmanaged"
+    expected_result = "equal" if configured_count else "unmanaged"
     _assert_result(
         result,
         payload={
@@ -1040,11 +1094,41 @@ def test_mission_check_handles_zero_one_or_two_configured_fields(
             "result": expected_result,
             "retain_mission": expected_retain,
         },
-        exit_code=0 if configured_count == 2 else 1,
+        exit_code=0,
     )
     assert events == ["runtime_create", "get", "runtime_finalize"]
     assert factory.configs == [config]
     _assert_remote_deadlines(runtime, count=1, maximum=config.retain.timeout_seconds)
+
+
+@pytest.mark.parametrize(
+    "remote,expected,exit_code",
+    [
+        (_value(_OBSERVATIONS_DESIRED), "equal", 0),
+        (_value(_OBSERVATIONS_REMOTE), "drift", 1),
+        (_value(None), "missing", 1),
+    ],
+)
+def test_observations_only_mission_check_ignores_unmanaged_retain_field(
+    tmp_path: Path,
+    remote: MissionValue,
+    expected: str,
+    exit_code: int,
+) -> None:
+    config = _config(tmp_path, observations_mission=_OBSERVATIONS_DESIRED)
+    factory, _, events = _runtime_factory(gets=[_snapshot(_value(None), remote)])
+    result = check_missions(config, runtime_factory=factory)
+    _assert_result(
+        result,
+        payload={
+            "command": "missions_check",
+            "retain_mission": "unmanaged",
+            "observations_mission": expected,
+            "result": expected,
+        },
+        exit_code=exit_code,
+    )
+    assert events == ["runtime_create", "get", "runtime_finalize"]
 
 
 @pytest.mark.parametrize("configured_count", [0, 1, 2])
@@ -1069,9 +1153,9 @@ def test_failed_mission_get_forces_operation_error_for_every_configured_count(
         result,
         payload={
             "command": "missions_check",
-            "observations_mission": "error" if configured_count >= 2 else "missing",
+            "observations_mission": "error" if configured_count >= 2 else "unmanaged",
             "result": "error",
-            "retain_mission": "error" if configured_count >= 1 else "missing",
+            "retain_mission": "error" if configured_count >= 1 else "unmanaged",
         },
         exit_code=3,
     )

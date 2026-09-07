@@ -569,3 +569,64 @@ def test_construction_is_deterministic_across_repeated_calls() -> None:
         )
 
     assert build() == build()
+
+
+@pytest.mark.parametrize("separator", ["\n\n", "\r\n\r\n", "\n \t\n"])
+def test_adjacent_paragraphs_pack_to_exact_utf8_limit(separator: str) -> None:
+    paragraphs = ['Mira said "東京" 🙂.', "She bought tea.", "Next visit: café."]
+    packed = separator.join(paragraphs[:2])
+    expected = (
+        _expected_content(roles=[{"role": "user", "content": packed}]),
+        _expected_content(roles=[{"role": "user", "content": paragraphs[2]}]),
+        _expected_content(roles=[{"role": "assistant", "content": "ok"}]),
+    )
+    limit = len(expected[0].encode("utf-8"))
+    kwargs: dict[str, object] = {
+        "user_content": separator.join(paragraphs),
+        "assistant_content": "ok",
+        "segment_max_bytes": limit,
+        "segment_count_limit": 3,
+    }
+    segments = _build(**kwargs)
+    assert tuple(segment.content for segment in segments) == expected
+    assert all(len(segment.content.encode("utf-8")) <= limit for segment in segments)
+    assert all(json.loads(segment.content)["event_id"] == EVENT_ID for segment in segments)
+    assert all(json.loads(segment.content)["occurred_at"] == OCCURRED_AT for segment in segments)
+    assert segments == _build(**kwargs)
+    kwargs["segment_count_limit"] = 2
+    with pytest.raises(retention_module.RetentionCapacityError):
+        _build(**kwargs)
+
+
+def test_large_many_paragraph_turn_packs_without_row_explosion() -> None:
+    paragraphs = [f"Synthetic paragraph {index}: " + "x" * 40 for index in range(1000)]
+    segments = _build(
+        user_content="\n\n".join(paragraphs),
+        assistant_content="ok",
+        segment_max_bytes=8192,
+        segment_count_limit=12,
+    )
+    assert 2 < len(segments) <= 12
+    user_packs = [json.loads(s.content)["roles"][0]["content"] for s in segments[:-1]]
+    assert "\n\n".join(user_packs) == "\n\n".join(paragraphs)
+    assert all(len(s.content.encode("utf-8")) <= 8192 for s in segments)
+
+
+def test_packed_model_memory_keeps_context_and_content_derived_identity() -> None:
+    kwargs: dict[str, object] = {
+        "assistant_content": "\n\n".join(["A durable statement."] * 20),
+        "assistant_context": "synthetic context",
+        "model_selected": True,
+        "segment_max_bytes": 430,
+    }
+    first = _build(**kwargs)
+    assert first == _build(**kwargs)
+    records = [json.loads(s.content) for s in first]
+    assert len({r["memory_id"] for r in records}) == 1
+    assert all("event_id" not in r and "occurred_at" not in r for r in records)
+    assistant_packs = [r["roles"][0]["content"] for r in records[1:]]
+    prefix = "Context: synthetic context\n\n"
+    assert all(pack.startswith(prefix) for pack in assistant_packs)
+    reconstructed = "\n\n".join(pack.removeprefix(prefix) for pack in assistant_packs)
+    assert reconstructed == kwargs["assistant_content"]
+    assert any(pack.count("A durable statement.") > 1 for pack in assistant_packs)

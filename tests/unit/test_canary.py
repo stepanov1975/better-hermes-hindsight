@@ -48,6 +48,7 @@ class _Handler(BaseHTTPRequestHandler):
     retain_override: ClassVar[object | None] = None
     recall_override: ClassVar[object | None] = None
     cleanup_override: ClassVar[object | None] = None
+    drip_path: ClassVar[str] = ""
 
     def log_message(self, _format: str, *args: object) -> None:
         del args
@@ -58,7 +59,16 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("content-type", "application/json")
         self.send_header("content-length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            if self.path == type(self).drip_path:
+                for byte in body:
+                    self.wfile.write(bytes([byte]))
+                    self.wfile.flush()
+                    time.sleep(0.03)
+            else:
+                self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # A deadline-bounded client disconnects before the drip finishes.
 
     def do_GET(self) -> None:
         type(self).paths.append(("GET", self.path))
@@ -134,6 +144,7 @@ def _server(**overrides: object) -> Iterator[str]:
     _Handler.retain_override = None
     _Handler.recall_override = None
     _Handler.cleanup_override = None
+    _Handler.drip_path = ""
     for name, value in overrides.items():
         setattr(_Handler, name, value)
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
@@ -159,6 +170,111 @@ def _config(api_url: str, *, max_polls: int = 3, timeout: float = 1.0) -> Canary
     )
 
 
+@pytest.mark.parametrize("path", ["/health", "/version"])
+def test_drip_fed_checks_obey_total_operation_deadline(path: str) -> None:
+    with _server(drip_path=path) as api_url:
+        config = _config(api_url, timeout=0.3)
+        started = time.monotonic()
+        result = run_canary(config)
+        elapsed = time.monotonic() - started
+
+    assert result == {"result": "error", "error": "deadline_exceeded"}
+    # Both bodies take over 0.6s to drip in full, despite each read making progress.
+    assert elapsed < config.timeout_seconds + 0.15
+    assert all(method == "GET" for method, _ in _Handler.paths)
+    assert _Handler.paths[-1] == ("GET", path)
+
+
+def test_drip_fed_cleanup_obeys_total_deadline_and_exposes_exact_recovery_handle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("better_hermes_hindsight.canary.secrets.token_hex", lambda _count: "a" * 32)
+    document_id = "better-hindsight-canary-" + "a" * 32
+    path = "/v1/default/banks/isolated-canary-bank/documents/" + document_id
+    with _server(drip_path=path) as api_url:
+        config = _config(api_url, timeout=0.4)
+        started = time.monotonic()
+        result = run_canary(config)
+        elapsed = time.monotonic() - started
+
+    assert result["error"] == "cleanup_failed"
+    assert result["cleanup_document_id"] == document_id == _Handler.document_id
+    assert _Handler.paths[-1] == ("DELETE", path)
+    assert elapsed < config.timeout_seconds + 0.15
+    _assert_private_absent(result)
+
+
+@pytest.mark.parametrize("path", ["/health", "/version", "/cleanup"])
+def test_auxiliary_transport_rejects_oversized_bodies(path: str) -> None:
+    oversized = {"padding": "x" * (canary_module._MAX_BODY_BYTES + 1)}
+    with (
+        _server(health=oversized, version=oversized, cleanup_override=oversized) as api_url,
+        pytest.raises(ValueError, match="response_too_large"),
+    ):
+        canary_module._request_json(
+            _config(api_url), "DELETE" if path == "/cleanup" else "GET", path, timeout=1.0
+        )
+
+
+@pytest.mark.parametrize("stage", ["preflight", "adapter"])
+def test_canary_dns_wait_does_not_escape_total_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+) -> None:
+    import socket
+
+    import aiohttp
+
+    lookups: list[str] = []
+
+    async def delayed_resolve(
+        _self: object, host: str, *_args: object, **_kwargs: object
+    ) -> object:
+        lookups.append(host)
+        await asyncio.Future()
+        raise AssertionError("synthetic resolver unexpectedly resumed")
+
+    def forbidden_system_lookup(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("canary must not use an uninterruptible system DNS executor")
+
+    monkeypatch.setattr(aiohttp.AsyncResolver, "resolve", delayed_resolve)
+    monkeypatch.setattr(socket, "getaddrinfo", forbidden_system_lookup)
+    config = CanaryConfig(
+        api_url="http://synthetic-dns.invalid",
+        bank_id="synthetic-bank",
+        timeout_seconds=0.3,
+        cleanup_timeout_seconds=0.1,
+    )
+    started = time.monotonic()
+    if stage == "preflight":
+        result = run_canary(config)
+        assert result == {"result": "error", "error": "deadline_exceeded"}
+    else:
+        result = asyncio.run(
+            canary_module._run_adapter_cycle(
+                config,
+                api_version="0.9.2",
+                attempt=canary_module._CanaryAttemptState(),
+                document_id="synthetic-doc",
+                marker="synthetic marker",
+                tag="synthetic-tag",
+                operation_deadline=started + 0.2,
+            )
+        )
+        assert result == {"result": "error", "error": "retain_timeout"}
+    assert time.monotonic() - started < 0.6
+    assert lookups == ["synthetic-dns.invalid"]
+
+
+def test_cleanup_does_not_dispatch_after_total_deadline() -> None:
+    with _server() as api_url:
+        ok, _duration = canary_module._cleanup(
+            _config(api_url), document_id="synthetic-expired", deadline=time.monotonic() - 1
+        )
+    assert not ok
+    assert _Handler.paths == []
+
+
 @pytest.mark.parametrize("value", [math.nan, math.inf, -math.inf])
 @pytest.mark.parametrize(
     "field",
@@ -177,7 +293,8 @@ def test_canary_rejects_non_finite_timing(field: str, value: float) -> None:
         CanaryConfig(**values)  # type: ignore[arg-type]
 
 
-def test_canary_rejects_redirect_without_forwarding_authorization() -> None:
+@pytest.mark.parametrize("method", ["GET", "DELETE"])
+def test_canary_rejects_redirect_without_forwarding_authorization(method: str) -> None:
     observed_authorization: list[str | None] = []
 
     class Target(BaseHTTPRequestHandler):
@@ -188,6 +305,8 @@ def test_canary_rejects_redirect_without_forwarding_authorization() -> None:
             observed_authorization.append(self.headers.get("authorization"))
             self.send_response(200)
             self.end_headers()
+
+        do_DELETE = do_GET
 
     target = ThreadingHTTPServer(("127.0.0.1", 0), Target)
 
@@ -200,6 +319,8 @@ def test_canary_rejects_redirect_without_forwarding_authorization() -> None:
             self.send_header("location", f"http://127.0.0.1:{target.server_port}/captured")
             self.end_headers()
 
+        do_DELETE = do_GET
+
     redirect = ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
     threads = [
         threading.Thread(target=target.serve_forever),
@@ -208,7 +329,13 @@ def test_canary_rejects_redirect_without_forwarding_authorization() -> None:
     for thread in threads:
         thread.start()
     try:
-        result = run_canary(_config(f"http://127.0.0.1:{redirect.server_port}"))
+        config = _config(f"http://127.0.0.1:{redirect.server_port}")
+        if method == "GET":
+            result = run_canary(config)
+            assert result == {"error": "request_failed", "result": "error"}
+        else:
+            with pytest.raises(ValueError, match="response_invalid"):
+                canary_module._request_json(config, method, "/cleanup", timeout=1.0)
     finally:
         redirect.shutdown()
         target.shutdown()
@@ -217,7 +344,6 @@ def test_canary_rejects_redirect_without_forwarding_authorization() -> None:
         redirect.server_close()
         target.server_close()
 
-    assert result == {"error": "request_failed", "result": "error"}
     assert observed_authorization == []
 
 
@@ -226,8 +352,14 @@ def _assert_private_absent(result: dict[str, object]) -> None:
     assert _PRIVATE not in rendered
     if _Handler.marker:
         assert _Handler.marker not in rendered
-    if _Handler.document_id:
-        assert _Handler.document_id not in rendered
+    if result.get("error") == "cleanup_failed":
+        assert result["cleanup_document_id"] == _Handler.document_id
+        assert _Handler.document_id.startswith("better-hindsight-canary-")
+        assert len(_Handler.document_id) == len("better-hindsight-canary-") + 32
+    else:
+        assert "cleanup_document_id" not in result
+        if _Handler.document_id:
+            assert _Handler.document_id not in rendered
     assert not any(tag in rendered for tag in _Handler.tags)
 
 

@@ -13,6 +13,7 @@ import sys
 import threading
 from collections.abc import Iterator, Mapping
 from pathlib import Path
+from types import SimpleNamespace
 from typing import NoReturn, cast
 
 import pytest
@@ -39,6 +40,7 @@ from better_hermes_hindsight.plan_mailbox import (
     PlanAction,
     PlanMode,
 )
+from better_hermes_hindsight.planner import RecallPlanner
 from better_hermes_hindsight.provider import (
     AUTHORIZATION_INACTIVE_DIAGNOSTIC,
     CONFIG_INACTIVE_DIAGNOSTIC,
@@ -409,6 +411,50 @@ def test_active_planner_skip_or_reuse_avoids_remote_recall(
     assert handle.recalls == []
     assert provider.recall_status() is None
     assert mailbox.consume(source_query="Why?", session_id="session-a") is None
+
+
+@pytest.mark.parametrize("failure", ["exception", "timeout", "invalid", "late"])
+@pytest.mark.parametrize("mode", ["active", "shadow"])
+def test_planner_failure_falls_back_to_bounded_direct_recall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str, mode: str
+) -> None:
+    document = _base_config()
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
+    document["planner"] = {"mode": mode, "timeout_seconds": 0.5}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    now = [10.0]
+
+    class FailingLlm:
+        def complete_structured(self, **kwargs: object) -> object:
+            assert 0 < cast(float, kwargs["timeout"]) <= 0.5
+            if failure == "exception":
+                raise RuntimeError("synthetic planner failure")
+            if failure == "timeout":
+                raise TimeoutError("synthetic planner timeout")
+            if failure == "late":
+                now[0] += 0.6
+                return SimpleNamespace(parsed={"action": "skip"})
+            return SimpleNamespace(parsed={"action": "recall", "query": ""})
+
+    query = "What backup policy did we choose? " * 8
+    planner = RecallPlanner(tmp_path, FailingLlm(), monotonic=lambda: now[0])
+    planner.on_pre_llm_call(user_message=query, session_id="session-a", turn_id="turn-a")
+    assert provider.prefetch(query)
+    assert len(handle.recalls) == 1
+    projected, timeout = handle.recalls[0]
+    assert len(projected) <= 96
+    assert projected.startswith("What backup policy")
+    assert QUERY_OMISSION_MARKER in projected
+    assert 0 < timeout <= 1.0
+    # Consumption closes even a cancelled turn: a retried hook cannot publish later.
+    assert (
+        InMemoryPlanMailbox(tmp_path).begin_turn(session_id="session-a", turn_id="turn-a") is None
+    )
+    provider.shutdown()
 
 
 def test_active_planner_recall_uses_only_rewritten_query(

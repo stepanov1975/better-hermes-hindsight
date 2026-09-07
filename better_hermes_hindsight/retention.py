@@ -280,26 +280,52 @@ def _semantic_contents(
                 raise _RetentionCapacityExceeded from None
             continue
 
-        for paragraph in _semantic_paragraphs(role.content):
+        packed = ""
+        packed_content = ""
+        for separator, paragraph in _semantic_paragraphs(role.content):
+            candidate = packed + separator + paragraph if packed else paragraph
             content = _event_content(
                 common=common,
-                roles=(_role_payload(role, content=paragraph),),
+                roles=(_role_payload(role, content=candidate),),
             )
             if len(content.encode("utf-8")) > max_bytes:
-                raise _RetentionCapacityExceeded from None
-            contents.append(content)
-            if segment_count_limit is not None and len(contents) > segment_count_limit:
-                raise _RetentionCapacityExceeded from None
+                if packed:
+                    contents.append(packed_content)
+                    if segment_count_limit is not None and len(contents) >= segment_count_limit:
+                        raise _RetentionCapacityExceeded from None
+                candidate = paragraph
+                content = _event_content(
+                    common=common, roles=(_role_payload(role, content=paragraph),)
+                )
+                if len(content.encode("utf-8")) > max_bytes:
+                    raise _RetentionCapacityExceeded from None
+            packed = candidate
+            packed_content = content
+        contents.append(packed_content)
+        if segment_count_limit is not None and len(contents) > segment_count_limit:
+            raise _RetentionCapacityExceeded from None
     if not contents:
         _reject()
     return tuple(contents)
 
 
-def _semantic_paragraphs(text: str) -> tuple[str, ...]:
-    paragraphs = tuple(part for part in _PARAGRAPH_SEPARATOR_PATTERN.split(text) if part.strip())
+def _semantic_paragraphs(text: str) -> tuple[tuple[str, str], ...]:
+    """Keep original separators within packs; record boundaries replace separators between packs."""
+
+    paragraphs: list[tuple[str, str]] = []
+    start = 0
+    separator = ""
+    for match in _PARAGRAPH_SEPARATOR_PATTERN.finditer(text):
+        paragraph = text[start : match.start()]
+        if paragraph.strip():
+            paragraphs.append((separator, paragraph))
+        separator = match.group()
+        start = match.end()
+    if text[start:].strip():
+        paragraphs.append((separator, text[start:]))
     if not paragraphs:
         _reject()
-    return paragraphs
+    return tuple(paragraphs)
 
 
 def _event_content(

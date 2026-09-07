@@ -136,10 +136,13 @@ process-local handoff; no Hermes core patch or second package installation is re
   self-contained query before the normal provider bounds and request path.
 
 In every mode, a turn that Hermes identifies as the session's first turn bypasses the planner and follows
-the ordinary direct-query recall path. First-turn rewriting is intentionally excluded until a controlled
+the ordinary direct-query recall path. Trivial prompts bypass the auxiliary model as well.
+First-turn rewriting is intentionally excluded until a controlled
 original-query-versus-rewritten-query evaluation demonstrates better retrieval quality.
 
-The planner receives Hermes's clean original `user_message` and preserves user-authored marker text. It
+The planner uses Hermes's skill-scaffolding normalization on the current `user_message` and user
+history, matching the instruction-only query passed to provider recall. Other user-authored marker
+text is preserved. It
 reads only ordinary string-valued `content` from user/assistant history, never provider-expanded
 `api_content`; system/developer/tool roles, tool-call scaffolding, and non-text turns are excluded. It
 inspects at most eight history rows per configured exchange and clips each accepted text before
@@ -189,9 +192,9 @@ the exact rebound session identity, so sibling plans cannot cross; an incomplete
 direct-query recall.
 Opaque activation tokens let one provider handle shut down without deauthorizing a live sibling handle.
 A missing, stale, mismatched, malformed, or late plan preserves direct current-query recall rather than
-breaking the turn. In active mode, a planner timeout, exception, or invalid structured result finalizes a
-bounded `skip` while that turn's reservation still exists. The atomic publication deadline rejects late
-model-derived `recall` or `reuse` decisions without blocking this deterministic failure policy. Provider
+breaking the turn. In both shadow and active mode, a planner timeout, exception, or invalid structured
+result cancels its reservation and falls back to ordinary bounded direct recall. A valid, timely
+`skip` or `reuse` still avoids a Hindsight request in active mode; every late decision is rejected. Provider
 consumption atomically cancels a pending reservation, so a hook thread abandoned by Hermes cannot publish
 a result into a later turn.
 
@@ -412,8 +415,9 @@ The callback ignores the raw `messages` transcript and uses only its direct non-
 assistant text arguments. Before hashing, segmentation, or SQLite admission, both role texts and the
 configured low-cardinality tags pass through the same deliberately narrow deterministic redactor
 described above. Each callback captures one random event ID and one fixed-width UTC occurrence time.
-The encoder first tries one complete event record, then complete role records, then paragraph records
-split only at common blank-line boundaries. Every emitted `better-hindsight-retained-event-v2`
+The encoder first tries one complete event record, then complete role records, then greedily packs
+adjacent complete paragraphs into records up to the byte budget. Original blank-line separators are
+preserved inside each pack; record boundaries replace separators between packs. Every emitted `better-hindsight-retained-event-v2`
 content value is complete compact UTF-8 JSON containing the payload schema, event identity,
 occurrence time, SHA-256 of the raw session identifier, sorted tags, and its retained role content.
 The raw session identifier is not stored. If any semantic unit plus its wrapper cannot fit, or the

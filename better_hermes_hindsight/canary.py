@@ -10,12 +10,12 @@ import os
 import secrets
 import sys
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, cast
+
+import aiohttp
 
 from .client import (
     HindsightClientError,
@@ -29,23 +29,6 @@ from .config import BetterHindsightConfig, RecallConfig, RetainConfig
 SUPPORTED_HINDSIGHT_API_VERSIONS: Final = frozenset({"0.8.5", "0.9.1", "0.9.2"})
 _MAX_BODY_BYTES: Final = 64 * 1024
 _MAX_OUTPUT_VALUE: Final = 2_147_483_647
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(
-        self,
-        req: urllib.request.Request,
-        fp: object,
-        code: int,
-        msg: str,
-        headers: object,
-        newurl: str,
-    ) -> None:
-        del req, fp, code, msg, headers, newurl
-        return None
-
-
-_OPENER = urllib.request.build_opener(_NoRedirect)
 
 
 @dataclass(frozen=True, slots=True)
@@ -107,21 +90,31 @@ def _request_json(
     if payload is not None:
         data = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("ascii")
         headers["content-type"] = "application/json"
-    request = urllib.request.Request(
-        config.api_url.rstrip("/") + path,
-        data=data,
-        headers=headers,
-        method=method,
-    )
-    try:
-        with _OPENER.open(request, timeout=max(0.001, timeout)) as response:
-            status = response.status
-            body = response.read(_MAX_BODY_BYTES + 1)
-    except urllib.error.HTTPError as error:
-        status = error.code
-        body = error.read(_MAX_BODY_BYTES + 1)
-    if len(body) > _MAX_BODY_BYTES:
-        raise ValueError("response_too_large")
+
+    async def request() -> tuple[int, bytearray]:
+        # Total timeout covers headers and the entire body, including drip-fed responses.
+        # Disable aiohttp's deadline rounding so longer budgets remain exact too.
+        async with (
+            aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=timeout, ceil_threshold=math.inf),
+                trust_env=False,
+            ) as session,
+            session.request(
+                method,
+                config.api_url.rstrip("/") + path,
+                data=data,
+                headers=headers,
+                allow_redirects=False,
+            ) as response,
+        ):
+            body = bytearray()
+            async for chunk in response.content.iter_chunked(_MAX_BODY_BYTES + 1):
+                body.extend(chunk)
+                if len(body) > _MAX_BODY_BYTES:
+                    raise ValueError("response_too_large")
+            return response.status, body
+
+    status, body = asyncio.run(request())
     try:
         return status, json.loads(body)
     except (UnicodeDecodeError, json.JSONDecodeError):
@@ -275,7 +268,7 @@ def _cleanup(config: CanaryConfig, *, document_id: str, deadline: float) -> tupl
             f"{_bank_path(config)}/documents/{document}",
             timeout=min(
                 config.cleanup_timeout_seconds,
-                max(0.001, deadline - time.monotonic()),
+                _remaining(deadline),
             ),
         )
         valid = (
@@ -292,7 +285,7 @@ def _cleanup(config: CanaryConfig, *, document_id: str, deadline: float) -> tupl
 
 
 def run_canary(config: CanaryConfig) -> dict[str, object]:
-    """Run one strict canary and return only fixed categories and bounded numeric metadata."""
+    """Return bounded diagnostics, plus the synthetic document ID if cleanup fails."""
 
     started = time.monotonic()
     deadline = started + config.timeout_seconds
@@ -356,6 +349,7 @@ def run_canary(config: CanaryConfig) -> dict[str, object]:
             if not cleanup_ok:
                 result["result"] = "error"
                 result["error"] = "cleanup_failed"
+                result["cleanup_document_id"] = document_id
 
 
 def main() -> int:

@@ -31,7 +31,7 @@ from .telemetry import deployed_identity, error_counts
 
 _T = TypeVar("_T")
 _MissionField = Literal["retain_mission", "observations_mission"]
-_MissionState = Literal["equal", "drift", "missing", "error"]
+_MissionState = Literal["equal", "drift", "missing", "unmanaged", "error"]
 
 
 class _OperatorRuntime(Protocol):
@@ -216,7 +216,12 @@ def _status_payload(
     degraded = (
         inspection.mismatch_count > 0
         or inspection.retry_count > 0
-        or inspection.sending_count > 0
+        or (
+            inspection.sending_count > 0
+            and (
+                inspection.sender_ownership != "held" or inspection.last_error_category is not None
+            )
+        )
         or (queued_count > 0 and age_bucket in {"1h_to_lt_24h", "gte_24h"})
         or (due_work and inspection.sender_ownership == "unavailable")
     )
@@ -298,10 +303,12 @@ def _failed_check_result(config: BetterHindsightConfig) -> ManagementResult:
         payload={
             "command": "missions_check",
             "observations_mission": (
-                "error" if config.missions.observations_mission is not None else "missing"
+                "error" if config.missions.observations_mission is not None else "unmanaged"
             ),
             "result": "error",
-            "retain_mission": "error" if config.missions.retain_mission is not None else "missing",
+            "retain_mission": "error"
+            if config.missions.retain_mission is not None
+            else "unmanaged",
         },
         exit_code=3,
     )
@@ -321,6 +328,8 @@ def _check_result(
         overall = "missing"
     elif "drift" in states:
         overall = "drift"
+    elif states == ("unmanaged", "unmanaged"):
+        overall = "unmanaged"
     else:
         overall = "equal"
     return ManagementResult(
@@ -330,13 +339,13 @@ def _check_result(
             "result": overall,
             "retain_mission": retain_state,
         },
-        exit_code=0 if overall == "equal" else 1,
+        exit_code=0 if overall in {"equal", "unmanaged"} else 1,
     )
 
 
 def _field_state(desired: str | None, remote: MissionValue) -> _MissionState:
     if desired is None:
-        return "missing"
+        return "unmanaged"
     if not remote.present or remote.value is None or not remote.value.strip():
         return "missing"
     if remote.value == desired:

@@ -615,3 +615,78 @@ def test_only_explicit_process_finalization_closes_client_once_on_owning_loop(
     assert reset_process_runtime_for_tests() is True
     assert reset_process_runtime_for_tests() is False
     assert factory.clients[0].close_loops == [factory.loops[0]]
+
+
+def test_finalization_bounds_resistant_client_close_and_can_retry(tmp_path: Path) -> None:
+    release = threading.Event()
+    cancelled = threading.Event()
+
+    class ResistantClose(_FakeClient):
+        async def close(self) -> None:
+            self.close_loops.append(asyncio.get_running_loop())
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                cancelled.set()
+                await asyncio.to_thread(release.wait)
+
+    factory = _RecordingFactory(ResistantClose)
+    handle = acquire_process_runtime(_config(tmp_path), client_factory=factory)
+    runtime = handle.runtime
+    runtime._shutdown_timeout = 0.03
+    try:
+        started = time.monotonic()
+        with pytest.raises(runtime_module.SenderStopError):
+            finalize_process_runtime()
+        assert time.monotonic() - started < 0.15
+        assert cancelled.wait(timeout=1.0)
+        assert runtime._closed is False
+        assert runtime._runner._thread.is_alive()
+        assert runtime_module._ACTIVE_RUNTIME is runtime
+        with pytest.raises(runtime_module.RuntimeFinalizedError):
+            handle.recall("no new work", timeout=1.0)
+        release.set()
+        assert runtime._runner.wait_for_settlement(timeout=1.0)
+        runtime._shutdown_timeout = 1.0
+        assert finalize_process_runtime() is True
+        assert len(factory.clients[0].close_loops) == 1
+        assert not runtime._runner._thread.is_alive()
+    finally:
+        release.set()
+        runtime._runner.wait_for_settlement(timeout=1.0)
+        runtime._shutdown_timeout = 1.0
+
+
+def test_runner_shutdown_join_is_bounded_and_retriable() -> None:
+    runner = AsyncRunner()
+    started = threading.Event()
+    cancelled = threading.Event()
+    release = threading.Event()
+
+    async def background_cleanup() -> None:
+        started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            cancelled.set()
+            await asyncio.to_thread(release.wait)
+
+    async def spawn() -> None:
+        asyncio.create_task(background_cleanup())
+
+    try:
+        runner.run(spawn, timeout=1.0)
+        assert started.wait(timeout=1.0)
+        before = time.monotonic()
+        with pytest.raises(runtime_module.SenderStopError):
+            runner.shutdown(timeout=0.03)
+        assert time.monotonic() - before < 0.15
+        assert cancelled.wait(timeout=1.0)
+        assert runner._thread.is_alive()
+        release.set()
+        runner.shutdown(timeout=1.0)
+        assert not runner._thread.is_alive()
+        assert runner.shutdown(timeout=0.0) is False
+    finally:
+        release.set()
+        runner.shutdown(timeout=1.0)
