@@ -112,11 +112,12 @@ Unknown keys, wrong types, unsupported enum values, duplicate principal tuples, 
 and invalid ranges are errors rather than silent fallbacks.
 
 `recall.input_max_chars` is the local pre-tokenization safety bound. `recall.input_max_tokens` is a
-separate input-query limit and defaults to the 500-token default used by Hindsight 0.8.5, 0.9.1,
-and 0.9.2.
-Better counts with the same `cl100k_base` encoding and treats special-token-looking literals as
-ordinary text. Keep this value at or below the server's
-`HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS`. The existing `recall.max_tokens` setting controls the
+separate input-query limit and defaults to the server's 500-token default. Better always counts
+with its packaged `cl100k_base` encoding and treats special-token-looking literals as ordinary text.
+Hindsight 0.10.0 **requires server-side `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`** before
+startup to match; setting it only in Hermes does not configure the server. Older supported versions
+use `cl100k_base` by default. See [compatibility](compatibility.md) for verification and limitations.
+Keep this value at or below the server's `HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS`. The existing `recall.max_tokens` setting controls the
 response budget; it does not limit query input.
 
 ## Context-aware recall planner

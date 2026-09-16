@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -28,6 +29,7 @@ from aiohttp import ClientSession, ClientTimeout
 from better_hermes_hindsight.canary import SUPPORTED_HINDSIGHT_API_VERSIONS
 from better_hermes_hindsight.client import HindsightClientError, create_hindsight_client
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
+from better_hermes_hindsight.formatting import count_query_tokens, project_query
 from better_hermes_hindsight.management import apply_missions, check_missions
 from better_hermes_hindsight.outbox import OutboxRow, ProfileLockOwner, SQLiteOutbox
 from better_hermes_hindsight.retention import RetainedSegment, build_retained_segments
@@ -46,6 +48,8 @@ import sys
 import types
 class _Marker:
     def __getattr__(self, _name):
+        return lambda function: function
+    def parametrize(self, *args, **kwargs):
         return lambda function: function
 sys.modules["pytest"] = types.SimpleNamespace(mark=_Marker())
 try:
@@ -181,6 +185,65 @@ def _live_session(inputs: DevelopmentInputs) -> ClientSession:
     )
 
 
+async def _listed_bank(session: ClientSession, inputs: DevelopmentInputs) -> dict[str, Any] | None:
+    """Prove presence/absence using the authenticated bank list, never config defaults.
+
+    0.8.5/0.9.1 return the whole list; 0.9.2/0.10.0 paginate. The latter's `q`
+    matches substrings, not exact IDs, so exhaust and validate the filtered listing.
+    Config reads are not a cross-version existence oracle and contain no name;
+    /profile is retired in 0.10.0. Mission readback separately uses /config.
+    """
+    paginated = inputs.expected_version in {"0.9.2", "0.10.0"}
+    offset = 0
+    total: int | None = None
+    banks: dict[str, dict[str, Any]] = {}
+    while True:
+        url = f"{inputs.api_url}/v1/default/banks"
+        if paginated:
+            url += f"?q={quote(inputs.bank_id, safe='')}&limit=100&offset={offset}"
+        status, listed = await _raw_json(session, "GET", url)
+        if status != 200 or listed is None or not isinstance(listed.get("banks"), list):
+            raise AssertionError("Hindsight did not return a complete bank list")
+        items = listed["banks"]
+        for item in items:
+            if not isinstance(item, dict) or not isinstance(item.get("bank_id"), str):
+                raise AssertionError("Hindsight returned a malformed bank identity")
+            bank_id = item["bank_id"]
+            if not bank_id or bank_id in banks:
+                raise AssertionError("Hindsight returned a duplicate or empty bank identity")
+            banks[bank_id] = item
+        if not paginated:
+            break
+        page_total = listed.get("total")
+        if (
+            type(page_total) is not int
+            or page_total < 0
+            or type(listed.get("limit")) is not int
+            or listed["limit"] != 100
+            or type(listed.get("offset")) is not int
+            or listed["offset"] != offset
+            or len(items) > 100
+            or (total is not None and page_total != total)
+        ):
+            raise AssertionError("Hindsight returned inconsistent bank pagination")
+        total = page_total
+        offset += len(items)
+        if offset > total or (not items and offset < total):
+            raise AssertionError("Hindsight returned an incomplete bank list")
+        if offset == total:
+            break
+    return banks.get(inputs.bank_id)
+
+
+def _assert_owned_bank(bank: Mapping[str, Any] | None, inputs: DevelopmentInputs) -> None:
+    if (
+        bank is None
+        or bank.get("bank_id") != inputs.bank_id
+        or bank.get("name") != inputs.ownership_name
+    ):
+        raise AssertionError("bank did not match the live-test ownership marker")
+
+
 def _create_disposable_bank(inputs: DevelopmentInputs) -> None:
     async def create() -> None:
         async with _live_session(inputs) as session:
@@ -188,8 +251,7 @@ def _create_disposable_bank(inputs: DevelopmentInputs) -> None:
             if version is None or version.get("api_version") != inputs.expected_version:
                 raise AssertionError("isolated Hindsight server version did not match opt-in")
             bank_url = f"{inputs.api_url}/v1/default/banks/{quote(inputs.bank_id, safe='')}"
-            status, _profile = await _raw_json(session, "GET", f"{bank_url}/profile")
-            if status != 404:
+            if await _listed_bank(session, inputs) is not None:
                 raise AssertionError("generated disposable bank already exists")
             _status, created = await _raw_json(
                 session,
@@ -197,8 +259,8 @@ def _create_disposable_bank(inputs: DevelopmentInputs) -> None:
                 bank_url,
                 json_body={"name": inputs.ownership_name},
             )
-            if created is None or created.get("bank_id") != inputs.bank_id:
-                raise AssertionError("Hindsight created an unexpected bank")
+            _assert_owned_bank(created, inputs)
+            _assert_owned_bank(await _listed_bank(session, inputs), inputs)
 
     asyncio.run(create())
 
@@ -207,20 +269,12 @@ def _delete_disposable_bank(inputs: DevelopmentInputs) -> None:
     async def delete() -> None:
         async with _live_session(inputs) as session:
             bank_url = f"{inputs.api_url}/v1/default/banks/{quote(inputs.bank_id, safe='')}"
-            status, profile = await _raw_json(session, "GET", f"{bank_url}/profile")
-            if status == 404:
+            bank = await _listed_bank(session, inputs)
+            if bank is None:
                 return
-            assert profile is not None
-            if (
-                profile.get("bank_id") != inputs.bank_id
-                or profile.get("name") != inputs.ownership_name
-            ):
-                raise AssertionError(
-                    "refusing to delete a bank without the live-test ownership marker"
-                )
+            _assert_owned_bank(bank, inputs)
             await _raw_json(session, "DELETE", bank_url)
-            status, _profile = await _raw_json(session, "GET", f"{bank_url}/profile")
-            if status != 404:
+            if await _listed_bank(session, inputs) is not None:
                 raise AssertionError("isolated Hindsight bank still exists after cleanup")
 
     try:
@@ -322,6 +376,75 @@ def _assert_live_error_mapping(config: BetterHindsightConfig) -> None:
                     ) from None
             else:
                 raise AssertionError("live service error probe unexpectedly succeeded")
+        finally:
+            await client.close()
+
+    asyncio.run(probe())
+
+
+def _assert_live_tokenizer_boundary(
+    inputs: DevelopmentInputs, config: BetterHindsightConfig
+) -> None:
+    """Exercise the real REST validator; never patch its tokenizer or reported version.
+
+    This emoji is two cl100k_base tokens (one in the incompatible o200k_base
+    default). A real 502-token rejection therefore distinguishes the encodings.
+    The provider's actual projection must produce an accepted 500-token query.
+    """
+    # RecallRequest also requires a normalized word; an emoji-only raw request
+    # fails schema validation (422) before reaching the token-limit validator.
+    raw_query = "word " + "😀" * 251
+    projected = project_query(raw_query, max_chars=2048, max_tokens=500)
+    assert count_query_tokens(raw_query) == 502
+    assert count_query_tokens(projected) == 500
+
+    async def probe() -> None:
+        client = create_hindsight_client(config)
+        try:
+            await client.recall(projected)
+        finally:
+            await client.close()
+        # Bypass the provider projection only for this deliberately oversized request.
+        url = f"{inputs.api_url}/v1/default/banks/{quote(inputs.bank_id, safe='')}/memories/recall"
+        async with (
+            _live_session(inputs) as session,
+            session.post(
+                url,
+                json={"query": raw_query, "budget": "low", "max_tokens": 256},
+                allow_redirects=False,
+            ) as response,
+        ):
+            assert response.status == 400, "raw 502-token recall must be rejected"
+            payload = await response.json()
+            assert payload == {
+                "detail": "Query too long: 502 tokens exceeds maximum of 500. "
+                "Please shorten your query."
+            }, "server did not enforce the cl100k_base 500-token boundary"
+
+    asyncio.run(probe())
+
+
+def _assert_live_reflect(config: BetterHindsightConfig) -> None:
+    """Verify REST-to-adapter reflection decoding, not mock-LLM answer quality."""
+
+    async def probe() -> None:
+        client = create_hindsight_client(
+            replace(
+                config,
+                reflect=replace(
+                    config.reflect,
+                    enabled=True,
+                    tags=_RETAIN_TAGS,
+                    tag_mode="all_strict",
+                ),
+            )
+        )
+        try:
+            response = await client.reflect_with_timeout(
+                "What recovery phrase is used by the synthetic Northstar rehearsal?",
+                timeout_seconds=30.0,
+            )
+            assert response.text.strip(), "live reflection did not decode nonempty text"
         finally:
             await client.close()
 
@@ -499,12 +622,22 @@ def _assert_long_source_reconstructs(
 
 def _wait_for_useful_recall(provider: Any) -> None:
     deadline = time.monotonic() + _DRAIN_TIMEOUT_SECONDS
+    query = "What recovery phrase is used by the synthetic Northstar rehearsal?"
     while True:
-        context = provider.prefetch(
-            "What recovery phrase is used by the synthetic Northstar rehearsal?"
-        )
-        if "cobalt lantern" in context.casefold() and '"type":' in context:
-            return
+        context = provider.prefetch(query)
+        if "cobalt lantern" in context.casefold():
+            # Automatic prefetch deliberately omits type. The public explicit recall
+            # tool retains it: require useful data through BOTH real provider surfaces.
+            explicit = json.loads(
+                provider.handle_tool_call("better_hindsight_recall", {"query": query})
+            )
+            if explicit.get("result") == "ok" and any(
+                "cobalt lantern" in str(record.get("memory", "")).casefold()
+                and isinstance(record.get("type"), str)
+                and record["type"]
+                for record in explicit.get("memories", [])
+            ):
+                return
         if time.monotonic() >= deadline:
             raise AssertionError("live current-query recall was not useful")
         time.sleep(0.25)
@@ -526,6 +659,8 @@ def _run_live_child() -> int:
     try:
         home, config = _prepare_home(inputs)
         _assert_live_error_mapping(config)
+        if inputs.expected_version == "0.10.0":
+            _assert_live_tokenizer_boundary(inputs, config)
         expected_count = _expected_segment_count((_SHORT_TURN, _LONG_TURN))
         repeated_short_count = _expected_segment_count((_SHORT_TURN,))
 
@@ -558,16 +693,37 @@ def _run_live_child() -> int:
             raise AssertionError("repeated completed turn created an unexpected document count")
 
         _assert_live_mission_round_trip(config)
+        if inputs.expected_version == "0.10.0":
+            _assert_live_reflect(config)
+            reflected = _remote_documents(inputs, None)
+            if {key: value.get("original_text") for key, value in reflected.items()} != {
+                key: value.get("original_text") for key, value in replayed.items()
+            }:
+                raise AssertionError("reflection changed retained document identities or text")
         result = {
             "documents": len(documents),
             "segments": len(expected),
             "status": "ok",
             "version": inputs.expected_version,
         }
+        if inputs.expected_version == "0.10.0":
+            result.update(tokenizer_boundary="verified", reflect_adapter="verified")
         print(json.dumps(result, sort_keys=True))
         return 0
     except BaseException as exception:
-        print(json.dumps({"failure": type(exception).__name__, "status": "failed"}, sort_keys=True))
+        # Identify the failing gate without exposing exception messages or response data.
+        site = traceback.extract_tb(exception.__traceback__)[-1]
+        print(
+            json.dumps(
+                {
+                    "failure": type(exception).__name__,
+                    "failure_function": site.name,
+                    "failure_line": site.lineno,
+                    "status": "failed",
+                },
+                sort_keys=True,
+            )
+        )
         return 2
     finally:
         if manager is not None and provider is not None:
@@ -602,7 +758,10 @@ def test_live_proof_is_explicitly_opt_in() -> None:
         _development_inputs({"BETTER_HINDSIGHT_ALLOW_DEV_WRITES": "1"})
 
 
-def test_live_proof_preserves_selected_interpreter_symlink(tmp_path: Path) -> None:
+@pytest.mark.parametrize("expected_version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0"])
+def test_live_proof_preserves_selected_interpreter_symlink(
+    tmp_path: Path, expected_version: str
+) -> None:
     base_python = tmp_path / "base-python"
     base_python.write_text("#!/bin/sh\n", encoding="utf-8")
     base_python.chmod(0o700)
@@ -616,13 +775,29 @@ def test_live_proof_preserves_selected_interpreter_symlink(tmp_path: Path) -> No
             "BETTER_HINDSIGHT_ALLOW_DEV_WRITES": "1",
             "BETTER_HINDSIGHT_DEV_API_URL": "http://127.0.0.1:8888",
             "BETTER_HINDSIGHT_DEV_API_KEY": "synthetic-live-key",
-            "BETTER_HINDSIGHT_DEV_EXPECTED_VERSION": "0.9.1",
+            "BETTER_HINDSIGHT_DEV_EXPECTED_VERSION": expected_version,
             "BETTER_HINDSIGHT_DEV_HERMES_PYTHON": os.fspath(selected_python),
         }
     )
 
     assert inputs is not None
     assert inputs.hermes_python == selected_python.absolute()
+    assert inputs.expected_version == expected_version
+
+
+@pytest.mark.parametrize("version", ["0.9.3", "0.10.1", "0.10.0rc1", "0.11.0", "v0.10.0"])
+def test_live_proof_rejects_unsupported_version_before_interpreter_or_network(version: str) -> None:
+    with pytest.raises(RuntimeError, match="version is unsupported"):
+        _development_inputs(
+            {
+                "BETTER_HINDSIGHT_REQUIRE_LIVE_PROOF": "1",
+                "BETTER_HINDSIGHT_ALLOW_DEV_WRITES": "1",
+                "BETTER_HINDSIGHT_DEV_API_URL": "http://127.0.0.1:9",
+                "BETTER_HINDSIGHT_DEV_API_KEY": "synthetic-live-key",
+                "BETTER_HINDSIGHT_DEV_EXPECTED_VERSION": version,
+                "BETTER_HINDSIGHT_DEV_HERMES_PYTHON": "/nonexistent/python",
+            }
+        )
 
 
 def test_child_environment_does_not_forward_unrelated_credentials(
@@ -715,5 +890,8 @@ def test_isolated_hindsight_smoke(tmp_path: Path) -> None:
         assert payload["status"] == "ok"
         assert payload["version"] == inputs.expected_version
         assert payload["documents"] == payload["segments"]
+        if inputs.expected_version == "0.10.0":
+            assert payload["tokenizer_boundary"] == "verified"
+            assert payload["reflect_adapter"] == "verified"
     finally:
         _delete_disposable_bank(inputs)

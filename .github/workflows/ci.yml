@@ -115,22 +115,46 @@ jobs:
         run: .venv/bin/python -m pytest -p no:cacheprovider
 
   test-live-hindsight:
-    name: Python 3.13 / Hindsight 0.9.2 live
+    name: Python 3.13 / Hindsight ${{ matrix.hindsight-version }} live
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - hindsight-version: "0.9.2"
+            image: ghcr.io/vectorize-io/hindsight@sha256:84ab276b8f501546deb6ea9c64a57291718b4e16a59dd9e02a02fdd5adfe9028
+          - hindsight-version: "0.10.0"
+            image: ghcr.io/vectorize-io/hindsight@sha256:e34028bf84b5bc800029e5d3b13db2c469484dfe5b557b84c577d97fd6af1c74
 
     services:
-      hindsight:
-        image: ghcr.io/vectorize-io/hindsight@sha256:84ab276b8f501546deb6ea9c64a57291718b4e16a59dd9e02a02fdd5adfe9028
+      postgres:
+        image: pgvector/pgvector@sha256:12a379b47ad65289572ea0756efc11b7c241a6662833e8af7038cd3b73d647e0
         env:
+          POSTGRES_USER: synthetic
+          POSTGRES_PASSWORD: synthetic-ci-only
+          POSTGRES_DB: synthetic
+        options: >-
+          --health-cmd "pg_isready -U synthetic -d synthetic"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+      hindsight:
+        image: ${{ matrix.image }}
+        env:
+          HINDSIGHT_API_DATABASE_URL: postgresql://synthetic:synthetic-ci-only@postgres:5432/synthetic
+          HINDSIGHT_API_VECTOR_EXTENSION: pgvector
           HINDSIGHT_API_LLM_PROVIDER: mock
           HINDSIGHT_API_LLM_MODEL: mock-model
           HINDSIGHT_API_LLM_API_KEY: synthetic-ci-key
+          HINDSIGHT_API_TOKENIZER_ENCODING: cl100k_base
+          HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS: "500"
+          HINDSIGHT_ENABLE_CP: "false"
         ports:
-          - 8888:8888
+          - 127.0.0.1:8888:8888
         options: >-
-          --health-cmd "curl --fail --silent http://127.0.0.1:8888/health"
+          --health-cmd "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8888/health\", timeout=4)'"
           --health-interval 2s
           --health-timeout 5s
           --health-retries 90
@@ -166,7 +190,7 @@ jobs:
         run: |
           echo "Better $(git rev-parse HEAD)"
           echo "Hermes $(git -C .compat/hermes-current rev-parse HEAD)"
-          echo "Hindsight v0.9.2 ghcr.io/vectorize-io/hindsight@sha256:84ab276b8f501546deb6ea9c64a57291718b4e16a59dd9e02a02fdd5adfe9028"
+          echo "Hindsight ${{ matrix.hindsight-version }} ${{ matrix.image }}"
           curl --fail --silent --show-error http://127.0.0.1:8888/version
           echo
 
@@ -176,7 +200,7 @@ jobs:
           BETTER_HINDSIGHT_REQUIRE_LIVE_PROOF: "1"
           BETTER_HINDSIGHT_DEV_API_URL: http://127.0.0.1:8888
           BETTER_HINDSIGHT_DEV_API_KEY: synthetic-ci-key
-          BETTER_HINDSIGHT_DEV_EXPECTED_VERSION: "0.9.2"
+          BETTER_HINDSIGHT_DEV_EXPECTED_VERSION: ${{ matrix.hindsight-version }}
         run: |
           export BETTER_HINDSIGHT_DEV_HERMES_PYTHON="$PWD/.venv/bin/python"
           .venv/bin/python -m pytest -p no:cacheprovider tests/integration/test_isolated_hindsight.py

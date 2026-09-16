@@ -12,6 +12,7 @@ import time
 import warnings
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import ClassVar
 
@@ -19,7 +20,6 @@ import pytest
 
 from better_hermes_hindsight import canary as canary_module
 from better_hermes_hindsight.canary import (
-    SUPPORTED_HINDSIGHT_API_VERSIONS,
     CanaryConfig,
     run_canary,
 )
@@ -266,6 +266,23 @@ def test_canary_dns_wait_does_not_escape_total_deadline(
     assert lookups == ["synthetic-dns.invalid"]
 
 
+@pytest.mark.parametrize("version", ["0.8.4", "0.9.3", "0.10.1", "0.10.0rc1", "0.11.0", "v0.10.0"])
+def test_unsupported_versions_reject_config_and_preflight_without_writes(version: str) -> None:
+    with pytest.raises(ValueError, match="invalid canary destination"):
+        replace(_config("http://127.0.0.1:9"), expected_version=version)
+    with _server(version={"api_version": version}) as api_url:
+        result = run_canary(_config(api_url))
+    assert result["error"] == "version_invalid"
+    assert _Handler.paths == [("GET", "/health"), ("GET", "/version")]
+
+
+def test_supported_but_unexpected_version_rejects_before_writes() -> None:
+    with _server(version={"api_version": "0.10.0"}) as api_url:
+        result = run_canary(replace(_config(api_url), expected_version="0.9.2"))
+    assert result["error"] == "version_invalid"
+    assert _Handler.paths == [("GET", "/health"), ("GET", "/version")]
+
+
 def test_cleanup_does_not_dispatch_after_total_deadline() -> None:
     with _server() as api_url:
         ok, _duration = canary_module._cleanup(
@@ -363,12 +380,12 @@ def _assert_private_absent(result: dict[str, object]) -> None:
     assert not any(tag in rendered for tag in _Handler.tags)
 
 
-@pytest.mark.parametrize("api_version", sorted(SUPPORTED_HINDSIGHT_API_VERSIONS))
+@pytest.mark.parametrize("api_version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0"])
 def test_canary_uses_exact_protocol_proves_owned_recall_and_validates_cleanup(
     api_version: str,
 ) -> None:
     with _server(visible_after=2, version={"api_version": api_version}) as api_url:
-        result = run_canary(_config(api_url))
+        result = run_canary(replace(_config(api_url), expected_version=api_version))
 
     assert result["result"] == "ok"
     assert result["version"] == api_version

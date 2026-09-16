@@ -4,6 +4,21 @@ Notable user-visible changes are recorded here. The project follows rolling `mai
 
 ## Unreleased
 
+### Changed
+
+- Support exact Hindsight 0.10.0 in server-side `cl100k_base` compatibility mode, preserving
+  support for 0.8.5, 0.9.1 and 0.9.2. The new server's default `o200k_base` tokenizer remains
+  unsupported; no Better runtime dependency or tokenizer changes are required.
+- Extend isolated live proof and the scheduled/manual CI matrix to 0.10.0, including a real
+  tokenizer-boundary check, reflection adapter decoding, durable retention/replay and cleanup.
+  Use digest-pinned PostgreSQL 18.4 / pgvector 0.8.5 and curl-independent readiness probes.
+
+### Fixed
+
+- Use version-appropriate bank listings for live-test existence and ownership checks instead of
+  the `/profile` endpoint removed in 0.10.0; validate pagination before claiming absence.
+- Check useful automatic recall and typed explicit recall on their respective public surfaces.
+
 ## 0.6.2 - 2026-09-07
 
 ### Changed

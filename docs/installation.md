@@ -8,7 +8,9 @@ procedure.
 ## Prerequisites
 
 - Hermes installed and working;
-- an external Hindsight 0.8.5, 0.9.1, or 0.9.2 service;
+- an external Hindsight 0.8.5, 0.9.1, 0.9.2, or 0.10.0 service;
+- for 0.10.0, **server-side** `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base` before startup;
+  the default `o200k_base` is unsupported (see [compatibility](compatibility.md));
 - `git` available for Hermes's Git-plugin installer.
 
 The plugin declares `aiohttp>=3.14.1,<4`, `aiodns>=4.0.4,<5`, and `tiktoken>=0.12,<0.15` in `plugin.yaml`. Hermes checks

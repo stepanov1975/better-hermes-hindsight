@@ -154,6 +154,18 @@ def _recall_result_payload() -> dict[str, object]:
         "chunk_id": None,
         "tags": ["fixture"],
         "source_fact_ids": ["fact-1"],
+        # Additive 0.10.0 response data must neither escape nor trigger an asset fetch.
+        "attachments": [
+            {
+                "id": "synthetic-attachment",
+                "hash": "a" * 64,
+                "kind": "image",
+                "media_type": "image/png",
+                "byte_size": 1,
+                "filename": None,
+                "url": "/v1/default/banks/sample-bank/attachments/synthetic-attachment",
+            }
+        ],
         "scores": {"final": 0.9, "reranker": 1, "semantic": None, "keyword": 0.2},
     }
 
@@ -308,7 +320,7 @@ def test_recall_serializes_full_contract_and_decodes_internal_models(tmp_path: P
     ]
 
 
-@pytest.mark.parametrize("supported_version", ["0.8.5", "0.9.1", "0.9.2"])
+@pytest.mark.parametrize("supported_version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0"])
 def test_reflect_uses_exact_bounded_wire_contract_and_native_timeout(
     tmp_path: Path,
     supported_version: str,
@@ -328,13 +340,16 @@ def test_reflect_uses_exact_bounded_wire_contract_and_native_timeout(
     )
     transport = _RecordingTransport()
     path = "/v1/default/banks/bank%2Fwith%20spaces/reflect"
-    transport.responses[("POST", path)] = {
+    payload: dict[str, object] = {
         "text": f"reasoned synthesis from {supported_version}",
         "based_on": {"ignored_fixture_version": supported_version},
         "structured_output": {"must": "not escape"},
         "usage": {"ignored_fixture_version": supported_version},
         "trace": {"ignored_fixture_version": supported_version},
     }
+    if supported_version == "0.10.0":
+        payload["structured_output_error"] = "ignored upstream detail"
+    transport.responses[("POST", path)] = payload
     adapter = HindsightClientAdapter(config=config, transport=transport)
 
     response = asyncio.run(adapter.reflect_with_timeout("reflection query", timeout_seconds=7.5))

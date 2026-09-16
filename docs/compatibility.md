@@ -19,12 +19,15 @@ these behaviors through the real installed host where practical.
 
 ## Hindsight compatibility
 
-Better intentionally targets the exact external Hindsight 0.8.5, 0.9.1, and 0.9.2 HTTP contracts. It
+Better intentionally targets the exact external Hindsight 0.8.5, 0.9.1, 0.9.2, and 0.10.0 HTTP
+contracts. **0.10.0 requires server-side `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`**; its
+default `o200k_base` mode is unsupported. The isolated proof below remains a release/deployment gate;
+a version allowlist or short-query canary alone is not proof of tokenizer compatibility. Better
 implements only recall, read-only reflection, synchronous retain, bank-config read, and bank-config
 patch over `aiohttp`; it does not import or depend on the Hindsight Python SDK. Other Hindsight
 versions are unsupported until their used operations are reviewed and the isolated live proof passes.
 
-All three supported versions expose `POST /v1/default/banks/{bank_id}/reflect` with the narrow fields
+These versions expose `POST /v1/default/banks/{bank_id}/reflect` with the narrow fields
 Better uses: `query`, `budget`, `max_tokens`, and optional `tags`/`tags_match`. Their response requires
 one `text` field. Better omits tag groups, optional source facts, tool traces, response schemas,
 contextual policy, mental-model exclusions, and other caller controls. Hindsight 0.9.1 adds optional
@@ -45,10 +48,62 @@ Hindsight 0.9.2 adds optional `temporal_window` to recall requests and optional 
 retain requests. Better does not need either option and continues to omit both. The response fields
 Better consumes and the 500-token default query ceiling remain unchanged.
 
-All supported Hindsight versions validate recall query length with `tiktoken`'s `cl100k_base`
-encoding and treat special-token literals as ordinary text. Their default
-`HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS` is 500. Better applies the same count locally through the
-explicit `recall.input_max_tokens` setting before sending a request.
+### Hindsight 0.10.0 tokenizer compatibility mode
+
+The reviewed 0.10.0 wire subset remains compatible: retain still accepts strings, synchronous
+`async:false`, and `update_mode:"replace"`; recall attachments and reflection's optional
+`structured_output_error` are additive fields that Better ignores. Bank-config readback must still
+be proven on an existing isolated bank. Removed profile/background operations are not part of
+Better's runtime adapter; test infrastructure must not rely on them.
+
+Older supported servers use `cl100k_base`. Hindsight 0.10.0 changes the default vocabulary to
+`o200k_base` through `toktok-rs`. Better deliberately retains its packaged, hash-verified
+`cl100k_base` table and ordinary treatment of special-token literals; no new runtime dependency,
+encoding download, tokenizer selection, or per-query preflight is introduced.
+
+Set this on the **Hindsight server**, before process startup, not just in the Hermes environment:
+
+```text
+HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base
+```
+
+The server default `HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS` remains 500. Keep Better's
+`recall.input_max_tokens` at or below that independently configured ceiling. A larger ceiling or a
+character/token approximation does not restore the matching-tokenizer contract.
+
+The exact synthetic counterexample is `query = " tiktoken" * 250`: Better preserves it at its
+500-token limit. The reviewed 0.10.0 tokenizer counts **750** with default `o200k_base`, but **500**
+with compatibility `cl100k_base`, so the default REST recall handler rejects it with HTTP 400 at
+a 500-token ceiling. `<|endoftext|>` counts as ordinary text (seven tokens) in compatibility mode.
+The offline regression pins the counterexample's local count, unchanged projection at the boundary,
+and bounded projection above it; it does not pretend to execute a live server.
+
+Source review used upstream release commit
+[`5d46f9c8c8eb4fb96f549aa63abe1191b82a7840`](https://github.com/vectorize-io/hindsight/tree/5d46f9c8c8eb4fb96f549aa63abe1191b82a7840),
+particularly `hindsight-api-slim/hindsight_api/engine/token_encoding.py`, the recall handler in
+`api/http.py`, and `config_resolver.py`. Executing that tokenizer with its locked `toktok-rs==0.1.3`
+confirms the two counts; this is tokenizer execution and handler-source evidence, not live HTTP proof.
+
+### Verifying the server policy
+
+The reviewed API cannot attest the tokenizer: `/version` exposes version/features, `/health` reports
+health, and bank-config excludes the server-level tokenizer setting. The version allowlist and a
+passing short-query canary therefore do **not** certify tokenizer compatibility. Normal recall keeps
+its existing fail-open behavior and does not preflight server versions or settings.
+
+At deployment validation, inspect the running server's configuration for the encoding and query
+ceiling, then use an isolated bank and the exact boundary query above with a verified **500-token**
+server ceiling. Expect a successful recall in compatibility mode and a query-length HTTP 400 in
+default mode; an empty result set is acceptable, a swallowed fail-open error is not. An above-limit
+raw query (`" tiktoken" * 251`) must still fail with HTTP 400. Success with an unknown or enlarged
+ceiling alone cannot distinguish tokenizers. This one-time operator/integration check avoids adding
+load and latency to every recall or scheduled canary.
+
+Before declaring a compatible release/deployment, record exact Better and Hermes commits, candidate
+image digest and `/version`, server tokenizer/ceiling, boundary-query HTTP outcomes, and isolated
+retain → outbox restart/replay → recall, bank-config/mission readback, ownership, and cleanup results.
+Prove synthetic reflection separately if enabled. A default-mode negative control and the required
+migration/restore rehearsal belong in that evidence; offline or skipped live tests are not substitutes.
 
 The bundled provider can therefore keep Hermes's `hindsight-client==0.6.1` unchanged. Better is
 loaded directly from its standard Git-plugin checkout and needs no separate runtime or configuration
@@ -97,6 +152,6 @@ CI may follow Hermes `main` and therefore occasionally report an upstream compat
 ## Supported deployment
 
 The practical target is Linux/POSIX, one configured principal, one static bank, one Better-enabled
-profile per process, one external Hindsight 0.8.5, 0.9.1, or 0.9.2 service, and the normal Hermes
-memory-provider execution path. Other platforms and runtimes are best effort and do not block use in
+profile per process, one external Hindsight 0.8.5, 0.9.1, 0.9.2, or 0.10.0 service under the tokenizer
+policy above, and the normal Hermes memory-provider execution path. Other platforms and runtimes are best effort and do not block use in
 the intended environment.
