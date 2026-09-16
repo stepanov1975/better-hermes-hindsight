@@ -174,7 +174,9 @@ diagnostics. One process owns one exact Better configuration and runtime; anothe
 profile in that process fails open rather than crossing the profile boundary. The root entry point and
 `better_hermes_hindsight` implementation package are installed together by `hermes plugins install`;
 no second package installation or runtime environment is part of deployment. Better implements its
-narrow Hindsight 0.8.5/0.9.1/0.9.2 wire contract over `aiohttp` with cancellable `aiodns` resolution, uses `tiktoken` for bounded recall
+narrow Hindsight 0.8.5/0.9.1/0.9.2/0.10.0 wire contract (0.10.0 requires server
+`HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`) over `aiohttp` with cancellable `aiodns`
+resolution, uses `tiktoken` for bounded recall
 and reflection query projection, and does not import the Hindsight Python SDK, so the untouched bundled
 provider remains available.
 

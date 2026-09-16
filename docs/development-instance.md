@@ -23,6 +23,15 @@ export BETTER_HINDSIGHT_DEV_ALLOWED_ENDPOINTS=http://isolated-host:8888
 
 Do not reuse production endpoints, credentials, banks, or content. The API key value must never be printed.
 
+The exact version selector also accepts `0.10.0`, not arbitrary newer versions. For that candidate,
+start the isolated **server** with `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base` and verify its
+`HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS` ceiling. Neither this selector nor a healthy `/version`
+attests tokenizer policy. Run the one-time [boundary-query check](compatibility.md#verifying-the-server-policy)
+with a 500-token server ceiling, and record actual HTTP success/rejection rather than empty
+fail-open provider context. The development selector/offline tests alone are not live 0.10.0 proof.
+The scheduled/manual live matrix below covers 0.9.2 and 0.10.0 separately; an offline pass or skipped
+live test is not a substitute for either version's recorded live result.
+
 ## What the smoke test proves
 
 The test:
@@ -52,11 +61,14 @@ When `BETTER_HINDSIGHT_REQUIRE_LIVE_PROOF=1`, a missing opt-in input is a failur
 
 ## Automated compatibility proof
 
-The scheduled and manually dispatchable `Python 3.13 / Hindsight 0.9.2 live` CI job runs this same
-test against the release image pinned by digest in `.github/workflows/ci.yml`. The job uses Hindsight's
-real API, embedded PostgreSQL, local embeddings, and local reranker with its deterministic mock LLM,
-so it needs no third-party credentials. It checks out current Hermes `main` and records the exact
-Better commit, Hermes commit, Hindsight version response, and Hindsight image digest before testing.
+The scheduled and manually dispatchable `Python 3.13 / Hindsight ... live` CI matrix runs this same
+test against exact **0.9.2 and 0.10.0** release images pinned by digest in
+`.github/workflows/ci.yml`. Each lane owns a disposable PostgreSQL **18.4 / pgvector 0.8.5** service,
+uses Hindsight's real API, local embeddings and local reranker, and selects its deterministic mock
+LLM, so it needs no third-party credentials. The 0.10.0 lane explicitly selects `cl100k_base` and a
+500-token recall ceiling. The Python readiness probe works without curl inside the candidate image.
+The job checks out current Hermes `main` and records the exact Better commit, Hermes commit,
+Hindsight version response, and Hindsight image digest before testing.
 
 GitHub Actions owns the disposable service-container lifecycle. The test still creates and
 ownership-checks a random bank, deletes it in `finally`, and verifies absence; job teardown then removes

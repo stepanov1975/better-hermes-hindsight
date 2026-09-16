@@ -159,6 +159,22 @@ def test_query_token_count_matches_supported_hindsight_contract(
     assert count_query_tokens(query) == expected_tokens
 
 
+def test_hindsight_010_compatibility_query_keeps_exact_cl100k_boundary() -> None:
+    # Hindsight 0.10.0 token_encoding.py + locked toktok-rs 0.1.3 counts this as
+    # 750 with its default o200k_base, but 500 with cl100k_base compatibility mode.
+    # Preserve the actual counterexample, not a guessed character/token ratio.
+    query = " tiktoken" * 250
+    assert count_query_tokens(query) == 500
+    assert project_query(query, max_chars=4096, max_tokens=500) == query
+
+    over_limit = query + " tiktoken"
+    assert count_query_tokens(over_limit) == 502
+    projected = project_query(over_limit, max_chars=4096, max_tokens=500)
+    assert projected != over_limit
+    assert QUERY_OMISSION_MARKER in projected
+    assert 0 < count_query_tokens(projected) <= 500
+
+
 def test_query_token_count_uses_packaged_encoding_without_registry_download(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

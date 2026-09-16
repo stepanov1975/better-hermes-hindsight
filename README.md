@@ -9,7 +9,9 @@ The provider ID is `better_hindsight`, deliberately separate from bundled `hinds
 
 ## Quick start
 
-You need a working Hermes installation and an external Hindsight 0.8.5, 0.9.1, or 0.9.2 service.
+You need a working Hermes installation and an external Hindsight 0.8.5, 0.9.1, 0.9.2, or 0.10.0 service.
+**Hindsight 0.10.0 requires server-side `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`;
+its default tokenizer is incompatible.** See [compatibility and validation status](docs/compatibility.md).
 
 ```bash
 hermes plugins install --enable stepanov1975/better-hermes-hindsight
@@ -108,7 +110,7 @@ or retrieval quality.
 
 | Area | Better Hindsight | Bundled Hermes Hindsight |
 | --- | --- | --- |
-| Installation target | Standard Git plugin for a supported external Hindsight 0.8.5, 0.9.1, or 0.9.2 service | Included with Hermes; interactive setup supports Hindsight Cloud, a local embedded service, or an external service |
+| Installation target | Standard Git plugin for a supported external Hindsight 0.8.5, 0.9.1, 0.9.2, or 0.10.0 service | Included with Hermes; interactive setup supports Hindsight Cloud, a local embedded service, or an external service |
 | Automatic recall | Synchronous current-turn recall under character, token, response-size, and total-time bounds. Optional `pre_llm_call` planning bypasses the first turn, then uses bounded recent conversation context to skip/reuse or issue one self-contained rewritten query. | Background previous-query recall by default; optional synchronous current-query recall |
 | Recalled context | Complete byte-bounded JSONL records with recalled text and available time metadata; redacted and explicitly framed in a provider-neutral envelope as stale, untrusted evidence. Explicit recall results also retain the available type. | Formatted memory text or a reflect synthesis with configurable preamble, token budget, types, and tags |
 | Automatic retention | Opt-in; authorized, eligible turns are admitted all-or-none to a bounded private SQLite rollback-journal outbox before asynchronous delivery | Enabled by default; completed turns enter a process-local FIFO writer and then optional server-side async processing |
@@ -180,7 +182,7 @@ Retries use a stable document ID and `update_mode="replace"`. A timed-out write 
 - the current intended Hermes checkout;
 - at most one Better-enabled profile per Hermes process;
 - Python 3.11, 3.12, or 3.13 on Linux;
-- an external Hindsight 0.8.5, 0.9.1, or 0.9.2 server;
+- an external Hindsight 0.8.5, 0.9.1, 0.9.2, or 0.10.0 server;
 - `aiohttp>=3.14.1,<4`, `aiodns>=4.0.4,<5`, and `tiktoken>=0.12,<0.15`, which the plugin declares through Hermes's
   standard memory-plugin dependency mechanism.
 

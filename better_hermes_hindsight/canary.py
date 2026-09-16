@@ -26,7 +26,9 @@ from .client import (
 )
 from .config import BetterHindsightConfig, RecallConfig, RetainConfig
 
-SUPPORTED_HINDSIGHT_API_VERSIONS: Final = frozenset({"0.8.5", "0.9.1", "0.9.2"})
+# 0.10.0 requires server HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base.
+# /version does not attest tokenizer policy; see docs/compatibility.md.
+SUPPORTED_HINDSIGHT_API_VERSIONS: Final = frozenset({"0.8.5", "0.9.1", "0.9.2", "0.10.0"})
 _MAX_BODY_BYTES: Final = 64 * 1024
 _MAX_OUTPUT_VALUE: Final = 2_147_483_647
 

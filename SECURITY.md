@@ -18,7 +18,7 @@ history rewriting is not a substitute for rotation.
 
 ## Deployment boundary
 
-The supported deployment is a trusted Linux Hermes installation with one configured principal and an external Hindsight 0.8.5, 0.9.1, or 0.9.2 service. The configured Hindsight credential may have broader server permissions than the plugin exposes; `single_principal` is plugin policy, not server-side authorization.
+The supported deployment is a trusted Linux Hermes installation with one configured principal and an external Hindsight 0.8.5, 0.9.1, 0.9.2, or 0.10.0 service (0.10.0 requires server `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`). The configured Hindsight credential may have broader server permissions than the plugin exposes; `single_principal` is plugin policy, not server-side authorization.
 
 Install Better through the standard Hermes plugin lifecycle and use the least-privileged Hindsight credential available. Keep secrets in environment variables, never in repository configuration. Use HTTPS when the service crosses an untrusted network; plaintext HTTP is appropriate only on an explicitly trusted network.
 
