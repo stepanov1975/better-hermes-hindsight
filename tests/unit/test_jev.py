@@ -183,7 +183,7 @@ def test_invalid_budget_is_rejected_before_transport(timeout: float) -> None:
         {"rewrite": []},
     ],
 )
-def test_invalid_route_config(tmp_path: Path, planner: dict[str, object]) -> None:
+def test_invalid_planner_config(tmp_path: Path, planner: dict[str, object]) -> None:
     path = tmp_path / "better_hindsight/config.json"
     path.parent.mkdir()
     path.write_text(json.dumps({"planner": planner}))
@@ -191,23 +191,27 @@ def test_invalid_route_config(tmp_path: Path, planner: dict[str, object]) -> Non
         load_config(tmp_path)
 
 
-@pytest.mark.parametrize("route", ["jev", "llm"])
 @pytest.mark.parametrize("mode", ["off", "shadow", "active"])
 @pytest.mark.parametrize("rewrite", [False, True, "shadow"])
 def test_rewrite_config_combinations(
     tmp_path: Path,
-    route: str,
     mode: str,
     rewrite: bool | str,
 ) -> None:
     path = tmp_path / "better_hindsight/config.json"
     path.parent.mkdir()
-    path.write_text(json.dumps({"planner": {"route": route, "mode": mode, "rewrite": rewrite}}))
+    path.write_text(json.dumps({"planner": {"mode": mode, "rewrite": rewrite}}))
     assert load_config(tmp_path).planner.rewrite == rewrite
 
 
-def test_legacy_defaults(tmp_path: Path) -> None:
+def test_defaults(tmp_path: Path) -> None:
     config = load_config(tmp_path)
     assert config.planner.mode == "off"
-    assert config.planner.route == "llm"
     assert config.planner.rewrite is False
+
+
+@pytest.mark.parametrize("route", ["llm", "jev", "unknown", None])
+@pytest.mark.parametrize("mode", ["off", "shadow", "active"])
+def test_obsolete_route_is_rejected(tmp_path: Path, route: object, mode: str) -> None:
+    with pytest.raises(ConfigError, match=r"unknown.*planner.route"):
+        load_config(tmp_path, environ={}, injected={"planner": {"mode": mode, "route": route}})

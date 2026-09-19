@@ -81,7 +81,7 @@ def test_general_plugin_surface_registers_one_planner_hook_and_task(tmp_path: Pa
 
     assert len(context.tasks) == 1
     assert context.tasks[0][0] == RECALL_PLANNER_TASK
-    assert context.tasks[0][1] == "Better Hindsight recall planner"
+    assert context.tasks[0][1] == "Better Hindsight recall rewrite"
     assert context.tasks[0][3] == {"temperature": 0.0, "max_tokens": 128}
     assert len(context.hooks) == 1
     assert context.hooks[0][0] == "pre_llm_call"

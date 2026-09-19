@@ -41,24 +41,27 @@ if scenario != "plain":
     )
 
 
+decision_calls = []
+
+def fake_decide(capsule, *, timeout):
+    decision_calls.append(capsule)
+    if action == "failure":
+        raise RuntimeError("synthetic decision failure")
+    if action == "timeout":
+        raise TimeoutError("synthetic decision timeout")
+    if action == "invalid":
+        raise planner_module.JevDecisionError("invalid")
+    return action
+
+
 class FakeLlm:
     def __init__(self):
         self.calls = []
 
     def complete_structured(self, **kwargs):
         self.calls.append(kwargs)
-        if action == "failure":
-            raise RuntimeError("synthetic auxiliary failure")
-        if action == "timeout":
-            raise TimeoutError("synthetic auxiliary timeout")
-        if action == "invalid":
-            return SimpleNamespace(parsed={"action": "recall", "query": ""})
-        if action in {"skip", "reuse"}:
-            return SimpleNamespace(parsed={"action": action})
-        return SimpleNamespace(parsed={
-            "action": "recall",
-            "query": "What backup policy did Alex choose?",
-        })
+        assert kwargs["schema_name"] == "better_hindsight_recall_rewrite"
+        return SimpleNamespace(parsed={"query": "What backup policy did Alex choose?"})
 
 
 class FakeRuntime:
@@ -77,6 +80,8 @@ class FakeRuntime:
 manager = PluginManager()
 manager.discover_and_load()
 callback = manager._hooks["pre_llm_call"][0]
+planner_module = sys.modules[type(callback.__self__).__module__]
+planner_module.decide_memory = fake_decide
 fake_llm = FakeLlm()
 callback.__self__._llm = fake_llm
 provider = load_memory_provider("better_hindsight")
@@ -111,20 +116,22 @@ manager.invoke_hook(
 memory_manager = MemoryManager()
 memory_manager.add_provider(provider)
 memory_manager.prefetch_all(current, session_id="child-2")
-if fake_llm.calls:
-    capsule = json.loads(fake_llm.calls[0]["input"][0]["text"])
+if decision_calls:
+    capsule = json.loads(decision_calls[0])
     assert capsule["current_user_message"] == "What did we decide?"
     assert len(capsule["recent_conversation"]) == 2
     assert "SYNTHETIC SKILL BODY" not in str(capsule)
 assert observer.consume(source_query="What did we decide?", session_id="child-2") is None
 provider.shutdown()
-assert len(fake_llm.calls) == (0 if scenario == "bare-skill" else 1)
+assert len(decision_calls) == (0 if scenario == "bare-skill" else 1)
+assert len(fake_llm.calls) == int(scenario != "bare-skill" and action == "recall")
 assert runtime.close_calls == 1
 assert not observer.is_active(session_id="child-2")
 assert not (Path(manager.scope_key) / "better_hindsight" / "recall_plans.sqlite3").exists()
 print(json.dumps({
     "active_after_shutdown": observer.is_active(session_id="child-2"),
-    "llm_calls": len(fake_llm.calls),
+    "decision_calls": len(decision_calls),
+    "rewrite_calls": len(fake_llm.calls),
     "planner_state_file_exists": (
         Path(manager.scope_key) / "better_hindsight" / "recall_plans.sqlite3"
     ).exists(),
@@ -424,7 +431,7 @@ def test_current_hermes_hook_to_provider_mailbox_handoff(
             {
                 "single_principal": True,
                 "recall": {"timeout_seconds": 1.0},
-                "planner": {"mode": "active"},
+                "planner": {"mode": "active", "rewrite": True},
                 "retain": {"enabled": False},
             }
         ),
@@ -448,7 +455,8 @@ def test_current_hermes_hook_to_provider_mailbox_handoff(
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout.strip().splitlines()[-1]) == {
         "active_after_shutdown": False,
-        "llm_calls": 0 if scenario == "bare-skill" else 1,
+        "decision_calls": 0 if scenario == "bare-skill" else 1,
+        "rewrite_calls": int(scenario != "bare-skill" and action == "recall"),
         "planner_state_file_exists": False,
         "recall_queries": expected_queries,
     }

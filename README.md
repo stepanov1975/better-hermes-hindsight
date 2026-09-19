@@ -135,14 +135,14 @@ when upgrading either project because its behavior continues to evolve.
 
 ## Jev recall decisions and private evaluation
 
-The default-off planner supports `route: "jev"` for a separate OpenRouter decision call
+The default-off planner uses Jev as its sole decision path via an OpenRouter decision call
 (`~typesafe/jev-latest`, decisions API, not chat completions). It sends a bounded cleaned
 current-message/recent-conversation capsule; this is an additional external data and cost boundary.
 Provide `OPENROUTER_API_KEY` through your normal Hermes secret mechanism.
 
 ```json
 {
-  "planner": {"mode": "active", "route": "jev", "rewrite": "shadow"},
+  "planner": {"mode": "active", "rewrite": "shadow"},
   "evaluation": {"enabled": false}
 }
 ```
@@ -151,8 +151,13 @@ Active `skip`/`reuse` avoids both rewriting and Hindsight. On `recall`, `rewrite
 the original query, `true` can apply a validated rewrite, and `"shadow"` records observations
 without applying the rewritten query. Shadow rewriting publishes the valid gate first, so its
 failure or late result cannot cancel that gate. It still adds synchronous latency and model cost.
-Decision and rewrite share one deadline; failures fall back to ordinary bounded recall. Legacy
-`route: "llm"` remains the default combined decision/rewrite route.
+Decision and rewrite share one deadline; failures fall back to ordinary bounded recall.
+
+**Upgrade:** remove `planner.route` from existing configurations (including `"jev"` and `"llm"`).
+It is now rejected as an unknown key; the combined LLM decision/rewrite implementation is removed.
+Planning remains off by default and rewriting defaults to `false`. The host auxiliary task key
+`better_hindsight_recall_planner` is retained only for existing rewrite model/provider overrides,
+not for LLM decisions. Route-selector metadata is no longer emitted in logs or private captures.
 
 Ordinary logs stay content-free. To inspect inputs and shadow output, explicitly enable
 `evaluation.enabled`. Private stage JSON files live only under the profile's
@@ -180,7 +185,7 @@ Recall fails open: timeout, service failure, invalid data, or unavailable runtim
 The optional planner is disabled by default. In `shadow` mode it logs only action/latency metadata and
 keeps direct-query recall; private input/output capture is a separate explicit opt-in. In `active`
 mode, `skip` and `reuse` avoid a Hindsight request while `recall` uses the original or validated
-rewritten query according to route/rewrite policy. The short-lived process-local handoff stores
+rewritten query according to rewrite policy. The short-lived process-local handoff stores
 only query hashes, opaque correlation, and the planned action/query in memory, not the transcript. Session-scoped
 reservations are consumed once, and recently consumed turn IDs remain tombstoned for the same bounded
 lifetime so a retried hook cannot republish them. After validating current session/turn identity, every hook
