@@ -161,7 +161,11 @@ bounded cleaned input capsule, decision and returned model/usage/confidence/cost
 outcome/query, and actual original/effective retrieval query with outcome/count/bytes. No retrieved
 memory bodies are captured. Credentials are redacted, but conversation text remains sensitive.
 Defaults retain at most 200 stage records, each at most 512 KiB, with seven-day age cleanup on writes.
-No extra service, worker, remote upload, or automatic labeling is added.
+A bounded process-local queue (16 waiting stages plus one in flight) feeds one daemon writer.
+Filesystem work is off the planner/recall path; redaction and serialization remain synchronous.
+New stages drop when the queue is full or admission is contended, and queued stages can be lost
+on process exit: shutdown does not wait for capture. No extra service, durable queue, retry,
+remote upload, or automatic labeling is added.
 
 These are **observations, not automatic ground truth**: sampling them can support later private
 human/AI labeling of skip/reuse/recall correctness and rewrite quality. A model's confidence,

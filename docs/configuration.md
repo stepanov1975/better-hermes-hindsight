@@ -156,21 +156,28 @@ Separate from slow-recall diagnostics, this opt-in captures **sensitive private 
   Group records by `correlation_id`, not query text or arrival order. A later turn never adopts an
   older capture. Expired/mismatched/missing handoff means uncorrelated direct recall, not guessed
   attribution. Duplicate/consumed hooks remain fenced. Partial groups are expected under pruning,
-  expiry, contention, interruption, or write failures; absence is not evidence of a skip.
+  expiry, contention, queue overflow, process exit, or write failures; absence is not evidence of a skip.
 - `input.capsule` preserves exactly the already bounded, cleaned capsule supplied to the planner,
   **except credential redaction** (known configured Hindsight/OpenRouter keys and shared common
   credential patterns). This is not a universal secret/PII detector. Normalized user/assistant
   text remains private. Metadata is allowlisted: returned model/provider identity, numeric
-  confidence, token usage and cost when available (including host `usage.cost_usd`). Missing
-  metadata is not synthesized; cost estimates/confidence are not routing thresholds.
+  finite confidence, token usage and cost when available (including host `usage.cost_usd`). Missing
+  metadata is not synthesized; `usage` is omitted unless an allowlisted finite numeric field exists.
+  Cost estimates/confidence are not routing thresholds.
 - `rewrite` contains the validated query even when it returned too late, explicitly marked
   `timeout`; `"shadow"` queries never enter retrieval. `retrieval` records the original input and
   actual projected effective query, outcome, and available result count/formatted bytes. For active
   skip/reuse, effective query is null and count/bytes are zero because no Hindsight request occurs.
-- Best-effort synchronous local writes reuse diagnostic atomic storage and credential redaction;
-  lock contention/write/serialization failures drop evidence and never raise into routing.
-  There is no worker, retry, extra model call, remote upload, or automatic labeling. Local I/O
-  consumes latency within existing deadlines. Ordinary structured logs remain content-free.
+- Best-effort asynchronous local writes reuse diagnostic atomic storage and credential redaction.
+  One process-local daemon writer, shared across companion/provider imports, accepts at most 16
+  waiting stages plus one in flight. Each queued stage is an immutable redacted JSON snapshot
+  bounded by `max_record_bytes`. Serialization/size rejection happens before any store pruning.
+  Redaction and serialization still consume caller CPU time; directory scans, pruning, locking,
+  and fsync run off-path, without using the remote-client event loop.
+  Queue-full/admission contention, file-lock contention, write and serialization failures drop
+  evidence and never raise into routing. Queued stages may be lost on process exit: shutdown
+  never drains or waits for this writer. There is no durable worker/service, retry, extra model
+  call, remote upload, or automatic labeling. Ordinary structured logs remain content-free.
 
 This is an evidence sample, **not automatic ground truth or an evaluation score**. Inspect sampled
 complete groups to label whether memory was needed, whether visible history already sufficed, and

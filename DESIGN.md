@@ -94,6 +94,8 @@ destination, principal, or retention policy.
 
 The default-off private evaluation capture is separate from routing. It writes bounded, redacted
 stage evidence under the profile home, including the exact bounded input capsule except credentials.
+A bounded process-local daemon queue moves filesystem work off the planner/provider path; queued
+stages may drop under load or on process exit, and shutdown never waits for this writer.
 An opaque owner ID follows only a matched mailbox reservation; storage failures cannot supply or
 alter decisions. Independently committed stages preserve valid gate evidence when observational
 rewriting fails or returns late. Captures contain no retrieved memory bodies and are not ground truth.
