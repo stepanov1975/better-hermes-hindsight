@@ -11,6 +11,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ from typing import NoReturn, cast
 import pytest
 from agent.memory_provider import MemoryProvider, RecallStatus
 
+import better_hermes_hindsight.planner as planner_module
 import better_hermes_hindsight.provider as provider_module
 from better_hermes_hindsight.client import (
     HindsightClientError,
@@ -35,6 +37,7 @@ from better_hermes_hindsight.formatting import (
     count_query_tokens,
     format_recall_context,
 )
+from better_hermes_hindsight.jev import JevDecisionError
 from better_hermes_hindsight.plan_mailbox import (
     InMemoryPlanMailbox,
     PlanAction,
@@ -308,6 +311,185 @@ def _publish_plan(
         action=action,
         rewritten_query=rewritten_query,
     )
+
+
+@pytest.mark.parametrize("action", ["skip", "reuse", "recall"])
+@pytest.mark.parametrize("rewrite", [False, True])
+@pytest.mark.parametrize("mode", ["active", "shadow"])
+def test_jev_provider_routing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str, rewrite: bool, mode: str
+) -> None:
+    document = _base_config()
+    document["planner"] = {"mode": mode, "route": "jev", "rewrite": rewrite}
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("jev-session", hermes_home=str(tmp_path), platform="cli")
+    decisions: list[dict[str, object]] = []
+    rewrites: list[dict[str, object]] = []
+    query = "What backup policy did we choose?"
+
+    def decide(capsule: str, *, timeout: float) -> str:
+        assert 0 < timeout <= load_config(tmp_path).planner.timeout_seconds
+        decisions.append(json.loads(capsule))
+        return action
+
+    class Llm:
+        def complete_structured(self, **kwargs: object) -> object:
+            rewrites.append(kwargs)
+            return SimpleNamespace(parsed={"query": "Which backup retention was chosen earlier?"})
+
+    monkeypatch.setattr(planner_module, "decide_memory", decide)
+    RecallPlanner(tmp_path, Llm()).on_pre_llm_call(
+        session_id="jev-session",
+        turn_id="jev-turn",
+        user_message=query,
+        conversation_history=[
+            {"role": "system", "content": "must not forward"},
+            {"role": "tool", "content": "must not forward"},
+            {"role": "user", "content": query},
+        ],
+    )
+    result = provider.prefetch(query)
+    assert decisions == [{"current_user_message": query, "recent_conversation": []}]
+    assert len(rewrites) == int(rewrite and action == "recall")
+    if rewrites:
+        schema = cast(dict[str, object], rewrites[0]["json_schema"])
+        assert schema["required"] == ["query"]
+        assert "action" not in cast(dict[str, object], schema["properties"])
+    if mode == "active" and action in {"skip", "reuse"}:
+        assert result == ""
+        assert handle.recalls == []
+    else:
+        assert result
+        expected = (
+            "Which backup retention was chosen earlier?"
+            if (mode == "active" and rewrite and action == "recall")
+            else query
+        )
+        assert [q for q, _ in handle.recalls] == [expected]
+    provider.shutdown()
+
+
+@pytest.mark.parametrize("guard", ["first_turn", "off", "recall_disabled", "unauthorized"])
+def test_jev_guard_makes_no_decision_or_rewrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, guard: str
+) -> None:
+    document = _base_config()
+    document["planner"] = {
+        "mode": "off" if guard == "off" else "active",
+        "route": "jev",
+        "rewrite": True,
+    }
+    cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
+    if guard == "recall_disabled":
+        cast(dict[str, object], document["recall"])["enabled"] = False
+    if guard == "unauthorized":
+        document["single_principal"] = False
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("jev-session", hermes_home=str(tmp_path), platform="cli")
+    calls: list[str] = []
+
+    def forbidden(*args: object, **kwargs: object) -> NoReturn:
+        calls.append("unexpected")
+        raise AssertionError("guard must precede model access")
+
+    monkeypatch.setattr(planner_module, "decide_memory", forbidden)
+
+    class Llm:
+        def complete_structured(self, **kwargs: object) -> object:
+            return forbidden(**kwargs)
+
+    planner = RecallPlanner(tmp_path, Llm())
+    query = "What backup policy did we choose?"
+    planner.on_pre_llm_call(
+        session_id="jev-session",
+        turn_id="jev-turn",
+        user_message=query,
+        is_first_turn=guard == "first_turn",
+    )
+    provider.prefetch(query)
+    assert calls == []
+    assert [q for q, _ in handle.recalls] == ([query] if guard in {"first_turn", "off"} else [])
+    provider.shutdown()
+
+
+@pytest.mark.parametrize("stage", ["decision", "rewrite"])
+@pytest.mark.parametrize("failure", ["exception", "invalid", "timeout", "late", "consumed"])
+def test_jev_stage_failure_preserves_direct_recall(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    stage: str,
+    failure: str,
+) -> None:
+    document = _base_config()
+    document["planner"] = {
+        "mode": "active",
+        "route": "jev",
+        "rewrite": True,
+        "timeout_seconds": 1.0,
+    }
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("jev-session", hermes_home=str(tmp_path), platform="cli")
+    now = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    query = "What backup policy did we choose?"
+    calls: list[str] = []
+
+    def fail() -> None:
+        if failure == "exception":
+            raise RuntimeError("private exception text")
+        if failure == "invalid" and stage == "decision":
+            raise JevDecisionError("invalid")
+        if failure == "timeout":
+            raise TimeoutError
+        if failure == "late":
+            now[0] += 1.1
+        if failure == "consumed":
+            assert provider.prefetch(query)
+
+    def decide(capsule: str, *, timeout: float) -> str:
+        calls.append("decision")
+        assert timeout == pytest.approx(1.0)
+        if stage == "decision":
+            fail()
+        else:
+            now[0] += 0.25
+        return "recall"
+
+    class Llm:
+        def complete_structured(self, **kwargs: object) -> object:
+            calls.append("rewrite")
+            assert kwargs["timeout"] == pytest.approx(0.75 if stage == "rewrite" else 1.0)
+            if stage == "rewrite":
+                fail()
+            return SimpleNamespace(parsed={} if failure == "invalid" else {"query": "rewritten"})
+
+    monkeypatch.setattr(planner_module, "decide_memory", decide)
+    with caplog.at_level(logging.INFO, logger=planner_module.__name__):
+        RecallPlanner(tmp_path, Llm(), monotonic=lambda: now[0]).on_pre_llm_call(
+            session_id="jev-session",
+            turn_id="jev-turn",
+            user_message=query,
+        )
+    assert provider.prefetch(query)
+    assert all(q == query for q, _ in handle.recalls)
+    if stage == "decision" and failure != "consumed":
+        assert calls == ["decision"]
+    events = [json.loads(record.message) for record in caplog.records]
+    assert any(e.get("fallback") == "direct_recall" for e in events)
+    assert "private exception text" not in caplog.text
+    assert query not in caplog.text
+    provider.shutdown()
 
 
 def test_provider_passes_projected_query_and_request_to_diagnostic_capture(
