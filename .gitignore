@@ -33,6 +33,7 @@ logs/
 tmp/
 benchmarks/output/
 .hermes/
+**/better_hindsight/planner_evaluation/
 
 # Editors and operating systems
 .vscode/

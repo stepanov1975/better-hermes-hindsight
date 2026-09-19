@@ -111,6 +111,7 @@ _ROOT_KEYS = {
     "missions",
     "outbox",
     "diagnostics",
+    "evaluation",
 }
 _RECALL_KEYS = {
     "enabled",
@@ -322,6 +323,16 @@ class OutboxConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class EvaluationConfig:
+    """Private planner evaluation capture, separate from operational diagnostics."""
+
+    enabled: bool = False
+    max_records: int = 200
+    max_record_bytes: int = 524288
+    max_age_seconds: int = 604800
+
+
+@dataclass(frozen=True, slots=True)
 class DiagnosticConfig:
     """Opt-in profile-local capture policy for replayable slow recalls."""
 
@@ -371,6 +382,7 @@ class BetterHindsightConfig:
         default_factory=lambda: OutboxConfig(Path("better_hindsight/outbox.sqlite3"))
     )
     diagnostics: DiagnosticConfig = field(default_factory=DiagnosticConfig)
+    evaluation: EvaluationConfig = field(default_factory=EvaluationConfig)
 
     @property
     def destination_fingerprint(self) -> str:
@@ -521,6 +533,7 @@ def load_config(
         missions=missions,
         outbox=outbox,
         diagnostics=diagnostics,
+        evaluation=_parse_evaluation(merged.get("evaluation", {})),
     )
 
 
@@ -1246,6 +1259,25 @@ def _parse_outbox_path(home: Path, value: object) -> Path:
     except ValueError:
         raise _error("outbox.path must remain inside hermes_home") from None
     return normalized
+
+
+def _parse_evaluation(value: object) -> EvaluationConfig:
+    values = _expect_mapping(value, "evaluation")
+    _check_unknown_keys(
+        values, {"enabled", "max_records", "max_record_bytes", "max_age_seconds"}, "evaluation"
+    )
+    return EvaluationConfig(
+        enabled=_parse_bool(values.get("enabled", False), "evaluation.enabled"),
+        max_records=_parse_positive_int(
+            values.get("max_records", 200), "evaluation.max_records", maximum=2000
+        ),
+        max_record_bytes=_parse_positive_int(
+            values.get("max_record_bytes", 524288), "evaluation.max_record_bytes", maximum=524288
+        ),
+        max_age_seconds=_parse_positive_int(
+            values.get("max_age_seconds", 604800), "evaluation.max_age_seconds", maximum=2592000
+        ),
+    )
 
 
 def _parse_diagnostics(home: Path, value: object) -> DiagnosticConfig:

@@ -133,14 +133,55 @@ This comparison follows the current intended rolling Hermes checkout. Review the
 [bundled provider source](https://github.com/NousResearch/hermes-agent/tree/main/plugins/memory/hindsight)
 when upgrading either project because its behavior continues to evolve.
 
+## Jev recall decisions and private evaluation
+
+The default-off planner supports `route: "jev"` for a separate OpenRouter decision call
+(`~typesafe/jev-latest`, decisions API, not chat completions). It sends a bounded cleaned
+current-message/recent-conversation capsule; this is an additional external data and cost boundary.
+Provide `OPENROUTER_API_KEY` through your normal Hermes secret mechanism.
+
+```json
+{
+  "planner": {"mode": "active", "route": "jev", "rewrite": "shadow"},
+  "evaluation": {"enabled": false}
+}
+```
+
+Active `skip`/`reuse` avoids both rewriting and Hindsight. On `recall`, `rewrite: false` uses
+the original query, `true` can apply a validated rewrite, and `"shadow"` records observations
+without applying the rewritten query. Shadow rewriting publishes the valid gate first, so its
+failure or late result cannot cancel that gate. It still adds synchronous latency and model cost.
+Decision and rewrite share one deadline; failures fall back to ordinary bounded recall. Legacy
+`route: "llm"` remains the default combined decision/rewrite route.
+
+Ordinary logs stay content-free. To inspect inputs and shadow output, explicitly enable
+`evaluation.enabled`. Private stage JSON files live only under the profile's
+`$HERMES_HOME/better_hindsight/planner_evaluation` (0700 directory, 0600 files). They correlate the
+bounded cleaned input capsule, decision and returned model/usage/confidence/cost metadata, rewrite
+outcome/query, and actual original/effective retrieval query with outcome/count/bytes. No retrieved
+memory bodies are captured. Credentials are redacted, but conversation text remains sensitive.
+Defaults retain at most 200 stage records, each at most 512 KiB, with seven-day age cleanup on writes.
+A bounded process-local queue (16 waiting stages plus one in flight) feeds one daemon writer.
+Filesystem work is off the planner/recall path; redaction and serialization remain synchronous.
+New stages drop when the queue is full or admission is contended, and queued stages can be lost
+on process exit: shutdown does not wait for capture. No extra service, durable queue, retry,
+remote upload, or automatic labeling is added.
+
+These are **observations, not automatic ground truth**: sampling them can support later private
+human/AI labeling of skip/reuse/recall correctness and rewrite quality. A model's confidence,
+successful recall, or nonzero result count is not a correctness label. Keep evidence private;
+separate live Jev observations from controlled rewrite/backend tests. See
+[configuration and capture limits](docs/configuration.md#private-planner-evaluation-capture).
+
 ## Reliability boundary
 
 Recall fails open: timeout, service failure, invalid data, or unavailable runtime yields no external context rather than stopping Hermes. Queries are bounded by both characters and the exact `cl100k_base` token rule used by supported Hindsight servers. Recalled records are bounded, redacted, and framed as potentially stale historical evidence.
 
-The optional planner is disabled by default. In `shadow` mode it records only action/latency metadata and
-keeps direct-query recall. In `active` mode, `skip` and `reuse` avoid a Hindsight request while `recall`
-substitutes one validated self-contained query. The hook never stores the transcript; a short-lived
-process-local handoff stores only query hashes and the planned action/query in memory. Session-scoped
+The optional planner is disabled by default. In `shadow` mode it logs only action/latency metadata and
+keeps direct-query recall; private input/output capture is a separate explicit opt-in. In `active`
+mode, `skip` and `reuse` avoid a Hindsight request while `recall` uses the original or validated
+rewritten query according to route/rewrite policy. The short-lived process-local handoff stores
+only query hashes, opaque correlation, and the planned action/query in memory, not the transcript. Session-scoped
 reservations are consumed once, and recently consumed turn IDs remain tombstoned for the same bounded
 lifetime so a retried hook cannot republish them. After validating current session/turn identity, every hook
 clears that session's prior plans before testing whether the current payload is plannable, so an early return
@@ -154,8 +195,8 @@ session updates, and shutdown; bounded pending and stale-parent state retain an 
 its parent arrives.
 Queries above the planner's absolute configured maximum skip planning without being hashed; direct-query
 recall remains available. A pending reservation fences out an abandoned late hook worker. Finalization
-samples the clock and rejects model-derived `recall` or `reuse` after the planner deadline while holding the
-registry lock, while still allowing the deterministic active-mode `skip` failure policy. Missing, stale, late,
+samples the clock and rejects every model-derived action after the planner deadline while holding the
+registry lock; failures are not intentional skips. Missing, stale, late,
 or mismatched handoff state falls back to direct current-query recall. Earlier branch-preview revisions wrote
 planner decisions to SQLite. The runtime deliberately leaves that legacy path untouched: stop every Hermes
 process using the profile, remove the configured database and sidecars offline, then remove the obsolete

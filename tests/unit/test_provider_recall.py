@@ -31,6 +31,7 @@ from better_hermes_hindsight.client import (
     RetainSegment,
 )
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
+from better_hermes_hindsight.evaluation import drain_evaluation_for_tests
 from better_hermes_hindsight.formatting import (
     CONTEXT_PREAMBLE,
     QUERY_OMISSION_MARKER,
@@ -314,13 +315,20 @@ def _publish_plan(
     )
 
 
+@pytest.mark.parametrize("capture_enabled", [False, True])
 @pytest.mark.parametrize("action", ["skip", "reuse", "recall"])
 @pytest.mark.parametrize("rewrite", [False, True, "shadow"])
 @pytest.mark.parametrize("mode", ["active", "shadow"])
 def test_jev_provider_routing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str, rewrite: bool | str, mode: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    action: str,
+    rewrite: bool | str,
+    mode: str,
+    capture_enabled: bool,
 ) -> None:
     document = _base_config()
+    document["evaluation"] = {"enabled": capture_enabled}
     document["planner"] = {"mode": mode, "route": "jev", "rewrite": rewrite}
     cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
     _write_config(tmp_path, document)
@@ -371,6 +379,26 @@ def test_jev_provider_routing(
             else query
         )
         assert [q for q, _ in handle.recalls] == [expected]
+    assert drain_evaluation_for_tests()
+    directory = tmp_path / "better_hindsight/planner_evaluation"
+    if not capture_enabled:
+        assert not directory.exists()
+    else:
+        rows = [json.loads(p.read_text()) for p in directory.glob("*.json")]
+        assert len({r["correlation_id"] for r in rows}) == 1
+        stages = {r["stage"]: r for r in rows}
+        assert stages["input"]["capsule"] == decisions[0]
+        assert stages["decision"]["action"] == action
+        assert stages["retrieval"]["original_query"] == query
+        assert stages["retrieval"]["outcome"] == (
+            action if mode == "active" and action in {"skip", "reuse"} else "success"
+        )
+        assert stages["retrieval"]["effective_query"] == (
+            handle.recalls[0][0] if handle.recalls else None
+        )
+        if rewrites:
+            assert stages["rewrite"]["query"] == "Which backup retention was chosen earlier?"
+        assert "fixture observation" not in json.dumps(rows)
     provider.shutdown()
 
 
@@ -504,6 +532,7 @@ def test_jev_shadow_rewrite_preserves_published_gate(
     outcome: str,
 ) -> None:
     document = _base_config()
+    document["evaluation"] = {"enabled": True}
     document["planner"] = {
         "mode": mode,
         "route": "jev",
@@ -576,6 +605,28 @@ def test_jev_shadow_rewrite_preserves_published_gate(
     assert not any(e.get("action") == "none" for e in events)
     assert query not in caplog.text
     assert "private rewrite" not in caplog.text
+    assert drain_evaluation_for_tests()
+    rows = [
+        json.loads(p.read_text())
+        for p in (tmp_path / "better_hindsight/planner_evaluation").glob("*.json")
+    ]
+    assert len({r["correlation_id"] for r in rows}) == 1
+    captured_stages = {r["stage"]: r for r in rows}
+    assert captured_stages["decision"]["action"] == "recall"
+    assert captured_stages["handoff"]["published"] is True
+    assert (
+        captured_stages["rewrite"]["outcome"]
+        == {
+            "valid": "planned",
+            "invalid": "invalid",
+            "exception": "failed",
+            "timeout": "timeout",
+            "late": "timeout",
+        }[outcome]
+    )
+    if outcome in {"valid", "late"}:
+        assert captured_stages["rewrite"]["query"] == "private rewrite"
+    assert captured_stages["retrieval"]["effective_query"] == query
     provider.shutdown()
 
 
@@ -617,6 +668,185 @@ def test_jev_shadow_rewrite_never_republishes(
         assert consumed[0] is not None and consumed[0].rewritten_query == query
     assert mailbox.consume(source_query=query, session_id="jev-session") is None
     mailbox.deactivate(token=token)
+
+
+@pytest.mark.parametrize("same_session", [False, True])
+def test_capture_correlates_repeated_and_concurrent_turns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, same_session: bool
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    document = _base_config()
+    document["evaluation"] = {"enabled": True}
+    document["planner"] = {"mode": "active", "route": "jev", "rewrite": "shadow"}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _: handle)
+    monkeypatch.setattr(planner_module, "decide_memory", lambda *a, **k: "recall")
+    first = BetterHindsightMemoryProvider()
+    first.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    second = first if same_session else BetterHindsightMemoryProvider()
+    if not same_session:
+        second.initialize("session-b", hermes_home=str(tmp_path), platform="cli")
+    entered, release = Event(), Event()
+    query = "What backup policy did we choose?"
+
+    class Llm:
+        def complete_structured(self, **kwargs: object) -> object:
+            if not entered.is_set():
+                entered.set()
+                assert release.wait(5)
+                return SimpleNamespace(parsed={"query": "old shadow"})
+            return SimpleNamespace(parsed={"query": "new shadow"})
+
+    planner = RecallPlanner(tmp_path, Llm())
+    assert drain_evaluation_for_tests()
+    directory = tmp_path / "better_hindsight/planner_evaluation"
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(
+            planner.on_pre_llm_call, session_id="session-a", turn_id="old", user_message=query
+        )
+        try:
+            assert entered.wait(5)
+            assert first.prefetch(query)
+            assert drain_evaluation_for_tests()
+            old_rows = [json.loads(p.read_text()) for p in directory.glob("*.json")]
+            old_id = old_rows[0]["correlation_id"]
+            assert {r["correlation_id"] for r in old_rows} == {old_id}
+            planner.on_pre_llm_call(
+                session_id="session-a" if same_session else "session-b",
+                turn_id="new",
+                user_message=query,
+            )
+            assert second.prefetch(query)
+        finally:
+            release.set()
+        pending.result(timeout=5)
+    assert drain_evaluation_for_tests()
+    rows = [json.loads(p.read_text()) for p in directory.glob("*.json")]
+    assert len({r["correlation_id"] for r in rows}) == 2
+    for identifier in {r["correlation_id"] for r in rows}:
+        stages = {r["stage"]: r for r in rows if r["correlation_id"] == identifier}
+        assert stages["rewrite"]["query"] == (
+            "old shadow" if identifier == old_id else "new shadow"
+        )
+        assert stages["retrieval"]["effective_query"] == query
+    assert [q for q, _ in handle.recalls] == [query, query]
+    first.shutdown()
+    if not same_session:
+        second.shutdown()
+
+
+@pytest.mark.parametrize("failure", ["capture", "decision"])
+def test_evaluation_failure_does_not_break_direct_recall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    import better_hermes_hindsight.evaluation as evaluation
+
+    document = _base_config()
+    document["evaluation"] = {"enabled": True}
+    document["planner"] = {"mode": "active", "route": "jev", "rewrite": False}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+
+    def decide(*args: object, **kwargs: object) -> str:
+        if failure == "decision":
+            raise TimeoutError
+        return "recall"
+
+    def fail_write(*args: object, **kwargs: object) -> None:
+        raise OSError("private failure text")
+
+    monkeypatch.setattr(planner_module, "decide_memory", decide)
+    if failure == "capture":
+        monkeypatch.setattr(evaluation, "_write_record", fail_write)
+
+    class Llm:
+        def complete_structured(self, **kwargs: object) -> object:
+            raise AssertionError("rewriting disabled")
+
+    query = "What backup policy did we choose?"
+    RecallPlanner(tmp_path, Llm()).on_pre_llm_call(
+        session_id="session-a", turn_id="turn-a", user_message=query
+    )
+    assert provider.prefetch(query)
+    assert [q for q, _ in handle.recalls] == [query]
+    assert drain_evaluation_for_tests()
+    if failure == "decision":
+        rows = [
+            json.loads(p.read_text())
+            for p in (tmp_path / "better_hindsight/planner_evaluation").glob("*.json")
+        ]
+        assert len({r["correlation_id"] for r in rows}) == 1
+        stages = {r["stage"]: r for r in rows}
+        assert stages["decision"]["outcome"] == "timeout"
+        assert stages["retrieval"]["effective_query"] == query
+    provider.shutdown()
+
+
+@pytest.mark.parametrize("slow_operation", ["_record_paths", "_write_record"])
+def test_evaluation_slow_disk_does_not_block_planning_recall_or_shutdown(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slow_operation: str
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    import better_hermes_hindsight.evaluation as evaluation
+
+    assert drain_evaluation_for_tests()
+    document = _base_config()
+    document["evaluation"] = {"enabled": True}
+    document["planner"] = {"mode": "active", "route": "jev", "rewrite": False}
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _: handle)
+    monkeypatch.setattr(planner_module, "decide_memory", lambda *a, **k: "recall")
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
+    entered, release = Event(), Event()
+    original = getattr(evaluation, slow_operation)
+
+    def slow(*args: object, **kwargs: object) -> object:
+        entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(evaluation, slow_operation, slow)
+    query = "What backup policy did we choose?"
+
+    class Llm:
+        def complete_structured(self, **kwargs: object) -> object:
+            raise AssertionError("rewriting disabled")
+
+    def run() -> str:
+        RecallPlanner(tmp_path, Llm()).on_pre_llm_call(
+            session_id="session-a", turn_id="turn-a", user_message=query
+        )
+        result = provider.prefetch(query)
+        provider.shutdown()
+        return result
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(run)
+        try:
+            assert entered.wait(2)
+            # The disk remains blocked until after the entire user path has returned.
+            assert pending.result(timeout=1)
+            assert not drain_evaluation_for_tests(timeout=0.01)
+        finally:
+            release.set()
+    assert drain_evaluation_for_tests()
+    assert [q for q, _ in handle.recalls] == [query]
+    rows = [
+        json.loads(p.read_text())
+        for p in (tmp_path / "better_hindsight/planner_evaluation").glob("*.json")
+    ]
+    assert len({r["correlation_id"] for r in rows}) == 1
+    assert {r["stage"] for r in rows} == {"input", "decision", "plan", "handoff", "retrieval"}
 
 
 def test_provider_passes_projected_query_and_request_to_diagnostic_capture(

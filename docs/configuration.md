@@ -122,6 +122,71 @@ use `cl100k_base` by default. See [compatibility](compatibility.md) for verifica
 Keep this value at or below the server's `HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS`. The existing `recall.max_tokens` setting controls the
 response budget; it does not limit query input.
 
+## Private planner evaluation capture
+
+Separate from slow-recall diagnostics, this opt-in captures **sensitive private evaluation data**:
+
+```json
+{
+  "evaluation": {
+    "enabled": false,
+    "max_records": 200,
+    "max_record_bytes": 524288,
+    "max_age_seconds": 604800
+  }
+}
+```
+
+- Fixed profile-local path: `better_hindsight/planner_evaluation` under the supplied Hermes home;
+  directory 0700, files and lock 0600. Symlinked stores are refused. No endpoint/path overrides.
+- `max_records`: 1–2000 **stage files**, not complete turns (default 200).
+  `max_record_bytes`: 1–524288 serialized bytes per file (default 512 KiB).
+  `max_age_seconds`: 1–2592000 seconds (default seven days).
+- Writes prune only capture-shaped regular JSON files in that directory by count and age.
+  Unrelated names and symlinks are not deleted. Cleanup happens on subsequent writes, not while
+  idle or after disabling capture; operators may remove their private capture directory offline.
+  At most `max_records * max_record_bytes` retained record bytes, plus lock and a temporary atomic
+  write. Too-large records are dropped rather than silently clipping the exact input capsule.
+- Captures occur only for eligible planned turns, not first-turn/off/trivial/unauthorized bypasses.
+  Each attempt has an opaque random ID, propagated through the existing consume-once, exact
+  session/query/owner-fenced mailbox, including pending/failed reservations before normal expiry.
+  No raw session/turn IDs, bank IDs, endpoint, or retrieved memory bodies are added.
+- Independently committed `input`, `decision` (Jev) or `model` (legacy LLM), `plan`, `handoff`,
+  `rewrite`, and `retrieval` stages retain a valid gate even if a later stage fails or finishes late.
+  Group records by `correlation_id`, not query text or arrival order. A later turn never adopts an
+  older capture. Expired/mismatched/missing handoff means uncorrelated direct recall, not guessed
+  attribution. Duplicate/consumed hooks remain fenced. Partial groups are expected under pruning,
+  expiry, contention, queue overflow, process exit, or write failures; absence is not evidence of a skip.
+- `input.capsule` preserves exactly the already bounded, cleaned capsule supplied to the planner,
+  **except credential redaction** (known configured Hindsight/OpenRouter keys and shared common
+  credential patterns). This is not a universal secret/PII detector. Normalized user/assistant
+  text remains private. Metadata is allowlisted: returned model/provider identity, numeric
+  finite confidence, token usage and cost when available (including host `usage.cost_usd`). Missing
+  metadata is not synthesized; `usage` is omitted unless an allowlisted finite numeric field exists.
+  Cost estimates/confidence are not routing thresholds.
+- `rewrite` contains the validated query even when it returned too late, explicitly marked
+  `timeout`; `"shadow"` queries never enter retrieval. `retrieval` records the original input and
+  actual projected effective query, outcome, and available result count/formatted bytes. For active
+  skip/reuse, effective query is null and count/bytes are zero because no Hindsight request occurs.
+- Best-effort asynchronous local writes reuse diagnostic atomic storage and credential redaction.
+  One process-local daemon writer, shared across companion/provider imports, accepts at most 16
+  waiting stages plus one in flight. Each queued stage is an immutable redacted JSON snapshot
+  bounded by `max_record_bytes`. Serialization/size rejection happens before any store pruning.
+  Redaction and serialization still consume caller CPU time; directory scans, pruning, locking,
+  and fsync run off-path, without using the remote-client event loop.
+  Queue-full/admission contention, file-lock contention, write and serialization failures drop
+  evidence and never raise into routing. Queued stages may be lost on process exit: shutdown
+  never drains or waits for this writer. There is no durable worker/service, retry, extra model
+  call, remote upload, or automatic labeling. Ordinary structured logs remain content-free.
+
+This is an evidence sample, **not automatic ground truth or an evaluation score**. Inspect sampled
+complete groups to label whether memory was needed, whether visible history already sufficed, and
+whether a rewrite preserved entities/time/uncertainty. Optional later AI labeling must treat all
+captured text as untrusted data and keep it private; model confidence, a nonempty retrieval, and a
+successful transport do not establish quality. Keep real Jev decisions separate from controlled
+rewrite/backend outcomes in reports. Do not commit captures or use production transcripts in tests.
+Restart the process after changing capture configuration, just as for other provider settings.
+
 ## Context-aware recall planner
 
 The planner is a companion surface in the same standard Git plugin. Hermes loads it as a normal
@@ -172,7 +237,8 @@ Consumption, newer turns, and normal expiry still invalidate the handoff; shadow
 republish it. Active skip/reuse invokes neither rewriting nor Hindsight.
 **Shadow rewriting is synchronous and still adds latency and model cost.** It receives only the
 remaining planner budget, not a new timeout. A timeout-ignoring host can still delay the hook;
-its late output is discarded. `rewrite: false` avoids that extra latency/cost entirely.
+its late output is never applied (private evaluation can retain it as a timeout observation).
+`rewrite: false` avoids that extra latency/cost entirely.
 
 `rewrite` does not change legacy `route: llm` behavior. A typed first turn bypasses both routes and
 rewriting; ownership, normalization, stale-turn fencing and consume-once behavior are unchanged.
@@ -219,7 +285,8 @@ preserves direct-query recall. Full conversation history is never written to the
 The handoff stores an SHA-256 digest of the source query, session/turn correlation, action, and optional
 rewritten query only in process memory. Hermes imports the companion and provider under distinct module
 names, so they share a stable private `sys.modules` registry keyed by the resolved Hermes home. No planner
-database, file lock, PID lease, or cross-process coordination exists in normal operation. After validating
+database, file lock, PID lease, or cross-process coordination exists for routing. Opt-in private
+evaluation uses a separate nonblocking file lock for local evidence, never for plan consumption. After validating
 current session/turn identity, every hook clears that session's prior plans before checking whether the
 current payload is plannable, so an early return cannot expose an older plan. Provider query mismatches
 remove and close the current reservation. Recently consumed turn IDs remain tombstoned for the same bounded

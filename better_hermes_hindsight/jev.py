@@ -42,6 +42,10 @@ _QUESTION = {
 }
 
 
+class _ObservedAction(str):
+    metadata: dict[str, object]
+
+
 class JevDecisionError(Exception):
     """A sanitized stage failure; never includes remote bodies or credentials."""
 
@@ -96,7 +100,16 @@ async def _post(
             if len(body) > _MAX_RESPONSE_BYTES:
                 raise JevDecisionError("oversized")
         try:
-            return parse_action(json.loads(body))
+            document = json.loads(body)
+            action = _ObservedAction(parse_action(document))
+            answers = document.get("answers", {}).get("action", {})
+            action.metadata = {
+                "model": document.get("model"),
+                "confidence": answers.get("confidence"),
+                "usage": document.get("usage"),
+                "cost": document.get("cost"),
+            }
+            return cast(PlanAction, action)
         except (ValueError, UnicodeError):
             raise JevDecisionError("invalid") from None
 
