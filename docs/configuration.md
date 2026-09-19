@@ -62,6 +62,8 @@ This example uses only synthetic/local values and contains no API key. Retention
   },
   "planner": {
     "mode": "off",
+    "route": "llm",
+    "rewrite": false,
     "timeout_seconds": 2.0,
     "history_max_exchanges": 4,
     "history_max_chars": 6000,
@@ -125,7 +127,7 @@ response budget; it does not limit query input.
 The planner is a companion surface in the same standard Git plugin. Hermes loads it as a normal
 standalone plugin and loads the Better memory provider through the existing exclusive
 `memory.provider` path. The companion's public `pre_llm_call` hook runs before provider prefetch,
-uses `ctx.llm` for one structured decision, and transfers only that decision through a short-lived
+uses the configured decision route, and transfers only its plan through a short-lived
 process-local handoff; no Hermes core patch or second package installation is required.
 
 `planner.mode` controls behavior:
@@ -135,6 +137,51 @@ process-local handoff; no Hermes core patch or second package installation is re
   the original query;
 - `active`: `skip` and `reuse` make no Hindsight request; `recall` substitutes exactly one validated,
   self-contained query before the normal provider bounds and request path.
+
+### Decision route and optional query rewriting
+
+`planner.route` defaults to `llm`, preserving the existing combined `ctx.llm` decision/rewrite
+call. Opt into `jev` to separate the memory decision from optional rewriting:
+
+```json
+{"planner": {"mode": "shadow", "route": "jev", "rewrite": false}}
+```
+
+Jev uses exactly `~typesafe/jev-latest` at `https://openrouter.ai/api/alpha/decisions`, not the
+chat-completions API. It sends the same bounded, normalized conversation capsule to OpenRouter;
+this is an additional external data/cost boundary. Set `OPENROUTER_API_KEY` in the process environment
+(or the active Hermes home's `.env`, which Hermes loads). The plugin itself never searches for or
+loads credential files. There is no endpoint/model override, score threshold, or retry loop.
+
+With `route: jev`, `rewrite` defaults to `false`: a recall decision uses the original clean current
+query, still subject to normal provider projection. With `rewrite: true`, only a recall decision
+invokes `ctx.llm` via the existing `better_hindsight_recall_planner` auxiliary slot. This second
+prompt requests only a self-contained search query, not another action decision. Active skip/reuse
+makes no rewrite or Hindsight call. Shadow still performs ordinary original-query Hindsight recall.
+`rewrite` does not change legacy `route: llm` behavior. A typed first turn bypasses both routes and
+rewriting; ownership, normalization, stale-turn fencing and consume-once behavior are unchanged.
+
+Jev and optional rewriting share `planner.timeout_seconds`, not separate full budgets. Jev has a
+single total deadline covering asynchronous DNS, connection, headers and body, a 16 KiB response
+cap, no redirects, no proxy-env routing, and no retries. Rewriting receives only the remaining
+budget; as with the legacy host LLM call, a host that ignores its timeout may finish late, but its
+result cannot be published or used.
+
+| Stage outcome | Behavior (active and shadow unless stated) |
+| --- | --- |
+| Valid timely Jev skip/reuse | No rewrite; active avoids Hindsight, shadow recalls original query |
+| Valid timely Jev recall, rewrite disabled | Original clean query through normal provider bounds |
+| Valid timely rewrite | Active uses validated query; shadow recalls original query |
+| Missing key, decision HTTP/transport error, malformed or oversized response, timeout | Cancel reservation; ordinary bounded direct recall |
+| Rewrite exception, invalid query, timeout | Cancel reservation; ordinary bounded direct recall |
+| Budget exhausted or result late | Reject result; no extra stage after budget exhaustion; direct recall |
+| Plan already consumed, expired, or superseded | Never republish; existing provider consumption/turn fence wins |
+
+This preserves current planner failure policy: failure is not an intentional skip. Sanitized
+`planner_stage` telemetry reports `route`, `stage` (`decision`/`rewrite`), `outcome`, elapsed time,
+`fallback: direct_recall` for stage failures. The existing `planner` event also reports
+the action, route, and final mailbox publication outcome. No query, history, key, raw
+response, or exception text is logged by these events.
 
 In every mode, a turn that Hermes identifies as the session's first turn bypasses the planner and follows
 the ordinary direct-query recall path. Trivial prompts bypass the auxiliary model as well.
@@ -235,6 +282,8 @@ timeout does not guarantee backend model cancellation or refund work/cost alread
 | `recall.input_max_tokens` | `500` | 1 through 1,048,576 `cl100k_base` tokens; must not exceed the Hindsight server's `HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS` |
 | `recall.context_max_bytes` | `8192` | 1 through 1,048,576 bytes |
 | `planner.mode` | `off` | `off`, `shadow`, or `active`; explicit opt-in only |
+| `planner.route` | `llm` | `llm` (legacy combined decision/rewrite) or `jev` (decision only) |
+| `planner.rewrite` | `false` | Boolean; optional query-only LLM stage for Jev recall decisions |
 | `planner.timeout_seconds` | `2.0` | Greater than zero, at most 4 seconds; with recall timeout, at most 7.5 seconds when enabled |
 | `planner.history_max_exchanges` | `4` | Integer from 1 through 20 exchanges |
 | `planner.history_max_chars` | `6000` | Integer from 1 through 65,536 capsule characters; a larger current turn bypasses planning |
