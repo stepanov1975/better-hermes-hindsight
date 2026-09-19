@@ -42,9 +42,9 @@ important.
    excludes trivial prompts and strips skill scaffolding using Hermes's own query normalization. It
    builds a bounded capsule from that user instruction and a capped scan of clean user/assistant
    `content` fields. Provider-expanded sidecars are ignored, user-authored marker text is preserved, and
-   compact serialization is rejected if it exceeds its derived UTF-8 byte ceiling. The hook asks the
-   host-owned `ctx.llm` for `skip`, `reuse`, or one self-contained recall query, or uses the
-   opt-in Jev decision route with optional applied/shadow rewriting, within the remaining deadline.
+   compact serialization is rejected if it exceeds its derived UTF-8 byte ceiling. The hook asks Jev for
+   `skip`, `reuse`, or `recall`. Optional applied/shadow rewriting uses host-owned `ctx.llm`
+   only after `recall`, within the same remaining deadline. There is no alternate decision route.
 2. After verifying that Better recall is active for the exact session, the hook reserves that turn's
    source-query digest in a short-lived profile-keyed process-local registry. It never stores the conversation
    capsule, and it finalizes the reservation with only the action and optional rewritten query.

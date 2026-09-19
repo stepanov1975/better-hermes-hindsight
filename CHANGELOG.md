@@ -2,9 +2,17 @@
 
 Notable user-visible changes are recorded here. The project follows rolling `main`; versions and tags are optional snapshots rather than compatibility or deployment gates.
 
+Versioned entries below are historical release notes, not current configuration instructions.
+For supported settings and migration guidance, see `docs/configuration.md`.
+
 ## Unreleased
 
 ### Changed
+
+- Remove the combined LLM decision/rewrite planner and its route selector. Jev is now the
+  sole decision path; remove `planner.route` from existing configurations. The rewrite-only
+  auxiliary task retains its existing key. Independent rewriting (`false`/`true`/`shadow`),
+  planner modes, first-turn bypass, bounded direct fallback, and private evaluation remain supported.
 
 - Support exact Hindsight 0.10.0 in server-side `cl100k_base` compatibility mode, preserving
   support for 0.8.5, 0.9.1 and 0.9.2. The new server's default `o200k_base` tokenizer remains

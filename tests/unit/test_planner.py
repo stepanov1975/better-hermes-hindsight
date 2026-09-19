@@ -17,7 +17,7 @@ from better_hermes_hindsight.config import (
     load_config,
 )
 from better_hermes_hindsight.plan_mailbox import InMemoryPlanMailbox, RecallPlan
-from better_hermes_hindsight.planner import RECALL_PLANNER_TASK, RecallPlanner
+from better_hermes_hindsight.planner import RecallPlanner
 
 
 def _write_config(home: Path, *, mode: str = "active", timeout_seconds: float = 1.0) -> None:
@@ -30,6 +30,7 @@ def _write_config(home: Path, *, mode: str = "active", timeout_seconds: float = 
                 "recall": {"enabled": True, "timeout_seconds": 3.5},
                 "planner": {
                     "mode": mode,
+                    "rewrite": True,
                     "timeout_seconds": timeout_seconds,
                     "history_max_exchanges": 3,
                     "history_max_chars": 2048,
@@ -48,37 +49,19 @@ class _FakeLlm:
 
     def complete_structured(self, **kwargs: Any) -> object:
         self.calls.append(kwargs)
+        assert kwargs["schema_name"] == "better_hindsight_recall_rewrite"
         return SimpleNamespace(parsed=self.parsed)
 
 
-@pytest.mark.parametrize("rewrite", [False, True, "shadow"])
-@pytest.mark.parametrize("mode", ["off", "shadow", "active"])
-def test_legacy_llm_route_ignores_jev_rewrite_setting(
-    tmp_path: Path,
-    mode: str,
-    rewrite: bool | str,
-) -> None:
-    _write_config(tmp_path, mode=mode)
-    path = tmp_path / "better_hindsight/config.json"
-    document = json.loads(path.read_text())
-    document["planner"]["rewrite"] = rewrite
-    path.write_text(json.dumps(document))
-    mailbox = InMemoryPlanMailbox(tmp_path)
-    token = mailbox.activate(session_id="session-a")
-    llm = _FakeLlm({"action": "recall", "query": "legacy rewritten query"})
-    RecallPlanner(tmp_path, llm).on_pre_llm_call(
-        session_id="session-a",
-        turn_id="turn-a",
-        user_message="What did we decide?",
-    )
-    assert len(llm.calls) == (0 if mode == "off" else 1)
-    plan = mailbox.consume(source_query="What did we decide?", session_id="session-a")
-    if mode == "off":
-        assert plan is None
-    else:
-        assert plan is not None and plan.rewritten_query == "legacy rewritten query"
-        assert plan.mode == mode
-    mailbox.deactivate(token=token)
+class _FakeJev:
+    def __init__(self, action: str, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.action = action
+        self.calls: list[dict[str, Any]] = []
+        monkeypatch.setattr(planner_module, "decide_memory", self.decide)
+
+    def decide(self, capsule: str, *, timeout: float) -> str:
+        self.calls.append({"capsule": capsule, "timeout": timeout})
+        return self.action
 
 
 def _mailbox(home: Path) -> InMemoryPlanMailbox:
@@ -93,6 +76,8 @@ def test_planner_uses_only_bounded_plain_user_assistant_context(
     history_content: object,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    rewrite_llm = _FakeLlm({"query": "What backup policy did Alex choose previously?"})
+
     def require_text(content: str) -> str:
         assert isinstance(content, str)
         return content
@@ -101,10 +86,10 @@ def test_planner_uses_only_bounded_plain_user_assistant_context(
     _write_config(tmp_path)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
-    llm = _FakeLlm({"action": "recall", "query": "What backup policy did Alex choose previously?"})
+    decision = _FakeJev("recall", monkeypatch)
     planner = RecallPlanner(
         hermes_home=tmp_path,
-        llm=llm,
+        llm=rewrite_llm,
     )
 
     planner.on_pre_llm_call(
@@ -131,12 +116,13 @@ def test_planner_uses_only_bounded_plain_user_assistant_context(
         turn_id="turn-a",
     )
 
-    assert len(llm.calls) == 1
-    call = llm.calls[0]
-    assert call["task"] == RECALL_PLANNER_TASK
+    assert len(rewrite_llm.calls) == 1
+    assert rewrite_llm.calls[0]["task"] == planner_module.AUXILIARY_TASK_KEY
+    assert rewrite_llm.calls[0]["max_tokens"] == 128
+    assert len(decision.calls) == 1
+    call = decision.calls[0]
     assert call["timeout"] == pytest.approx(1.0, abs=0.01)
-    assert call["max_tokens"] == 128
-    capsule = json.loads(call["input"][0]["text"])
+    capsule = json.loads(call["capsule"])
     assert capsule == {
         "current_user_message": "What did we decide?",
         "recent_conversation": [
@@ -163,14 +149,16 @@ def test_planner_uses_only_bounded_plain_user_assistant_context(
 @pytest.mark.parametrize("mode", ["shadow", "active"])
 def test_first_turn_bypasses_planner_and_preserves_direct_recall(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     mode: str,
 ) -> None:
+    rewrite_llm = _FakeLlm({"query": "unused rewrite"})
     _write_config(tmp_path, mode=mode)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
-    llm = _FakeLlm({"action": "skip"})
+    decision = _FakeJev("skip", monkeypatch)
 
-    RecallPlanner(hermes_home=tmp_path, llm=llm).on_pre_llm_call(
+    RecallPlanner(hermes_home=tmp_path, llm=rewrite_llm).on_pre_llm_call(
         user_message="Current direct query",
         conversation_history=[{"role": "user", "content": "Current direct query"}],
         is_first_turn=True,
@@ -178,15 +166,17 @@ def test_first_turn_bypasses_planner_and_preserves_direct_recall(
         turn_id="turn-a",
     )
 
-    assert llm.calls == []
+    assert rewrite_llm.calls == []
+    assert decision.calls == []
     assert mailbox.consume(source_query="Current direct query", session_id="session-a") is None
 
 
 @pytest.mark.parametrize("query", ["thanks!", "Hi", "OK.", "/help", "  "])
 @pytest.mark.parametrize("mode", ["shadow", "active"])
 def test_trivial_turn_clears_stale_plan_without_auxiliary_call(
-    tmp_path: Path, query: str, mode: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, query: str, mode: str
 ) -> None:
+    rewrite_llm = _FakeLlm({"query": "must not run"})
     _write_config(tmp_path, mode=mode)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
@@ -200,11 +190,12 @@ def test_trivial_turn_clears_stale_plan_without_auxiliary_call(
     assert mailbox.finalize(
         turn_id="stale-turn", mode="active", action="recall", rewritten_query="stale rewrite"
     )
-    llm = _FakeLlm({"action": "recall", "query": "must not run"})
-    RecallPlanner(tmp_path, llm).on_pre_llm_call(
+    decision = _FakeJev("recall", monkeypatch)
+    RecallPlanner(tmp_path, rewrite_llm).on_pre_llm_call(
         user_message=query, session_id="session-a", turn_id="trivial-turn"
     )
-    assert llm.calls == []
+    assert rewrite_llm.calls == []
+    assert decision.calls == []
     assert mailbox.consume(source_query=query, session_id="session-a") is None
 
 
@@ -212,13 +203,14 @@ def test_history_scan_has_a_hard_row_bound(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    rewrite_llm = _FakeLlm({"query": "unused rewrite"})
     _write_config(tmp_path)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
-    llm = _FakeLlm({"action": "skip"})
+    decision = _FakeJev("skip", monkeypatch)
     planner = RecallPlanner(
         hermes_home=tmp_path,
-        llm=llm,
+        llm=rewrite_llm,
     )
     inspected = 0
     original = planner_module._safe_history_message
@@ -240,7 +232,7 @@ def test_history_scan_has_a_hard_row_bound(
         turn_id="turn-a",
     )
 
-    capsule = json.loads(llm.calls[0]["input"][0]["text"])
+    capsule = json.loads(decision.calls[0]["capsule"])
     assert capsule["recent_conversation"] == []
     assert inspected == 3 * planner_module._HISTORY_INSPECTED_ROWS_PER_EXCHANGE
 
@@ -248,6 +240,7 @@ def test_history_scan_has_a_hard_row_bound(
 def test_oversized_current_query_is_rejected_before_hash_or_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    rewrite_llm = _FakeLlm({"query": "unused rewrite"})
     query = "x" * (MAX_PLANNER_QUERY_CHARS + 1)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
@@ -274,18 +267,22 @@ def test_oversized_current_query_is_rejected_before_hash_or_config(
     with monkeypatch.context() as context:
         context.setattr(plan_mailbox_module, "_query_digest", fail_hash)
         context.setattr(planner_module, "load_config", fail_config)
-        llm = _FakeLlm({"action": "skip"})
-        RecallPlanner(hermes_home=tmp_path, llm=llm).on_pre_llm_call(
+        decision = _FakeJev("skip", monkeypatch)
+        RecallPlanner(hermes_home=tmp_path, llm=rewrite_llm).on_pre_llm_call(
             user_message=query,
             session_id="session-a",
             turn_id="turn-a",
         )
         assert mailbox.consume(source_query=query, session_id="session-a") is None
 
-    assert llm.calls == []
+    assert rewrite_llm.calls == []
+    assert decision.calls == []
 
 
-def test_non_text_turn_clears_an_abandoned_prior_plan(tmp_path: Path) -> None:
+def test_non_text_turn_clears_an_abandoned_prior_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rewrite_llm = _FakeLlm({"query": "unused rewrite"})
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
     assert mailbox.reserve(
@@ -302,7 +299,8 @@ def test_non_text_turn_clears_an_abandoned_prior_plan(tmp_path: Path) -> None:
         rewritten_query="stale rewrite",
     )
 
-    RecallPlanner(hermes_home=tmp_path, llm=_FakeLlm({"action": "skip"})).on_pre_llm_call(
+    _FakeJev("skip", monkeypatch)
+    RecallPlanner(hermes_home=tmp_path, llm=rewrite_llm).on_pre_llm_call(
         user_message=[{"type": "text", "text": "Why?"}],
         session_id="session-a",
         turn_id="turn-current",
@@ -311,7 +309,11 @@ def test_non_text_turn_clears_an_abandoned_prior_plan(tmp_path: Path) -> None:
     assert mailbox.consume(source_query="Why?", session_id="session-a") is None
 
 
-def test_history_message_is_bounded_before_strip_or_marker_search(tmp_path: Path) -> None:
+def test_history_message_is_bounded_before_strip_or_marker_search(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rewrite_llm = _FakeLlm({"query": "unused rewrite"})
+
     class GuardedText(str):
         def strip(self, *args: object, **kwargs: object) -> str:
             raise AssertionError("raw oversized content was stripped")
@@ -322,10 +324,10 @@ def test_history_message_is_bounded_before_strip_or_marker_search(tmp_path: Path
     _write_config(tmp_path)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
-    llm = _FakeLlm({"action": "skip"})
+    decision = _FakeJev("skip", monkeypatch)
     planner = RecallPlanner(
         hermes_home=tmp_path,
-        llm=llm,
+        llm=rewrite_llm,
     )
     planner.on_pre_llm_call(
         user_message="current",
@@ -337,7 +339,7 @@ def test_history_message_is_bounded_before_strip_or_marker_search(tmp_path: Path
         turn_id="turn-a",
     )
 
-    capsule = json.loads(llm.calls[0]["input"][0]["text"])
+    capsule = json.loads(decision.calls[0]["capsule"])
     assert len(capsule["recent_conversation"][0]["content"]) <= 2048
 
 
@@ -345,6 +347,7 @@ def test_capsule_build_time_is_charged_to_the_planner_deadline(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    rewrite_llm = _FakeLlm({"query": "unused rewrite"})
     _write_config(tmp_path, timeout_seconds=2.0)
     now = [100.0]
     mailbox = InMemoryPlanMailbox(tmp_path, monotonic=lambda: now[0])
@@ -360,10 +363,10 @@ def test_capsule_build_time_is_charged_to_the_planner_deadline(
         return original_build(current_user_message, conversation_history, config)
 
     monkeypatch.setattr(planner_module, "_build_capsule", delayed_build)
-    llm = _FakeLlm({"action": "reuse"})
+    decision = _FakeJev("reuse", monkeypatch)
     planner = RecallPlanner(
         hermes_home=tmp_path,
-        llm=llm,
+        llm=rewrite_llm,
         monotonic=lambda: now[0],
     )
 
@@ -374,17 +377,18 @@ def test_capsule_build_time_is_charged_to_the_planner_deadline(
         turn_id="turn-a",
     )
 
-    assert llm.calls[0]["timeout"] == pytest.approx(1.5)
+    assert decision.calls[0]["timeout"] == pytest.approx(1.5)
 
 
 def test_serialized_capsule_rejects_content_beyond_derived_byte_limit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    rewrite_llm = _FakeLlm({"query": "unused"})
     _write_config(tmp_path)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
-    llm = _FakeLlm({"action": "recall", "query": "unused"})
+    decision = _FakeJev("recall", monkeypatch)
 
     def oversized_capsule(
         current_user_message: str,
@@ -397,7 +401,7 @@ def test_serialized_capsule_rejects_content_beyond_derived_byte_limit(
     monkeypatch.setattr(planner_module, "_build_capsule", oversized_capsule)
     planner = RecallPlanner(
         hermes_home=tmp_path,
-        llm=llm,
+        llm=rewrite_llm,
     )
     planner.on_pre_llm_call(
         user_message="Current direct query",
@@ -406,18 +410,22 @@ def test_serialized_capsule_rejects_content_beyond_derived_byte_limit(
         turn_id="turn-a",
     )
 
-    assert llm.calls == []
+    assert rewrite_llm.calls == []
+    assert decision.calls == []
     assert mailbox.consume(source_query="Current direct query", session_id="session-a") is None
 
 
-def test_valid_capsule_stays_within_derived_utf8_byte_limit(tmp_path: Path) -> None:
+def test_valid_capsule_stays_within_derived_utf8_byte_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rewrite_llm = _FakeLlm({"query": "unused rewrite"})
     _write_config(tmp_path)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
-    llm = _FakeLlm({"action": "skip"})
+    decision = _FakeJev("skip", monkeypatch)
     planner = RecallPlanner(
         hermes_home=tmp_path,
-        llm=llm,
+        llm=rewrite_llm,
     )
     source_query = "\x00" * 2048
 
@@ -428,19 +436,22 @@ def test_valid_capsule_stays_within_derived_utf8_byte_limit(tmp_path: Path) -> N
         turn_id="turn-a",
     )
 
-    serialized = llm.calls[0]["input"][0]["text"]
+    serialized = decision.calls[0]["capsule"]
     config = load_config(tmp_path).planner
     assert len(serialized.encode("utf-8")) <= planner_module._capsule_byte_limit(config)
 
 
-def test_latest_current_copy_is_removed_when_a_later_user_row_exists(tmp_path: Path) -> None:
+def test_latest_current_copy_is_removed_when_a_later_user_row_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rewrite_llm = _FakeLlm({"query": "unused rewrite"})
     _write_config(tmp_path)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
-    llm = _FakeLlm({"action": "reuse"})
+    decision = _FakeJev("reuse", monkeypatch)
     planner = RecallPlanner(
         hermes_home=tmp_path,
-        llm=llm,
+        llm=rewrite_llm,
     )
 
     planner.on_pre_llm_call(
@@ -455,7 +466,7 @@ def test_latest_current_copy_is_removed_when_a_later_user_row_exists(tmp_path: P
         turn_id="turn-a",
     )
 
-    capsule = json.loads(llm.calls[0]["input"][0]["text"])
+    capsule = json.loads(decision.calls[0]["capsule"])
     assert capsule["recent_conversation"] == [
         {"role": "user", "content": "Why?"},
         {"role": "assistant", "content": "Because snapshots make rollback deterministic."},
@@ -463,14 +474,17 @@ def test_latest_current_copy_is_removed_when_a_later_user_row_exists(tmp_path: P
     ]
 
 
-def test_planner_preserves_user_authored_memory_context_literal(tmp_path: Path) -> None:
+def test_planner_preserves_user_authored_memory_context_literal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rewrite_llm = _FakeLlm({"query": "unused rewrite"})
     _write_config(tmp_path)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
-    llm = _FakeLlm({"action": "skip"})
+    decision = _FakeJev("skip", monkeypatch)
     planner = RecallPlanner(
         hermes_home=tmp_path,
-        llm=llm,
+        llm=rewrite_llm,
     )
     source_query = (
         "What did we decide?\n\n<memory-context>\nprivate recalled memory\n</memory-context>"
@@ -483,7 +497,7 @@ def test_planner_preserves_user_authored_memory_context_literal(tmp_path: Path) 
         turn_id="turn-a",
     )
 
-    capsule = json.loads(llm.calls[0]["input"][0]["text"])
+    capsule = json.loads(decision.calls[0]["capsule"])
     assert capsule["current_user_message"] == source_query
     assert "private recalled memory" in json.dumps(capsule)
     assert mailbox.consume(source_query=source_query, session_id="session-a") == RecallPlan(
@@ -494,14 +508,17 @@ def test_planner_preserves_user_authored_memory_context_literal(tmp_path: Path) 
     )
 
 
-def test_user_authored_memory_marker_in_clean_history_is_preserved(tmp_path: Path) -> None:
+def test_user_authored_memory_marker_in_clean_history_is_preserved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rewrite_llm = _FakeLlm({"query": "unused rewrite"})
     _write_config(tmp_path)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
-    llm = _FakeLlm({"action": "reuse"})
+    decision = _FakeJev("reuse", monkeypatch)
     planner = RecallPlanner(
         hermes_home=tmp_path,
-        llm=llm,
+        llm=rewrite_llm,
     )
     literal = "Analyze <memory-context>literal XML</memory-context>."
 
@@ -520,7 +537,7 @@ def test_user_authored_memory_marker_in_clean_history_is_preserved(tmp_path: Pat
         turn_id="turn-a",
     )
 
-    capsule = json.loads(llm.calls[0]["input"][0]["text"])
+    capsule = json.loads(decision.calls[0]["capsule"])
     assert capsule["recent_conversation"][0]["content"] == literal
     assert "provider secret" not in json.dumps(capsule)
 
@@ -528,8 +545,10 @@ def test_user_authored_memory_marker_in_clean_history_is_preserved(tmp_path: Pat
 @pytest.mark.parametrize("invalid_query", ["   ", chr(0xD800)])
 def test_active_invalid_plan_preserves_direct_recall_instead_of_stale_recall(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     invalid_query: str,
 ) -> None:
+    rewrite_llm = _FakeLlm({"query": invalid_query})
     _write_config(tmp_path)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
@@ -546,10 +565,10 @@ def test_active_invalid_plan_preserves_direct_recall_instead_of_stale_recall(
         action="recall",
         rewritten_query="stale query",
     )
-    llm = _FakeLlm({"action": "recall", "query": invalid_query})
+    decision = _FakeJev("recall", monkeypatch)
     planner = RecallPlanner(
         hermes_home=tmp_path,
-        llm=llm,
+        llm=rewrite_llm,
     )
 
     planner.on_pre_llm_call(
@@ -560,26 +579,29 @@ def test_active_invalid_plan_preserves_direct_recall_instead_of_stale_recall(
     )
 
     assert mailbox.consume(source_query="same question", session_id="session-a") is None
+    assert len(decision.calls) == 1
 
 
 def test_active_timeout_preserves_direct_recall_without_using_late_model_result(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    rewrite_llm = _FakeLlm({"query": "late rewritten query"})
     _write_config(tmp_path, timeout_seconds=0.5)
     now = [10.0]
     mailbox = InMemoryPlanMailbox(tmp_path, monotonic=lambda: now[0])
     mailbox.activate(session_id="session-a")
 
-    class _LateLlm(_FakeLlm):
-        def complete_structured(self, **kwargs: Any) -> object:
-            result = super().complete_structured(**kwargs)
+    class _LateJev(_FakeJev):
+        def decide(self, capsule: str, *, timeout: float) -> str:
+            result = super().decide(capsule, timeout=timeout)
             now[0] = 10.6
             return result
 
-    llm = _LateLlm({"action": "recall", "query": "late rewritten query"})
+    decision = _LateJev("recall", monkeypatch)
     planner = RecallPlanner(
         hermes_home=tmp_path,
-        llm=llm,
+        llm=rewrite_llm,
         monotonic=lambda: now[0],
     )
 
@@ -590,11 +612,14 @@ def test_active_timeout_preserves_direct_recall_without_using_late_model_result(
         turn_id="turn-a",
     )
 
-    assert len(llm.calls) == 1
+    assert len(decision.calls) == 1
     assert mailbox.consume(source_query="question", session_id="session-a") is None
 
 
-def test_invalid_turn_identity_does_not_mutate_the_mailbox(tmp_path: Path) -> None:
+def test_invalid_turn_identity_does_not_mutate_the_mailbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rewrite_llm = _FakeLlm({"query": "unused rewrite"})
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
     assert mailbox.reserve(
@@ -610,14 +635,15 @@ def test_invalid_turn_identity_does_not_mutate_the_mailbox(tmp_path: Path) -> No
         action="recall",
         rewritten_query="older valid rewrite",
     )
-    llm = _FakeLlm({"action": "skip"})
+    decision = _FakeJev("skip", monkeypatch)
 
-    RecallPlanner(hermes_home=tmp_path, llm=llm).on_pre_llm_call(
+    RecallPlanner(hermes_home=tmp_path, llm=rewrite_llm).on_pre_llm_call(
         user_message="question",
         session_id="session-a",
     )
 
-    assert llm.calls == []
+    assert rewrite_llm.calls == []
+    assert decision.calls == []
     assert mailbox.consume(source_query="question", session_id="session-a") == RecallPlan(
         mode="active",
         action="recall",
@@ -626,13 +652,16 @@ def test_invalid_turn_identity_does_not_mutate_the_mailbox(tmp_path: Path) -> No
     )
 
 
-def test_planner_bridges_an_asynchronous_session_rotation(tmp_path: Path) -> None:
+def test_planner_bridges_an_asynchronous_session_rotation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rewrite_llm = _FakeLlm({"query": "unused rewrite"})
     _write_config(tmp_path)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="parent")
-    llm = _FakeLlm({"action": "skip"})
+    decision = _FakeJev("skip", monkeypatch)
 
-    RecallPlanner(hermes_home=tmp_path, llm=llm).on_pre_llm_call(
+    RecallPlanner(hermes_home=tmp_path, llm=rewrite_llm).on_pre_llm_call(
         user_message="question",
         session_id="child",
         parent_session_id="parent",
@@ -646,15 +675,19 @@ def test_planner_bridges_an_asynchronous_session_rotation(tmp_path: Path) -> Non
         rewritten_query=None,
         turn_id="turn-child",
     )
+    assert len(decision.calls) == 1
 
 
-def test_subagent_parent_lineage_does_not_rebind_the_parent(tmp_path: Path) -> None:
+def test_subagent_parent_lineage_does_not_rebind_the_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rewrite_llm = _FakeLlm({"query": "unused rewrite"})
     _write_config(tmp_path)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="parent")
-    llm = _FakeLlm({"action": "skip"})
+    decision = _FakeJev("skip", monkeypatch)
 
-    RecallPlanner(hermes_home=tmp_path, llm=llm).on_pre_llm_call(
+    RecallPlanner(hermes_home=tmp_path, llm=rewrite_llm).on_pre_llm_call(
         user_message="question",
         session_id="child",
         parent_session_id="parent",
@@ -664,12 +697,14 @@ def test_subagent_parent_lineage_does_not_rebind_the_parent(tmp_path: Path) -> N
 
     assert mailbox.is_active(session_id="parent")
     assert not mailbox.is_active(session_id="child")
-    assert llm.calls == []
+    assert rewrite_llm.calls == []
+    assert decision.calls == []
 
 
 def test_config_failure_fences_an_abandoned_matching_plan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    rewrite_llm = _FakeLlm({"query": "unused"})
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
     assert mailbox.reserve(
@@ -690,8 +725,8 @@ def test_config_failure_fences_an_abandoned_matching_plan(
         raise OSError("temporarily unavailable")
 
     monkeypatch.setattr(planner_module, "load_config", fail_config)
-    llm = _FakeLlm({"action": "recall", "query": "unused"})
-    planner = RecallPlanner(hermes_home=tmp_path, llm=llm)
+    decision = _FakeJev("recall", monkeypatch)
+    planner = RecallPlanner(hermes_home=tmp_path, llm=rewrite_llm)
 
     planner.on_pre_llm_call(
         user_message="same question",
@@ -701,16 +736,20 @@ def test_config_failure_fences_an_abandoned_matching_plan(
         turn_id="new-turn",
     )
 
-    assert llm.calls == []
+    assert rewrite_llm.calls == []
+    assert decision.calls == []
     assert mailbox.consume(source_query="same question", session_id="session-a") is None
 
 
-def test_off_or_inactive_planner_makes_no_model_call_or_mailbox(tmp_path: Path) -> None:
+def test_off_or_inactive_planner_makes_no_model_call_or_mailbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rewrite_llm = _FakeLlm({"query": "must not run"})
     _write_config(tmp_path, mode="off")
-    llm = _FakeLlm({"action": "recall", "query": "must not run"})
+    decision = _FakeJev("recall", monkeypatch)
     planner = RecallPlanner(
         hermes_home=tmp_path,
-        llm=llm,
+        llm=rewrite_llm,
     )
     planner.on_pre_llm_call(
         user_message="question",
@@ -719,7 +758,8 @@ def test_off_or_inactive_planner_makes_no_model_call_or_mailbox(tmp_path: Path) 
         turn_id="turn-a",
     )
 
-    assert llm.calls == []
+    assert rewrite_llm.calls == []
+    assert decision.calls == []
 
     _write_config(tmp_path, mode="active")
     _mailbox(tmp_path).activate(session_id="different-session")
@@ -729,17 +769,21 @@ def test_off_or_inactive_planner_makes_no_model_call_or_mailbox(tmp_path: Path) 
         session_id="session-a",
         turn_id="turn-b",
     )
-    assert llm.calls == []
+    assert rewrite_llm.calls == []
+    assert decision.calls == []
 
 
-def test_shadow_plan_is_marked_for_observation_without_changing_action(tmp_path: Path) -> None:
+def test_shadow_plan_is_marked_for_observation_without_changing_action(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rewrite_llm = _FakeLlm({"query": "unused rewrite"})
     _write_config(tmp_path, mode="shadow")
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
-    llm = _FakeLlm({"action": "reuse"})
+    decision = _FakeJev("reuse", monkeypatch)
     planner = RecallPlanner(
         hermes_home=tmp_path,
-        llm=llm,
+        llm=rewrite_llm,
     )
 
     planner.on_pre_llm_call(
@@ -759,16 +803,20 @@ def test_shadow_plan_is_marked_for_observation_without_changing_action(tmp_path:
         rewritten_query=None,
         turn_id="turn-a",
     )
+    assert len(decision.calls) == 1
 
 
-def test_oversized_current_turn_falls_back_without_planning(tmp_path: Path) -> None:
+def test_oversized_current_turn_falls_back_without_planning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rewrite_llm = _FakeLlm({"query": "must not run"})
     _write_config(tmp_path)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
-    llm = _FakeLlm({"action": "recall", "query": "must not run"})
+    decision = _FakeJev("recall", monkeypatch)
     planner = RecallPlanner(
         hermes_home=tmp_path,
-        llm=llm,
+        llm=rewrite_llm,
     )
 
     planner.on_pre_llm_call(
@@ -778,18 +826,22 @@ def test_oversized_current_turn_falls_back_without_planning(tmp_path: Path) -> N
         turn_id="turn-a",
     )
 
-    assert llm.calls == []
+    assert rewrite_llm.calls == []
+    assert decision.calls == []
     assert mailbox.consume(source_query="x" * 2_049, session_id="session-a") is None
 
 
-def test_non_text_current_turn_is_not_planned(tmp_path: Path) -> None:
+def test_non_text_current_turn_is_not_planned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rewrite_llm = _FakeLlm({"query": "must not run"})
     _write_config(tmp_path)
     mailbox = _mailbox(tmp_path)
     mailbox.activate(session_id="session-a")
-    llm = _FakeLlm({"action": "recall", "query": "must not run"})
+    decision = _FakeJev("recall", monkeypatch)
     planner = RecallPlanner(
         hermes_home=tmp_path,
-        llm=llm,
+        llm=rewrite_llm,
     )
 
     planner.on_pre_llm_call(
@@ -799,5 +851,76 @@ def test_non_text_current_turn_is_not_planned(tmp_path: Path) -> None:
         turn_id="turn-a",
     )
 
-    assert llm.calls == []
+    assert rewrite_llm.calls == []
+    assert decision.calls == []
     assert mailbox.consume(source_query="image", session_id="session-a") is None
+
+
+@pytest.mark.parametrize("rewrite", [False, True, "shadow"])
+@pytest.mark.parametrize("mode", ["off", "shadow", "active"])
+@pytest.mark.parametrize("action", ["skip", "reuse", "recall"])
+def test_jev_is_the_only_decision_path_with_independent_rewriting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rewrite: bool | str, mode: str, action: str
+) -> None:
+    _write_config(tmp_path, mode=mode)
+    path = tmp_path / "better_hindsight/config.json"
+    document = json.loads(path.read_text())
+    document["planner"]["rewrite"] = rewrite
+    path.write_text(json.dumps(document))
+    decision = _FakeJev(action, monkeypatch)
+    rewrite_llm = _FakeLlm({"query": "self-contained historical query"})
+    mailbox = _mailbox(tmp_path)
+    token = mailbox.activate(session_id="session-a")
+    try:
+        RecallPlanner(tmp_path, rewrite_llm).on_pre_llm_call(
+            user_message="What did we decide?", session_id="session-a", turn_id="turn-a"
+        )
+        assert len(decision.calls) == int(mode != "off")
+        assert len(rewrite_llm.calls) == int(
+            mode != "off" and action == "recall" and rewrite is not False
+        )
+        plan = mailbox.consume(source_query="What did we decide?", session_id="session-a")
+        if mode == "off":
+            assert plan is None
+        else:
+            assert plan is not None and plan.mode == mode and plan.action == action
+            expected_query = None
+            if action == "recall":
+                expected_query = (
+                    "self-contained historical query" if rewrite is True else "What did we decide?"
+                )
+            assert plan.rewritten_query == expected_query
+    finally:
+        mailbox.deactivate(token=token)
+
+
+@pytest.mark.parametrize(
+    "parsed",
+    [
+        None,
+        [],
+        {},
+        {"action": "skip"},
+        {"query": "valid", "action": "recall"},
+        {"query": 1},
+        {"query": ""},
+        {"query": "x" * 513},
+        {"query": "line\nbreak"},
+    ],
+)
+def test_invalid_rewrite_preserves_direct_query(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, parsed: object
+) -> None:
+    _write_config(tmp_path)
+    decision = _FakeJev("recall", monkeypatch)
+    rewrite_llm = _FakeLlm(parsed)
+    mailbox = _mailbox(tmp_path)
+    token = mailbox.activate(session_id="session-a")
+    try:
+        RecallPlanner(tmp_path, rewrite_llm).on_pre_llm_call(
+            user_message="What did we decide?", session_id="session-a", turn_id="turn-a"
+        )
+        assert len(decision.calls) == len(rewrite_llm.calls) == 1
+        assert mailbox.consume(source_query="What did we decide?", session_id="session-a") is None
+    finally:
+        mailbox.deactivate(token=token)

@@ -329,7 +329,7 @@ def test_jev_provider_routing(
 ) -> None:
     document = _base_config()
     document["evaluation"] = {"enabled": capture_enabled}
-    document["planner"] = {"mode": mode, "route": "jev", "rewrite": rewrite}
+    document["planner"] = {"mode": mode, "rewrite": rewrite}
     cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
     _write_config(tmp_path, document)
     handle = _RecordingHandle()
@@ -410,7 +410,6 @@ def test_jev_guard_makes_no_decision_or_rewrite(
     document = _base_config()
     document["planner"] = {
         "mode": "off" if guard == "off" else "active",
-        "route": "jev",
         "rewrite": rewrite,
     }
     cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
@@ -461,7 +460,6 @@ def test_jev_stage_failure_preserves_direct_recall(
     document = _base_config()
     document["planner"] = {
         "mode": "active",
-        "route": "jev",
         "rewrite": True,
         "timeout_seconds": 1.0,
     }
@@ -535,7 +533,6 @@ def test_jev_shadow_rewrite_preserves_published_gate(
     document["evaluation"] = {"enabled": True}
     document["planner"] = {
         "mode": mode,
-        "route": "jev",
         "rewrite": "shadow",
         "timeout_seconds": 1.0,
     }
@@ -637,7 +634,7 @@ def test_jev_shadow_rewrite_never_republishes(
     fence: str,
 ) -> None:
     document = _base_config()
-    document["planner"] = {"mode": "active", "route": "jev", "rewrite": "shadow"}
+    document["planner"] = {"mode": "active", "rewrite": "shadow"}
     _write_config(tmp_path, document)
     now = [100.0]
     monkeypatch.setattr(time, "monotonic", lambda: now[0])
@@ -679,7 +676,7 @@ def test_capture_correlates_repeated_and_concurrent_turns(
 
     document = _base_config()
     document["evaluation"] = {"enabled": True}
-    document["planner"] = {"mode": "active", "route": "jev", "rewrite": "shadow"}
+    document["planner"] = {"mode": "active", "rewrite": "shadow"}
     _write_config(tmp_path, document)
     handle = _RecordingHandle()
     monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _: handle)
@@ -746,7 +743,7 @@ def test_evaluation_failure_does_not_break_direct_recall(
 
     document = _base_config()
     document["evaluation"] = {"enabled": True}
-    document["planner"] = {"mode": "active", "route": "jev", "rewrite": False}
+    document["planner"] = {"mode": "active", "rewrite": False}
     _write_config(tmp_path, document)
     handle = _RecordingHandle()
     monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _: handle)
@@ -800,7 +797,7 @@ def test_evaluation_slow_disk_does_not_block_planning_recall_or_shutdown(
     assert drain_evaluation_for_tests()
     document = _base_config()
     document["evaluation"] = {"enabled": True}
-    document["planner"] = {"mode": "active", "route": "jev", "rewrite": False}
+    document["planner"] = {"mode": "active", "rewrite": False}
     _write_config(tmp_path, document)
     handle = _RecordingHandle()
     monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _: handle)
@@ -967,21 +964,30 @@ def test_planner_failure_falls_back_to_bounded_direct_recall(
     provider.initialize("session-a", hermes_home=str(tmp_path), platform="cli")
     now = [10.0]
 
-    class FailingLlm:
+    calls: list[float] = []
+
+    def failing_decision(capsule: str, *, timeout: float) -> str:
+        calls.append(timeout)
+        assert 0 < timeout <= 0.5
+        if failure == "exception":
+            raise RuntimeError("synthetic planner failure")
+        if failure == "timeout":
+            raise TimeoutError("synthetic planner timeout")
+        if failure == "late":
+            now[0] += 0.6
+            return "skip"
+        raise JevDecisionError("invalid")
+
+    class NoRewrite:
         def complete_structured(self, **kwargs: object) -> object:
-            assert 0 < cast(float, kwargs["timeout"]) <= 0.5
-            if failure == "exception":
-                raise RuntimeError("synthetic planner failure")
-            if failure == "timeout":
-                raise TimeoutError("synthetic planner timeout")
-            if failure == "late":
-                now[0] += 0.6
-                return SimpleNamespace(parsed={"action": "skip"})
-            return SimpleNamespace(parsed={"action": "recall", "query": ""})
+            raise AssertionError("failed decisions must never invoke rewriting")
+
+    monkeypatch.setattr(planner_module, "decide_memory", failing_decision)
 
     query = "What backup policy did we choose? " * 8
-    planner = RecallPlanner(tmp_path, FailingLlm(), monotonic=lambda: now[0])
+    planner = RecallPlanner(tmp_path, NoRewrite(), monotonic=lambda: now[0])
     planner.on_pre_llm_call(user_message=query, session_id="session-a", turn_id="turn-a")
+    assert len(calls) == 1
     assert provider.prefetch(query)
     assert len(handle.recalls) == 1
     projected, timeout = handle.recalls[0]

@@ -62,7 +62,6 @@ This example uses only synthetic/local values and contains no API key. Retention
   },
   "planner": {
     "mode": "off",
-    "route": "llm",
     "rewrite": false,
     "timeout_seconds": 2.0,
     "history_max_exchanges": 4,
@@ -151,7 +150,7 @@ Separate from slow-recall diagnostics, this opt-in captures **sensitive private 
   Each attempt has an opaque random ID, propagated through the existing consume-once, exact
   session/query/owner-fenced mailbox, including pending/failed reservations before normal expiry.
   No raw session/turn IDs, bank IDs, endpoint, or retrieved memory bodies are added.
-- Independently committed `input`, `decision` (Jev) or `model` (legacy LLM), `plan`, `handoff`,
+- Independently committed `input`, `decision` (Jev), `plan`, `handoff`,
   `rewrite`, and `retrieval` stages retain a valid gate even if a later stage fails or finishes late.
   Group records by `correlation_id`, not query text or arrival order. A later turn never adopts an
   older capture. Expired/mismatched/missing handoff means uncorrelated direct recall, not guessed
@@ -192,7 +191,7 @@ Restart the process after changing capture configuration, just as for other prov
 The planner is a companion surface in the same standard Git plugin. Hermes loads it as a normal
 standalone plugin and loads the Better memory provider through the existing exclusive
 `memory.provider` path. The companion's public `pre_llm_call` hook runs before provider prefetch,
-uses the configured decision route, and transfers only its plan through a short-lived
+uses Jev for decisions, and transfers only its plan through a short-lived
 process-local handoff; no Hermes core patch or second package installation is required.
 
 `planner.mode` controls behavior:
@@ -200,16 +199,17 @@ process-local handoff; no Hermes core patch or second package installation is re
 - `off` (default): do not call the planner and preserve direct current-query recall;
 - `shadow`: compute and consume a plan, emit only action/outcome/latency metadata, but still recall with
   the original query;
-- `active`: `skip` and `reuse` make no Hindsight request; `recall` substitutes exactly one validated,
-  self-contained query before the normal provider bounds and request path.
+- `active`: `skip` and `reuse` make no Hindsight request; `recall` uses the original query or exactly one validated,
+  self-contained rewrite before the normal provider bounds and request path.
 
-### Decision route and optional query rewriting
+### Jev decisions and optional query rewriting
 
-`planner.route` defaults to `llm`, preserving the existing combined `ctx.llm` decision/rewrite
-call. Opt into `jev` to separate the memory decision from optional rewriting:
+Jev is the sole decision path. Remove the obsolete `planner.route` key from existing configs,
+regardless of its value: it is rejected by unknown-key validation. The combined LLM
+decision/rewrite path has been removed. Planning is still off by default; enable it explicitly:
 
 ```json
-{"planner": {"mode": "shadow", "route": "jev", "rewrite": false}}
+{"planner": {"mode": "shadow", "rewrite": false}}
 ```
 
 Jev uses exactly `~typesafe/jev-latest` at `https://openrouter.ai/api/alpha/decisions`, not the
@@ -218,15 +218,17 @@ this is an additional external data/cost boundary. Set `OPENROUTER_API_KEY` in t
 (or the active Hermes home's `.env`, which Hermes loads). The plugin itself never searches for or
 loads credential files. There is no endpoint/model override, score threshold, or retry loop.
 
-With `route: jev`, `rewrite` defaults to `false`: a recall decision uses the original clean current
+`planner.rewrite` defaults to `false`: a recall decision uses the original clean current
 query, still subject to normal provider projection. With `rewrite: true`, only a recall decision
 invokes `ctx.llm` via the existing `better_hindsight_recall_planner` auxiliary slot. This second
-prompt requests only a self-contained search query, not another action decision. Active skip/reuse
+prompt requests only a self-contained search query, not another action decision. The auxiliary
+key is retained to preserve deployed rewrite model/provider overrides; it is not an old decision
+implementation. Active skip/reuse
 makes no rewrite or Hindsight call. Shadow still performs ordinary original-query Hindsight recall.
 To enable Jev decisions while observing (never applying) LLM rewrites:
 
 ```json
-{"planner": {"mode": "active", "route": "jev", "rewrite": "shadow"}}
+{"planner": {"mode": "active", "rewrite": "shadow"}}
 ```
 
 `rewrite` accepts exactly `false`, `true`, or `"shadow"`; existing booleans keep their behavior.
@@ -240,13 +242,12 @@ remaining planner budget, not a new timeout. A timeout-ignoring host can still d
 its late output is never applied (private evaluation can retain it as a timeout observation).
 `rewrite: false` avoids that extra latency/cost entirely.
 
-`rewrite` does not change legacy `route: llm` behavior. A typed first turn bypasses both routes and
-rewriting; ownership, normalization, stale-turn fencing and consume-once behavior are unchanged.
+A typed first turn bypasses Jev and rewriting; ownership, normalization, stale-turn fencing and consume-once behavior are unchanged.
 
 Jev and optional rewriting share `planner.timeout_seconds`, not separate full budgets. Jev has a
 single total deadline covering asynchronous DNS, connection, headers and body, a 16 KiB response
 cap, no redirects, no proxy-env routing, and no retries. Rewriting receives only the remaining
-budget; as with the legacy host LLM call, a host that ignores its timeout may finish late, but its
+budget; a host that ignores its timeout may finish late, but its
 result cannot be published or used.
 
 | Stage outcome | Behavior (active and shadow unless stated) |
@@ -260,16 +261,16 @@ result cannot be published or used.
 | Plan already consumed, expired, or superseded | Never republish; existing provider consumption/turn fence wins |
 
 This preserves current planner failure policy: failure is not an intentional skip. Sanitized
-`planner_stage` telemetry reports `route`, `stage` (`decision`/`rewrite`), `outcome`, elapsed time,
+`planner_stage` telemetry reports `stage` (`decision`/`rewrite`), `outcome`, elapsed time,
 and effective stage `mode`: `shadow` is observation-only, even when the Jev decision stage is
 `active`; `active` rewriting is eligible for application only after successful publication.
 `fallback: direct_recall` marks decision/applied-stage failures; observational rewrite failures
 report `fallback: none` because they do not change the gate. The existing `planner` event also reports
-the action, route, and final mailbox publication outcome. No query, history, key, raw
+the action and final mailbox publication outcome. No query, history, key, raw
 response, or exception text is logged by these events.
 
 In every mode, a turn that Hermes identifies as the session's first turn bypasses the planner and follows
-the ordinary direct-query recall path. Trivial prompts bypass the auxiliary model as well.
+the ordinary direct-query recall path. Trivial prompts bypass Jev and the auxiliary rewrite model as well.
 First-turn rewriting is intentionally excluded until a controlled
 original-query-versus-rewritten-query evaluation demonstrates better retrieval quality.
 
@@ -335,7 +336,7 @@ a result into a later turn.
 When recall is enabled, `planner.timeout_seconds + recall.timeout_seconds` must not exceed 7.5 seconds
 in `shadow` or `active` mode; the defaults total 5.5 seconds. Dormant planner timing constraints are not
 applied while recall is disabled, so independently enabled reflection or retention can still initialize.
-Planner model routing is exposed as the auxiliary
+Optional rewrite model routing is exposed as the auxiliary
 slot `better_hindsight_recall_planner`, so its provider/model can be configured through Hermes's normal
 auxiliary-model settings. Configuration is loaded for the process lifecycle; restart the owning Hermes
 process after changing planner activation or routing.
@@ -368,7 +369,6 @@ timeout does not guarantee backend model cancellation or refund work/cost alread
 | `recall.input_max_tokens` | `500` | 1 through 1,048,576 `cl100k_base` tokens; must not exceed the Hindsight server's `HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS` |
 | `recall.context_max_bytes` | `8192` | 1 through 1,048,576 bytes |
 | `planner.mode` | `off` | `off`, `shadow`, or `active`; explicit opt-in only |
-| `planner.route` | `llm` | `llm` (legacy combined decision/rewrite) or `jev` (decision only) |
 | `planner.rewrite` | `false` | `false` disables, `true` follows planner mode, `"shadow"` observes without applying; Jev recall only |
 | `planner.timeout_seconds` | `2.0` | Greater than zero, at most 4 seconds; with recall timeout, at most 7.5 seconds when enabled |
 | `planner.history_max_exchanges` | `4` | Integer from 1 through 20 exchanges |
