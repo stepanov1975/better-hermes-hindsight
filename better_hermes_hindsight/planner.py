@@ -21,6 +21,7 @@ from .config import (
     PlannerConfig,
     load_config,
 )
+from .evaluation import EvaluationCapture, model_metadata
 from .jev import JevDecisionError, decide_memory
 from .plan_mailbox import (
     InMemoryPlanMailbox,
@@ -282,6 +283,7 @@ class RecallPlanner:
                 parent_session_id=parent,
                 turn_id=turn_id,
                 mode=config.planner.mode,
+                evaluation_id=owner_token if config.evaluation.enabled else None,
                 publish_timeout_seconds=config.planner.timeout_seconds,
                 owner_token=owner_token,
             ):
@@ -289,17 +291,27 @@ class RecallPlanner:
         except (PlanMailboxError, ValueError):
             return
 
+        capture = EvaluationCapture(config, owner_token)
         started_at = self._monotonic()
         deadline = started_at + config.planner.timeout_seconds
         capsule = _build_capsule(current, kwargs.get("conversation_history"), config.planner)
 
         try:
             serialized_capsule = _serialize_capsule(capsule, config.planner)
+            capture.stage(
+                "input",
+                capsule=capsule,
+                route=config.planner.route,
+                mode=config.planner.mode,
+                rewrite=config.planner.rewrite,
+            )
             remaining_timeout = deadline - self._monotonic()
             if remaining_timeout <= 0:
                 raise TimeoutError
             if config.planner.route == "jev":
-                decision = self._jev_plan(serialized_capsule, current, config.planner, deadline)
+                decision = self._jev_plan(
+                    serialized_capsule, current, config.planner, deadline, capture
+                )
             else:
                 result = self._llm.complete_structured(
                     instructions=_PLANNER_INSTRUCTIONS,
@@ -317,6 +329,7 @@ class RecallPlanner:
                     purpose="context-aware automatic memory recall planning",
                     task=AUXILIARY_TASK_KEY,
                 )
+                capture.stage("model", metadata=model_metadata(result))
                 decision = _parse_decision(
                     getattr(result, "parsed", None),
                     query_max_chars=config.planner.query_max_chars,
@@ -330,6 +343,12 @@ class RecallPlanner:
         if completed_at >= deadline:
             decision = None
             outcome = "timeout"
+        capture.stage(
+            "plan",
+            outcome=outcome,
+            action=decision.action if decision else None,
+            query=decision.rewritten_query if decision else None,
+        )
         if decision is None:
             try:
                 mailbox.cancel(turn_id=turn_id, owner_token=owner_token)
@@ -354,6 +373,7 @@ class RecallPlanner:
             )
         except PlanMailboxError:
             published = False
+        capture.stage("handoff", published=published)
         self._emit(
             config,
             started_at,
@@ -372,14 +392,20 @@ class RecallPlanner:
         ):
             # The rewrite stage emits sanitized failure metadata without changing the gate.
             with suppress(Exception):
-                self._jev_rewrite(serialized_capsule, config.planner, deadline)
+                self._jev_rewrite(serialized_capsule, config.planner, deadline, capture)
 
     def _jev_plan(
-        self, capsule: str, current: str, config: PlannerConfig, deadline: float
+        self,
+        capsule: str,
+        current: str,
+        config: PlannerConfig,
+        deadline: float,
+        capture: EvaluationCapture,
     ) -> _PlanDecision | None:
         stage = "decision"
         started_at = self._monotonic()
         outcome = "failed"
+        action = None
         try:
             action = decide_memory(capsule, timeout=deadline - self._monotonic())
             if self._monotonic() >= deadline:
@@ -392,6 +418,12 @@ class RecallPlanner:
             outcome = "timeout"
             raise
         finally:
+            capture.stage(
+                stage,
+                outcome=outcome,
+                action=action,
+                metadata=model_metadata(getattr(action, "metadata", {})),
+            )
             self._emit_stage(stage, outcome, started_at, config.mode)
         if action != "recall":
             return _PlanDecision(action)
@@ -400,14 +432,16 @@ class RecallPlanner:
             # apply the rewrite-length limit to an unchanged, already validated source query.
             return _PlanDecision("recall", current)
 
-        return self._jev_rewrite(capsule, config, deadline)
+        return self._jev_rewrite(capsule, config, deadline, capture)
 
     def _jev_rewrite(
-        self, capsule: str, config: PlannerConfig, deadline: float
+        self, capsule: str, config: PlannerConfig, deadline: float, capture: EvaluationCapture
     ) -> _PlanDecision | None:
         stage = "rewrite"
         started_at = self._monotonic()
         outcome = "failed"
+        decision = None
+        result = None
         try:
             remaining = deadline - self._monotonic()
             if remaining <= 0:
@@ -440,6 +474,13 @@ class RecallPlanner:
             raise
         finally:
             mode = "shadow" if config.rewrite == "shadow" else config.mode
+            capture.stage(
+                stage,
+                outcome=outcome,
+                mode=mode,
+                query=decision.rewritten_query if decision else None,
+                metadata=model_metadata(result),
+            )
             self._emit_stage(stage, outcome, started_at, mode)
 
     def _emit_stage(self, stage: str, outcome: str, started_at: float, mode: str) -> None:

@@ -50,6 +50,7 @@ class _StoredPlan:
     mode: PlanMode
     expires_at: float
     owner_token: str | None = None
+    evaluation_id: str | None = None
     publish_before: float | None = None
     action: PlanAction | None = None
     rewritten_query: str | None = None
@@ -236,6 +237,7 @@ class InMemoryPlanMailbox:
         parent_session_id: str,
         turn_id: str,
         mode: PlanMode,
+        evaluation_id: str | None = None,
         publish_timeout_seconds: float | None = None,
         owner_token: str | None = None,
     ) -> bool:
@@ -280,6 +282,7 @@ class InMemoryPlanMailbox:
                 expires_at=now + _PLAN_MAX_AGE_SECONDS,
                 owner_token=owner_token,
                 publish_before=publish_before,
+                evaluation_id=evaluation_id,
             )
             return True
 
@@ -327,10 +330,22 @@ class InMemoryPlanMailbox:
                 return
             plan = state.plans.get(turn_id)
             if plan is not None and plan.owner_token == owner_token:
-                del state.plans[turn_id]
+                if plan.evaluation_id is None:
+                    del state.plans[turn_id]
+                else:
+                    # Keep only correlation for the impending direct-query fallback.
+                    plan.action = None
+                    plan.rewritten_query = None
+                    plan.publish_before = 0.0
             self._drop_empty_home(state)
 
-    def consume(self, *, source_query: str, session_id: str) -> RecallPlan | None:
+    def consume(
+        self,
+        *,
+        source_query: str,
+        session_id: str,
+        on_evaluation: Callable[[str], None] | None = None,
+    ) -> RecallPlan | None:
         """Consume the newest exact plan and fence all matching late workers."""
 
         _require_text(source_query, "source_query")
@@ -388,6 +403,8 @@ class InMemoryPlanMailbox:
             newest_turn_id, newest = max(matches, key=lambda item: item[1].sequence)
             for turn_id, _plan in matches:
                 state.plans.pop(turn_id, None)
+            if newest.evaluation_id is not None and on_evaluation is not None:
+                on_evaluation(newest.evaluation_id)
             if newest.action is None:
                 return None
             return RecallPlan(

@@ -43,8 +43,8 @@ important.
    builds a bounded capsule from that user instruction and a capped scan of clean user/assistant
    `content` fields. Provider-expanded sidecars are ignored, user-authored marker text is preserved, and
    compact serialization is rejected if it exceeds its derived UTF-8 byte ceiling. The hook asks the
-   host-owned `ctx.llm` for `skip`, `reuse`, or one self-contained recall query using
-   only the remaining planner deadline.
+   host-owned `ctx.llm` for `skip`, `reuse`, or one self-contained recall query, or uses the
+   opt-in Jev decision route with optional applied/shadow rewriting, within the remaining deadline.
 2. After verifying that Better recall is active for the exact session, the hook reserves that turn's
    source-query digest in a short-lived profile-keyed process-local registry. It never stores the conversation
    capsule, and it finalizes the reservation with only the action and optional rewritten query.
@@ -91,6 +91,13 @@ the obsolete planner keys.
 The model-facing `better_hindsight_recall` tool reuses this configured path and returns structured
 records without internal ranking or source-count telemetry. It cannot select a different bank,
 destination, principal, or retention policy.
+
+The default-off private evaluation capture is separate from routing. It writes bounded, redacted
+stage evidence under the profile home, including the exact bounded input capsule except credentials.
+An opaque owner ID follows only a matched mailbox reservation; storage failures cannot supply or
+alter decisions. Independently committed stages preserve valid gate evidence when observational
+rewriting fails or returns late. Captures contain no retrieved memory bodies and are not ground truth.
+See [capture policy](docs/configuration.md#private-planner-evaluation-capture).
 
 ### Reflection
 

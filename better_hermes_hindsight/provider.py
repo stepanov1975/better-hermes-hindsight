@@ -17,6 +17,7 @@ from .client import HindsightClientError, ReflectResponse, recall_request_parame
 from .client import is_available as is_hindsight_available
 from .config import BetterHindsightConfig, load_config
 from .diagnostics import enqueue_recall_capture, initialize_recall_capture
+from .evaluation import EvaluationCapture
 from .formatting import (
     RECALL_TRUST_LABEL,
     SYSTEM_PROMPT_BLOCK,
@@ -364,6 +365,12 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         started_at = time.monotonic()
         deadline = started_at + config.recall.timeout_seconds
         effective_query = query
+        capture: EvaluationCapture | None = None
+
+        def on_evaluation(identifier: str) -> None:
+            nonlocal capture
+            capture = EvaluationCapture(config, identifier)
+
         mailbox = self._plan_mailbox
         planner_query_eligible = len(query) <= config.planner.history_max_chars and bool(
             query.strip()
@@ -373,6 +380,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                 plan = mailbox.consume(
                     source_query=query,
                     session_id=session_id or self._session_id,
+                    on_evaluation=on_evaluation,
                 )
             except PlanMailboxError:
                 plan = None
@@ -382,6 +390,10 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                     outcome="consume_failed",
                 )
             if time.monotonic() >= deadline:
+                if capture is not None:
+                    capture.stage(
+                        "retrieval", original_query=query, effective_query=None, outcome="timeout"
+                    )
                 return ""
             if plan is not None and plan.mode == config.planner.mode:
                 emit_event(
@@ -392,6 +404,15 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                     outcome="consumed",
                 )
                 if plan.mode == "active" and plan.action in {"skip", "reuse"}:
+                    if capture is not None:
+                        capture.stage(
+                            "retrieval",
+                            original_query=query,
+                            effective_query=None,
+                            outcome=plan.action,
+                            result_count=0,
+                            formatted_bytes=0,
+                        )
                     return ""
                 if (
                     plan.mode == "active"
@@ -407,11 +428,29 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                 max_tokens=config.recall.input_max_tokens,
             )
             if not projected.strip():
+                if capture is not None:
+                    capture.stage(
+                        "retrieval",
+                        original_query=query,
+                        effective_query=projected,
+                        outcome="empty_query",
+                    )
                 return ""
         except Exception:
+            if capture is not None:
+                capture.stage(
+                    "retrieval",
+                    original_query=query,
+                    effective_query=None,
+                    outcome="projection_error",
+                )
             logger.warning(RECALL_FAILED_DIAGNOSTIC)
             return ""
         if time.monotonic() >= deadline:
+            if capture is not None:
+                capture.stage(
+                    "retrieval", original_query=query, effective_query=projected, outcome="timeout"
+                )
             logger.warning(RECALL_FAILED_DIAGNOSTIC)
             return ""
         recalled = self._recall_projected(
@@ -419,6 +458,8 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             deadline=deadline,
             started_at=started_at,
             warn_on_format_failure=False,
+            evaluation=capture,
+            original_query=query,
         )
         if recalled is None:
             return ""
@@ -730,6 +771,8 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         started_at: float,
         warn_on_format_failure: bool,
         include_type: bool = False,
+        evaluation: EvaluationCapture | None = None,
+        original_query: str | None = None,
     ) -> tuple[str, list[dict[str, object]]] | None:
         config = self._config
         runtime = self._runtime
@@ -738,6 +781,14 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         request = recall_request_parameters(config.recall)
 
         def record(outcome: str, **fields: object) -> None:
+            if evaluation is not None:
+                evaluation.stage(
+                    "retrieval",
+                    original_query=original_query,
+                    effective_query=projected,
+                    outcome=outcome,
+                    **fields,
+                )
             elapsed_ms = elapsed_milliseconds(started_at, time.monotonic())
             event_fields = dict(fields)
             try:
