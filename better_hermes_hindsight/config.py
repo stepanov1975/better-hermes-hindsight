@@ -261,7 +261,7 @@ class PlannerConfig:
 
     mode: PlannerMode = "off"
     route: Literal["llm", "jev"] = "llm"
-    rewrite: bool = False
+    rewrite: bool | Literal["shadow"] = False
     timeout_seconds: float = DEFAULT_PLANNER_TIMEOUT_SECONDS
     history_max_exchanges: int = DEFAULT_PLANNER_HISTORY_MAX_EXCHANGES
     history_max_chars: int = DEFAULT_PLANNER_HISTORY_MAX_CHARS
@@ -942,7 +942,11 @@ def _parse_planner(home: Path, value: object) -> PlannerConfig:
             Literal["llm", "jev"],
             _parse_literal(values.get("route", "llm"), "planner.route", ("llm", "jev")),
         ),
-        rewrite=_parse_bool(values.get("rewrite", False), "planner.rewrite"),
+        rewrite=(
+            "shadow"
+            if values.get("rewrite") == "shadow"
+            else _parse_bool(values.get("rewrite", False), "planner.rewrite")
+        ),
         mode=cast(
             PlannerMode,
             _parse_literal(values.get("mode", "off"), "planner.mode", ("off", "shadow", "active")),

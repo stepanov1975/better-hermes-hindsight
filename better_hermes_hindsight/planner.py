@@ -6,6 +6,7 @@ import json
 import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
@@ -361,6 +362,18 @@ class RecallPlanner:
             history=capsule,
         )
 
+        # Publish the valid gate decision before observational work. Shadow results never
+        # mutate/cancel the handoff; consume-once, new-turn and expiry fences still own it.
+        if (
+            published
+            and config.planner.route == "jev"
+            and config.planner.rewrite == "shadow"
+            and decision.action == "recall"
+        ):
+            # The rewrite stage emits sanitized failure metadata without changing the gate.
+            with suppress(Exception):
+                self._jev_rewrite(serialized_capsule, config.planner, deadline)
+
     def _jev_plan(
         self, capsule: str, current: str, config: PlannerConfig, deadline: float
     ) -> _PlanDecision | None:
@@ -382,11 +395,16 @@ class RecallPlanner:
             self._emit_stage(stage, outcome, started_at, config.mode)
         if action != "recall":
             return _PlanDecision(action)
-        if not config.rewrite:
+        if config.rewrite is not True:
             # Keep the existing mailbox contract: recall always carries a query. Do not
             # apply the rewrite-length limit to an unchanged, already validated source query.
             return _PlanDecision("recall", current)
 
+        return self._jev_rewrite(capsule, config, deadline)
+
+    def _jev_rewrite(
+        self, capsule: str, config: PlannerConfig, deadline: float
+    ) -> _PlanDecision | None:
         stage = "rewrite"
         started_at = self._monotonic()
         outcome = "failed"
@@ -421,7 +439,8 @@ class RecallPlanner:
             outcome = "timeout"
             raise
         finally:
-            self._emit_stage(stage, outcome, started_at, config.mode)
+            mode = "shadow" if config.rewrite == "shadow" else config.mode
+            self._emit_stage(stage, outcome, started_at, mode)
 
     def _emit_stage(self, stage: str, outcome: str, started_at: float, mode: str) -> None:
         emit_event(
@@ -432,7 +451,11 @@ class RecallPlanner:
             outcome=outcome,
             mode=mode,
             elapsed_ms=elapsed_milliseconds(started_at, self._monotonic()),
-            fallback="direct_recall" if outcome != "planned" else "none",
+            fallback=(
+                "direct_recall"
+                if outcome != "planned" and not (stage == "rewrite" and mode == "shadow")
+                else "none"
+            ),
         )
 
     def _emit(

@@ -51,6 +51,36 @@ class _FakeLlm:
         return SimpleNamespace(parsed=self.parsed)
 
 
+@pytest.mark.parametrize("rewrite", [False, True, "shadow"])
+@pytest.mark.parametrize("mode", ["off", "shadow", "active"])
+def test_legacy_llm_route_ignores_jev_rewrite_setting(
+    tmp_path: Path,
+    mode: str,
+    rewrite: bool | str,
+) -> None:
+    _write_config(tmp_path, mode=mode)
+    path = tmp_path / "better_hindsight/config.json"
+    document = json.loads(path.read_text())
+    document["planner"]["rewrite"] = rewrite
+    path.write_text(json.dumps(document))
+    mailbox = InMemoryPlanMailbox(tmp_path)
+    token = mailbox.activate(session_id="session-a")
+    llm = _FakeLlm({"action": "recall", "query": "legacy rewritten query"})
+    RecallPlanner(tmp_path, llm).on_pre_llm_call(
+        session_id="session-a",
+        turn_id="turn-a",
+        user_message="What did we decide?",
+    )
+    assert len(llm.calls) == (0 if mode == "off" else 1)
+    plan = mailbox.consume(source_query="What did we decide?", session_id="session-a")
+    if mode == "off":
+        assert plan is None
+    else:
+        assert plan is not None and plan.rewritten_query == "legacy rewritten query"
+        assert plan.mode == mode
+    mailbox.deactivate(token=token)
+
+
 def _mailbox(home: Path) -> InMemoryPlanMailbox:
     return InMemoryPlanMailbox(home)
 

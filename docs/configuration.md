@@ -158,6 +158,22 @@ query, still subject to normal provider projection. With `rewrite: true`, only a
 invokes `ctx.llm` via the existing `better_hindsight_recall_planner` auxiliary slot. This second
 prompt requests only a self-contained search query, not another action decision. Active skip/reuse
 makes no rewrite or Hindsight call. Shadow still performs ordinary original-query Hindsight recall.
+To enable Jev decisions while observing (never applying) LLM rewrites:
+
+```json
+{"planner": {"mode": "active", "route": "jev", "rewrite": "shadow"}}
+```
+
+`rewrite` accepts exactly `false`, `true`, or `"shadow"`; existing booleans keep their behavior.
+With `"shadow"`, a timely Jev recall is published with the original clean query **before** the
+observational rewrite. Its output is validated for telemetry but never enters the mailbox or
+retrieval. Invalid output, exceptions, and timeout cannot cancel that valid gate decision.
+Consumption, newer turns, and normal expiry still invalidate the handoff; shadow work cannot
+republish it. Active skip/reuse invokes neither rewriting nor Hindsight.
+**Shadow rewriting is synchronous and still adds latency and model cost.** It receives only the
+remaining planner budget, not a new timeout. A timeout-ignoring host can still delay the hook;
+its late output is discarded. `rewrite: false` avoids that extra latency/cost entirely.
+
 `rewrite` does not change legacy `route: llm` behavior. A typed first turn bypasses both routes and
 rewriting; ownership, normalization, stale-turn fencing and consume-once behavior are unchanged.
 
@@ -171,15 +187,18 @@ result cannot be published or used.
 | --- | --- |
 | Valid timely Jev skip/reuse | No rewrite; active avoids Hindsight, shadow recalls original query |
 | Valid timely Jev recall, rewrite disabled | Original clean query through normal provider bounds |
-| Valid timely rewrite | Active uses validated query; shadow recalls original query |
+| Valid timely rewrite | `rewrite: true` + active uses validated query; either shadow setting recalls original query |
 | Missing key, decision HTTP/transport error, malformed or oversized response, timeout | Cancel reservation; ordinary bounded direct recall |
-| Rewrite exception, invalid query, timeout | Cancel reservation; ordinary bounded direct recall |
+| Rewrite exception, invalid query, timeout | `rewrite: true` cancels reservation; `rewrite: "shadow"` leaves published gate unchanged |
 | Budget exhausted or result late | Reject result; no extra stage after budget exhaustion; direct recall |
 | Plan already consumed, expired, or superseded | Never republish; existing provider consumption/turn fence wins |
 
 This preserves current planner failure policy: failure is not an intentional skip. Sanitized
 `planner_stage` telemetry reports `route`, `stage` (`decision`/`rewrite`), `outcome`, elapsed time,
-`fallback: direct_recall` for stage failures. The existing `planner` event also reports
+and effective stage `mode`: `shadow` is observation-only, even when the Jev decision stage is
+`active`; `active` rewriting is eligible for application only after successful publication.
+`fallback: direct_recall` marks decision/applied-stage failures; observational rewrite failures
+report `fallback: none` because they do not change the gate. The existing `planner` event also reports
 the action, route, and final mailbox publication outcome. No query, history, key, raw
 response, or exception text is logged by these events.
 
@@ -283,7 +302,7 @@ timeout does not guarantee backend model cancellation or refund work/cost alread
 | `recall.context_max_bytes` | `8192` | 1 through 1,048,576 bytes |
 | `planner.mode` | `off` | `off`, `shadow`, or `active`; explicit opt-in only |
 | `planner.route` | `llm` | `llm` (legacy combined decision/rewrite) or `jev` (decision only) |
-| `planner.rewrite` | `false` | Boolean; optional query-only LLM stage for Jev recall decisions |
+| `planner.rewrite` | `false` | `false` disables, `true` follows planner mode, `"shadow"` observes without applying; Jev recall only |
 | `planner.timeout_seconds` | `2.0` | Greater than zero, at most 4 seconds; with recall timeout, at most 7.5 seconds when enabled |
 | `planner.history_max_exchanges` | `4` | Integer from 1 through 20 exchanges |
 | `planner.history_max_chars` | `6000` | Integer from 1 through 65,536 capsule characters; a larger current turn bypasses planning |

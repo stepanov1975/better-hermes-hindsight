@@ -42,6 +42,7 @@ from better_hermes_hindsight.plan_mailbox import (
     InMemoryPlanMailbox,
     PlanAction,
     PlanMode,
+    RecallPlan,
 )
 from better_hermes_hindsight.planner import RecallPlanner
 from better_hermes_hindsight.provider import (
@@ -314,10 +315,10 @@ def _publish_plan(
 
 
 @pytest.mark.parametrize("action", ["skip", "reuse", "recall"])
-@pytest.mark.parametrize("rewrite", [False, True])
+@pytest.mark.parametrize("rewrite", [False, True, "shadow"])
 @pytest.mark.parametrize("mode", ["active", "shadow"])
 def test_jev_provider_routing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str, rewrite: bool, mode: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, action: str, rewrite: bool | str, mode: str
 ) -> None:
     document = _base_config()
     document["planner"] = {"mode": mode, "route": "jev", "rewrite": rewrite}
@@ -366,22 +367,23 @@ def test_jev_provider_routing(
         assert result
         expected = (
             "Which backup retention was chosen earlier?"
-            if (mode == "active" and rewrite and action == "recall")
+            if (mode == "active" and rewrite is True and action == "recall")
             else query
         )
         assert [q for q, _ in handle.recalls] == [expected]
     provider.shutdown()
 
 
+@pytest.mark.parametrize("rewrite", [False, True, "shadow"])
 @pytest.mark.parametrize("guard", ["first_turn", "off", "recall_disabled", "unauthorized"])
 def test_jev_guard_makes_no_decision_or_rewrite(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, guard: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, guard: str, rewrite: bool | str
 ) -> None:
     document = _base_config()
     document["planner"] = {
         "mode": "off" if guard == "off" else "active",
         "route": "jev",
-        "rewrite": True,
+        "rewrite": rewrite,
     }
     cast(dict[str, object], document["recall"])["timeout_seconds"] = 1.0
     if guard == "recall_disabled":
@@ -490,6 +492,131 @@ def test_jev_stage_failure_preserves_direct_recall(
     assert "private exception text" not in caplog.text
     assert query not in caplog.text
     provider.shutdown()
+
+
+@pytest.mark.parametrize("mode", ["active", "shadow"])
+@pytest.mark.parametrize("outcome", ["valid", "invalid", "exception", "timeout", "late"])
+def test_jev_shadow_rewrite_preserves_published_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    mode: str,
+    outcome: str,
+) -> None:
+    document = _base_config()
+    document["planner"] = {
+        "mode": mode,
+        "route": "jev",
+        "rewrite": "shadow",
+        "timeout_seconds": 1.0,
+    }
+    _write_config(tmp_path, document)
+    handle = _RecordingHandle()
+    monkeypatch.setattr(provider_module, "acquire_process_runtime", lambda _config: handle)
+    provider = BetterHindsightMemoryProvider()
+    provider.initialize("jev-session", hermes_home=str(tmp_path), platform="cli")
+    # The provider mailbox captured the real clock at construction; keep the injected
+    # planner clock in that same epoch so this proves consumption, not expiry fallback.
+    now = [time.monotonic()]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    query = "What backup policy did we choose?"
+    monkeypatch.setattr(planner_module, "decide_memory", lambda *a, **k: "recall")
+    calls: list[str] = []
+    cancellations: list[object] = []
+    monkeypatch.setattr(InMemoryPlanMailbox, "cancel", lambda *a, **k: cancellations.append(k))
+
+    class Llm:
+        def complete_structured(self, **kwargs: object) -> object:
+            calls.append("rewrite")
+            assert kwargs["timeout"] == pytest.approx(1.0)
+            if outcome == "exception":
+                raise RuntimeError("private rewrite exception")
+            if outcome == "timeout":
+                raise TimeoutError
+            if outcome == "late":
+                now[0] += 1.1
+            return SimpleNamespace(
+                parsed={} if outcome == "invalid" else {"query": "private rewrite"}
+            )
+
+    with caplog.at_level(logging.INFO):
+        RecallPlanner(tmp_path, Llm(), monotonic=lambda: now[0]).on_pre_llm_call(
+            session_id="jev-session",
+            turn_id="jev-turn",
+            user_message=query,
+        )
+        assert provider.prefetch(query)
+    assert calls == ["rewrite"]
+    assert cancellations == []
+    assert [q for q, _ in handle.recalls] == [query]
+    events = [
+        json.loads(record.message) for record in caplog.records if record.message.startswith("{")
+    ]
+    stages = [e for e in events if e.get("stage") == "rewrite"]
+    assert len(stages) == 1
+    assert stages[0]["mode"] == "shadow"
+    assert stages[0]["fallback"] == "none"
+    assert (
+        stages[0]["outcome"]
+        == {
+            "valid": "planned",
+            "invalid": "invalid",
+            "exception": "failed",
+            "timeout": "timeout",
+            "late": "timeout",
+        }[outcome]
+    )
+    assert any(e.get("action") == "recall" and e.get("outcome") == "planned" for e in events)
+    assert any(
+        e.get("event") == "better_hindsight.recall_plan"
+        and e.get("action") == "recall"
+        and e.get("outcome") == "consumed"
+        for e in events
+    )
+    assert not any(e.get("action") == "none" for e in events)
+    assert query not in caplog.text
+    assert "private rewrite" not in caplog.text
+    provider.shutdown()
+
+
+@pytest.mark.parametrize("fence", ["consumed", "new_turn", "expired"])
+def test_jev_shadow_rewrite_never_republishes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fence: str,
+) -> None:
+    document = _base_config()
+    document["planner"] = {"mode": "active", "route": "jev", "rewrite": "shadow"}
+    _write_config(tmp_path, document)
+    now = [100.0]
+    monkeypatch.setattr(time, "monotonic", lambda: now[0])
+    mailbox = InMemoryPlanMailbox(tmp_path, monotonic=lambda: now[0])
+    token = mailbox.activate(session_id="jev-session")
+    query = "What backup policy did we choose?"
+    monkeypatch.setattr(planner_module, "decide_memory", lambda *a, **k: "recall")
+
+    consumed: list[RecallPlan | None] = []
+
+    class Llm:
+        def complete_structured(self, **kwargs: object) -> object:
+            if fence == "consumed":
+                consumed.append(mailbox.consume(source_query=query, session_id="jev-session"))
+            elif fence == "new_turn":
+                mailbox.begin_turn(session_id="jev-session", turn_id="new-turn")
+            else:
+                now[0] += 1000
+            return SimpleNamespace(parsed={"query": "must never publish"})
+
+    RecallPlanner(tmp_path, Llm(), monotonic=lambda: now[0]).on_pre_llm_call(
+        session_id="jev-session",
+        turn_id="jev-turn",
+        user_message=query,
+    )
+    if fence == "consumed":
+        assert len(consumed) == 1
+        assert consumed[0] is not None and consumed[0].rewritten_query == query
+    assert mailbox.consume(source_query=query, session_id="jev-session") is None
+    mailbox.deactivate(token=token)
 
 
 def test_provider_passes_projected_query_and_request_to_diagnostic_capture(

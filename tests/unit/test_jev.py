@@ -170,13 +170,40 @@ def test_invalid_budget_is_rejected_before_transport(timeout: float) -> None:
         jev.decide_memory("{}", timeout=timeout)
 
 
-@pytest.mark.parametrize("planner", [{"route": "unknown"}, {"rewrite": "yes"}])
+@pytest.mark.parametrize(
+    "planner",
+    [
+        {"route": "unknown"},
+        {"rewrite": "yes"},
+        {"rewrite": "active"},
+        {"rewrite": "false"},
+        {"rewrite": 0},
+        {"rewrite": 1},
+        {"rewrite": None},
+        {"rewrite": []},
+    ],
+)
 def test_invalid_route_config(tmp_path: Path, planner: dict[str, object]) -> None:
     path = tmp_path / "better_hindsight/config.json"
     path.parent.mkdir()
     path.write_text(json.dumps({"planner": planner}))
     with pytest.raises(ConfigError):
         load_config(tmp_path)
+
+
+@pytest.mark.parametrize("route", ["jev", "llm"])
+@pytest.mark.parametrize("mode", ["off", "shadow", "active"])
+@pytest.mark.parametrize("rewrite", [False, True, "shadow"])
+def test_rewrite_config_combinations(
+    tmp_path: Path,
+    route: str,
+    mode: str,
+    rewrite: bool | str,
+) -> None:
+    path = tmp_path / "better_hindsight/config.json"
+    path.parent.mkdir()
+    path.write_text(json.dumps({"planner": {"route": route, "mode": mode, "rewrite": rewrite}}))
+    assert load_config(tmp_path).planner.rewrite == rewrite
 
 
 def test_legacy_defaults(tmp_path: Path) -> None:
