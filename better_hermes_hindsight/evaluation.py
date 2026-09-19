@@ -158,7 +158,7 @@ class EvaluationCapture:
                 return
             secrets = tuple(
                 sorted(
-                    (self.config.api_key or "", os.environ.get("OPENROUTER_API_KEY", "")),
+                    (self.config.api_key or "", os.environ.get("OPENROUTER_API_KEY", "").strip()),
                     key=len,
                     reverse=True,
                 )

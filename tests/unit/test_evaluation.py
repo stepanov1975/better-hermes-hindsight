@@ -197,12 +197,13 @@ def test_unavailable_usage_is_omitted(result: object) -> None:
     assert model_metadata(result) == {}
 
 
+@pytest.mark.parametrize("padding", ["", " ", "\t\n"])
 @pytest.mark.parametrize("short", ["test-key", "key-tail"])
 def test_overlapping_secrets_redacted_longest_first(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, short: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, short: str, padding: str
 ) -> None:
     config = replace(_config(tmp_path, enabled=True), api_key=short)
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key-tail")
+    monkeypatch.setenv("OPENROUTER_API_KEY", f"{padding}test-key-tail{padding}")
     EvaluationCapture(config, uuid.uuid4().hex).stage("input", capsule="test-key-tail")
     assert drain_evaluation_for_tests()
     rows = [
