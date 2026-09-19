@@ -213,6 +213,26 @@ def test_overlapping_secrets_redacted_longest_first(
     assert rows[0]["capsule"] == "[REDACTED]"
 
 
+def test_failed_write_preserves_full_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import better_hermes_hindsight.evaluation as evaluation
+
+    config = _config(tmp_path, enabled=True, max_records=1)
+    capture = EvaluationCapture(config, uuid.uuid4().hex)
+    capture.stage("input", capsule="existing evidence")
+    assert drain_evaluation_for_tests()
+    directory = tmp_path / "better_hindsight/planner_evaluation"
+    before = {p.name: p.read_bytes() for p in directory.glob("*.json")}
+    assert len(before) == 1
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise OSError("synthetic disk failure")
+
+    monkeypatch.setattr(evaluation, "_write_record", fail)
+    capture.stage("plan", action="recall")
+    assert drain_evaluation_for_tests()
+    assert {p.name: p.read_bytes() for p in directory.glob("*.json")} == before
+
+
 def test_writer_queue_is_bounded_and_snapshots_payload(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

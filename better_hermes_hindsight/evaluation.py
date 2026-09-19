@@ -202,14 +202,12 @@ def _persist_stage(config: BetterHindsightConfig, encoded: str) -> None:
         os.fchmod(descriptor, 0o600)
         # One shared writer serializes in-process work; the lock also fences other processes.
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Commit new evidence before pruning; failed writes preserve existing records.
+        _write_record(directory, _new_record_id(), payload)
         now = time.time()
         paths = _record_paths(directory, regular_only=True)
         for index, path in enumerate(paths):
-            if (
-                index >= policy.max_records - 1
-                or now - path.stat().st_mtime > policy.max_age_seconds
-            ):
+            if index >= policy.max_records or now - path.stat().st_mtime > policy.max_age_seconds:
                 path.unlink()
-        _write_record(directory, _new_record_id(), payload)
     finally:
         os.close(descriptor)
