@@ -18,6 +18,7 @@ from better_hermes_hindsight.config import (
 )
 from better_hermes_hindsight.plan_mailbox import InMemoryPlanMailbox, RecallPlan
 from better_hermes_hindsight.planner import RecallPlanner
+from better_hermes_hindsight.shadow_rewrite import drain_shadow_for_tests
 
 
 def _write_config(home: Path, *, mode: str = "active", timeout_seconds: float = 1.0) -> None:
@@ -875,6 +876,7 @@ def test_jev_is_the_only_decision_path_with_independent_rewriting(
         RecallPlanner(tmp_path, rewrite_llm).on_pre_llm_call(
             user_message="What did we decide?", session_id="session-a", turn_id="turn-a"
         )
+        assert drain_shadow_for_tests()
         assert len(decision.calls) == int(mode != "off")
         assert len(rewrite_llm.calls) == int(
             mode != "off" and action == "recall" and rewrite is not False

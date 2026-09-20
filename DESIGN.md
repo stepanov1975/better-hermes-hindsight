@@ -38,13 +38,20 @@ important.
 ### Recall
 
 1. When planner mode is `shadow` or `active`, the standalone companion's `pre_llm_call` hook bypasses
-   Hermes-identified first turns so the provider performs ordinary direct-query recall. On later turns it
+   ordinary Hermes-identified first turns so the provider performs direct-query recall. Exact current-row
+   host metadata for `delegation_closeout`/`internal_notification` instead supplies a deterministic `skip`
+   without Jev or rewriting, including on first turns; shadow still recalls and off remains unchanged.
+   Missing or ambiguous provenance fails open, never inferred from text. On later ordinary turns it
    excludes trivial prompts and strips skill scaffolding using Hermes's own query normalization. It
    builds a bounded capsule from that user instruction and a capped scan of clean user/assistant
    `content` fields. Provider-expanded sidecars are ignored, user-authored marker text is preserved, and
    compact serialization is rejected if it exceeds its derived UTF-8 byte ceiling. The hook asks Jev for
    `skip`, `reuse`, or `recall`. Optional applied/shadow rewriting uses host-owned `ctx.llm`
-   only after `recall`, within the same remaining deadline. There is no alternate decision route.
+   only after `recall`, within the same remaining deadline. Typed internal history is excluded.
+   Applied rewriting is synchronous. Observational rewriting runs after gate publication in a single
+   process-shared daemon slot with no queue or shutdown join. Busy admission drops observations; an
+   uncooperative host occupies only that slot. The worker preserves contextvars and capture correlation,
+   never mutates the mailbox, and validates late results only as timeout observations.
 2. After verifying that Better recall is active for the exact session, the hook reserves that turn's
    source-query digest in a short-lived profile-keyed process-local registry. It never stores the conversation
    capsule, and it finalizes the reservation with only the action and optional rewritten query.
@@ -197,6 +204,6 @@ The intended deployment is personal Linux/POSIX with one trusted local operator/
 one Better-enabled profile per process, one supported external Hindsight service, a stable
 Hermes-home/outbox pathname topology, and the normal Hermes memory-provider lifecycle. Passive status
 is an operational snapshot under that model, not a defense
-against concurrent pathname replacement or an adversarial local writer. `codex_app_server`, typed
-provenance, automatic migration/deletion, and cross-platform sender election are outside the initial
+against concurrent pathname replacement or an adversarial local writer. `codex_app_server`, universal
+provenance beyond the typed planner exclusions, automatic migration/deletion, and cross-platform sender election are outside the initial
 product. They do not block use in the intended environment.

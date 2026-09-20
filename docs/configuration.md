@@ -237,12 +237,22 @@ observational rewrite. Its output is validated for telemetry but never enters th
 retrieval. Invalid output, exceptions, and timeout cannot cancel that valid gate decision.
 Consumption, newer turns, and normal expiry still invalidate the handoff; shadow work cannot
 republish it. Active skip/reuse invokes neither rewriting nor Hindsight.
-**Shadow rewriting is synchronous and still adds latency and model cost.** It receives only the
-remaining planner budget, not a new timeout. A timeout-ignoring host can still delay the hook;
-its late output is never applied (private evaluation can retain it as a timeout observation).
-`rewrite: false` avoids that extra latency/cost entirely.
+**Shadow rewriting does not wait on the auxiliary model.** One process-shared daemon slot, shared
+across companion/provider module names, accepts at most one call and has no waiting queue. Admission
+never waits: `busy` or `unavailable` records a dropped observation, not a recall failure. The worker
+inherits the submitting contextvars (host auxiliary routing/attribution), receives only the remaining
+original planner budget, and checks that budget before calling the host. It never receives a mailbox
+publication/cancellation callback. Consumption, expiry, newer turns, and shutdown cannot trigger late
+republication. Private rewrite records may arrive after retrieval but retain the original correlation ID.
 
-A typed first turn bypasses Jev and rewriting; ownership, normalization, stale-turn fencing and consume-once behavior are unchanged.
+Python cannot forcibly cancel a synchronous host request: retries/fallbacks can outlive the deadline,
+occupy the single slot until they return, and incur model cost. A stuck call drops subsequent shadow
+observations rather than creating more workers. Shutdown never joins the daemon; unfinished observations
+can be lost. Late output is never applied (private evaluation retains a validated query with `timeout`).
+`rewrite: true` remains synchronous, and `rewrite: false` avoids rewrite latency/cost entirely.
+
+An ordinary first turn bypasses Jev and rewriting; typed internal messages use the deterministic
+exclusion below. Ownership, normalization, stale-turn fencing and consume-once behavior are unchanged.
 
 Jev and optional rewriting share `planner.timeout_seconds`, not separate full budgets. Jev has a
 single total deadline covering asynchronous DNS, connection, headers and body, a 16 KiB response
@@ -269,10 +279,30 @@ report `fallback: none` because they do not change the gate. The existing `plann
 the action and final mailbox publication outcome. No query, history, key, raw
 response, or exception text is logged by these events.
 
-In every mode, a turn that Hermes identifies as the session's first turn bypasses the planner and follows
+An ordinary turn that Hermes identifies as the session's first turn bypasses the planner and follows
 the ordinary direct-query recall path. Trivial prompts bypass Jev and the auxiliary rewrite model as well.
 First-turn rewriting is intentionally excluded until a controlled
 original-query-versus-rewritten-query evaluation demonstrates better retrieval quality.
+
+### Typed internal messages
+
+With `planner.mode: active` or `shadow`, current host transcript rows whose `display_kind` is exactly
+`delegation_closeout` or `internal_notification` bypass both Jev and rewriting. This is an intentional,
+deterministic `skip`, recorded as decision outcome `internal_message`, not a model error. It also takes
+precedence over the ordinary first-turn bypass. Active mode skips Hindsight; shadow still recalls the
+original query. Off mode is unchanged. Normal authorization, input bounds, atomic publication deadline,
+consume-once, expiry and stale-turn fences still apply; exclusion is not an unfenced provider bypass.
+
+The current row must exactly match the raw hook `user_message` in the bounded tail of the host's
+`conversation_history`. Only explicitly reference-only compaction rows (`_compressed_summary: true`,
+`_compressed_summary_has_user_turn: false`) may follow it. An intervening ordinary row, missing metadata,
+unknown kind, changed/merged current content, or an unmatchable persistence override preserves normal
+behavior. This conservative check avoids borrowing an older identical message's provenance. If compaction
+drops typed metadata, normal recall remains possible. `display_metadata` alone, user-authored JSON,
+`api_content`, and envelope prefixes never establish internal provenance. Typed internal history rows are
+omitted from capsules; no synthetic type is inferred for their adjacent untyped assistant responses.
+
+### Capsule and handoff bounds
 
 The planner uses Hermes's skill-scaffolding normalization on the current `user_message` and user
 history, matching the instruction-only query passed to provider recall. Other user-authored marker
