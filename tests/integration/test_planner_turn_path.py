@@ -101,7 +101,7 @@ sessions:
         planner.decide_memory = fake_decide
         auxiliary_client.call_llm = fake_auxiliary
         agent = AIAgent(model="fixture-model", provider="openai", api_mode="chat_completions",
-            api_key="fixture-not-a-real-key", base_url="http://127.0.0.1:1/v1",
+            api_key="test", base_url="http://127.0.0.1:1/v1",
             max_iterations=1, enabled_toolsets=[], quiet_mode=True, verbose_logging=False,
             save_trajectories=False, skip_context_files=True, skip_memory=False,
             session_id="fixture-turn-session", platform="cli")
