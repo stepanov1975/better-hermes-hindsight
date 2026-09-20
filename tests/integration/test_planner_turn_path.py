@@ -152,17 +152,29 @@ sessions:
                 assert current["display_kind"] == kind
                 assert kwargs["is_first_turn"] is first_turn
             if scenario in {"summary", "summary_merged"}:
-                # Exercise actual compressor carrier construction, not summary text parsing.
+                # Summary carriers must not inherit an older row's internal origin.
                 summary = {"role":"user", "content":"Synthetic reference summary",
                            "_compressed_summary":True,
                            "_compressed_summary_has_user_turn":False}
                 if scenario == "summary_merged":
-                    from agent.context_compressor import ContextCompressor
-                    summary = dict(current)
+                    from agent.context_compressor import ContextCompressor, _SUMMARY_END_MARKER
                     compressor = object.__new__(ContextCompressor)
                     compressor._summary_has_user_turn = False
-                    compressor._merge_summary_into_tail_row(
-                        summary, "Synthetic reference summary", "user", True)
+                    merge = getattr(compressor, "_merge_summary_into_tail_row", None)
+                    if merge is not None:
+                        # Newer hosts expose the real carrier-construction helper.
+                        summary = dict(current)
+                        merge(summary, "Synthetic reference summary", "user", True)
+                    else:
+                        # The pinned host does this inline in compress(); construct its
+                        # equivalent synthetic carrier without requiring a newer private API.
+                        summary = {**current, **summary, "content":
+                            "Synthetic reference summary\n\n" + _SUMMARY_END_MARKER
+                            + "\n\n" + current["content"]}
+                        summary.pop("api_content", None)
+                    assert summary["_compressed_summary"] is True
+                    assert summary["_compressed_summary_has_user_turn"] is False
+                    assert summary["content"] != current["content"]
                     assert query in summary["content"]
                 # The older identical typed row must never supply this carrier's origin.
                 kwargs["conversation_history"][:] = [history[0], summary]
