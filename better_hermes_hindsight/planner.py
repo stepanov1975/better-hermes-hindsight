@@ -6,7 +6,6 @@ import json
 import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
-from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, cast
@@ -28,6 +27,7 @@ from .plan_mailbox import (
     PlanAction,
     PlanMailboxError,
 )
+from .shadow_rewrite import submit_shadow
 from .telemetry import elapsed_milliseconds, emit_event
 
 logger = logging.getLogger(__name__)
@@ -93,8 +93,39 @@ def _clip_text(text: str, maximum: int) -> str:
     return f"{text[:head]}{_CLIP_MARKER}{text[-tail:]}" if tail else text[:head]
 
 
+_INTERNAL_DISPLAY_KINDS = ("delegation_closeout", "internal_notification")
+
+
+def _is_internal_message(message: Mapping[str, object]) -> bool:
+    # These are host transcript fields, never parsed from user text or api_content.
+    return message.get("display_kind") in _INTERNAL_DISPLAY_KINDS
+
+
+def _current_is_internal(current: str, history: object) -> bool:
+    if not isinstance(history, (list, tuple)):
+        return False
+    # Only cross explicitly typed, reference-only compaction rows. Never attach an
+    # older matching row's provenance to a newer ordinary user turn (or clipped match).
+    for row in reversed(history[-_HISTORY_INSPECTED_ROWS_PER_EXCHANGE:]):
+        if not isinstance(row, Mapping):
+            return False
+        if row.get("role") != "user":
+            return False
+        if row.get("content") == current:
+            return _is_internal_message(row)
+        if (
+            row.get("_compressed_summary") is True
+            and row.get("_compressed_summary_has_user_turn") is False
+        ):
+            continue
+        return False
+    return False
+
+
 def _safe_history_message(message: object, *, maximum: int) -> tuple[str, str] | None:
     if not isinstance(message, Mapping):
+        return None
+    if _is_internal_message(message):
         return None
     role = message.get("role")
     if role not in {"user", "assistant"}:
@@ -223,9 +254,12 @@ class RecallPlanner:
                 return
         except (PlanMailboxError, ValueError):
             return
-        if kwargs.get("is_first_turn") is True:
-            return
         if not isinstance(current, str) or not current:
+            return
+        internal = len(current) <= MAX_PLANNER_QUERY_CHARS and _current_is_internal(
+            current, kwargs.get("conversation_history")
+        )
+        if kwargs.get("is_first_turn") is True and not internal:
             return
         # Match MemoryManager.prefetch_all's query identity before bounding,
         # hashing, or sending user text to the auxiliary model.
@@ -265,6 +299,7 @@ class RecallPlanner:
         started_at = self._monotonic()
         deadline = started_at + config.planner.timeout_seconds
         capsule = _build_capsule(current, kwargs.get("conversation_history"), config.planner)
+        decision: _PlanDecision | None
 
         try:
             serialized_capsule = _serialize_capsule(capsule, config.planner)
@@ -277,10 +312,20 @@ class RecallPlanner:
             remaining_timeout = deadline - self._monotonic()
             if remaining_timeout <= 0:
                 raise TimeoutError
-            decision = self._jev_plan(
-                serialized_capsule, current, config.planner, deadline, capture
+            if internal:
+                # Deterministic host provenance, not a Jev decision. Mode and mailbox
+                # deadline/consume-once policy are unchanged, including shadow observation.
+                decision = _PlanDecision("skip")
+                capture.stage("decision", outcome="internal_message", action="skip", metadata={})
+            else:
+                decision = self._jev_plan(
+                    serialized_capsule, current, config.planner, deadline, capture
+                )
+            outcome = (
+                "internal_message"
+                if internal
+                else ("planned" if decision is not None else "invalid")
             )
-            outcome = "planned" if decision is not None else "invalid"
         except Exception:
             decision = None
             outcome = "failed"
@@ -331,9 +376,14 @@ class RecallPlanner:
         # Publish the valid gate decision before observational work. Shadow results never
         # mutate/cancel the handoff; consume-once, new-turn and expiry fences still own it.
         if published and config.planner.rewrite == "shadow" and decision.action == "recall":
-            # The rewrite stage emits sanitized failure metadata without changing the gate.
-            with suppress(Exception):
-                self._jev_rewrite(serialized_capsule, config.planner, deadline, capture)
+            # The worker owns only an immutable input/config snapshot and this turn's
+            # capture. It has no mailbox callback and cannot republish or cancel a gate.
+            admission = submit_shadow(
+                lambda: self._jev_rewrite(serialized_capsule, config.planner, deadline, capture)
+            )
+            if admission != "submitted":
+                capture.stage("rewrite", outcome=admission, mode="shadow", query=None)
+                self._emit_stage("rewrite", admission, self._monotonic(), "shadow")
 
     def _jev_plan(
         self,

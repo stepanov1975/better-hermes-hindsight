@@ -61,6 +61,7 @@ from better_hermes_hindsight.runtime import (
     finalize_process_runtime,
     reset_process_runtime_for_tests,
 )
+from better_hermes_hindsight.shadow_rewrite import drain_shadow_for_tests
 
 _PLUGIN_SPEC = importlib.util.spec_from_file_location(
     "_better_hindsight_plugin_entrypoint",
@@ -363,6 +364,7 @@ def test_jev_provider_routing(
     )
     result = provider.prefetch(query)
     assert decisions == [{"current_user_message": query, "recent_conversation": []}]
+    assert drain_shadow_for_tests()
     assert len(rewrites) == int(rewrite and action == "recall")
     if rewrites:
         schema = cast(dict[str, object], rewrites[0]["json_schema"])
@@ -572,6 +574,7 @@ def test_jev_shadow_rewrite_preserves_published_gate(
             user_message=query,
         )
         assert provider.prefetch(query)
+        assert drain_shadow_for_tests()
     assert calls == ["rewrite"]
     assert cancellations == []
     assert [q for q, _ in handle.recalls] == [query]
@@ -660,6 +663,7 @@ def test_jev_shadow_rewrite_never_republishes(
         turn_id="jev-turn",
         user_message=query,
     )
+    assert drain_shadow_for_tests()
     if fence == "consumed":
         assert len(consumed) == 1
         assert consumed[0] is not None and consumed[0].rewritten_query == query
@@ -720,14 +724,17 @@ def test_capture_correlates_repeated_and_concurrent_turns(
         finally:
             release.set()
         pending.result(timeout=5)
+    assert drain_shadow_for_tests()
     assert drain_evaluation_for_tests()
     rows = [json.loads(p.read_text()) for p in directory.glob("*.json")]
     assert len({r["correlation_id"] for r in rows}) == 2
     for identifier in {r["correlation_id"] for r in rows}:
         stages = {r["stage"]: r for r in rows if r["correlation_id"] == identifier}
-        assert stages["rewrite"]["query"] == (
-            "old shadow" if identifier == old_id else "new shadow"
-        )
+        if identifier == old_id:
+            assert stages["rewrite"]["query"] == "old shadow"
+        else:
+            assert stages["rewrite"]["outcome"] == "busy"
+            assert stages["rewrite"]["query"] is None
         assert stages["retrieval"]["effective_query"] == query
     assert [q for q, _ in handle.recalls] == [query, query]
     first.shutdown()

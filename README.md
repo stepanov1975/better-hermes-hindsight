@@ -150,8 +150,20 @@ Provide `OPENROUTER_API_KEY` through your normal Hermes secret mechanism.
 Active `skip`/`reuse` avoids both rewriting and Hindsight. On `recall`, `rewrite: false` uses
 the original query, `true` can apply a validated rewrite, and `"shadow"` records observations
 without applying the rewritten query. Shadow rewriting publishes the valid gate first, so its
-failure or late result cannot cancel that gate. It still adds synchronous latency and model cost.
-Decision and rewrite share one deadline; failures fall back to ordinary bounded recall.
+failure or late result cannot cancel that gate. A nonblocking daemon runs at most one shadow
+rewrite per process, shared across plugin imports; there is no waiting queue. Busy/unavailable
+admission drops the observation without delaying the turn or changing retrieval. Decision and rewrite
+still share one deadline. The worker preserves host routing context; late results remain observations
+only. A timeout-ignoring host can occupy that one slot indefinitely and incur model/retry cost, but
+cannot delay prefetch, hold up shutdown, or start an unbounded backlog. Applied `rewrite: true`
+remains synchronous; `false` makes no rewrite call.
+
+With planning enabled, trusted current-row `display_kind` metadata (`delegation_closeout` or
+`internal_notification`) bypasses Jev and rewriting, including on a first turn. Active mode consumes a
+normal deadline-fenced `skip` plan and makes no recall request; shadow observes the skip but retains
+ordinary recall, and off stays unchanged. Typed internal history rows are excluded from planner
+capsules. Text prefixes never establish provenance: missing/ambiguous metadata preserves normal
+behavior. See [matching and compaction limits](docs/configuration.md#typed-internal-messages).
 
 **Upgrade:** remove `planner.route` from existing configurations (including `"jev"` and `"llm"`).
 It is now rejected as an unknown key; the combined LLM decision/rewrite implementation is removed.
@@ -286,8 +298,8 @@ See [operations](docs/operations.md) and [rollback](docs/rollback.md).
 
 The initial product is external-service-only, Linux/POSIX, one principal, one static bank, one
 Better-enabled profile per process, and normal-Hermes-loop-only. It does not support multiplexed
-multi-profile Better runtimes, `codex_app_server`, Windows sender election, hot reload, typed turn
-provenance, automatic bank/outbox migration, remote rewind, or exactly-once delivery. These are accepted
+multi-profile Better runtimes, `codex_app_server`, Windows sender election, hot reload, universal turn
+provenance (only the documented typed planner exclusions), automatic bank/outbox migration, remote rewind, or exactly-once delivery. These are accepted
 limits, not prerequisites for a usable version.
 
 ## Development
