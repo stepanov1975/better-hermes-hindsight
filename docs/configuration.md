@@ -293,14 +293,24 @@ precedence over the ordinary first-turn bypass. Active mode skips Hindsight; sha
 original query. Off mode is unchanged. Normal authorization, input bounds, atomic publication deadline,
 consume-once, expiry and stale-turn fences still apply; exclusion is not an unfenced provider bypass.
 
-The current row must exactly match the raw hook `user_message` in the bounded tail of the host's
-`conversation_history`. Only explicitly reference-only compaction rows (`_compressed_summary: true`,
-`_compressed_summary_has_user_turn: false`) may follow it. An intervening ordinary row, missing metadata,
-unknown kind, changed/merged current content, or an unmatchable persistence override preserves normal
-behavior. This conservative check avoids borrowing an older identical message's provenance. If compaction
-drops typed metadata, normal recall remains possible. `display_metadata` alone, user-authored JSON,
-`api_content`, and envelope prefixes never establish internal provenance. Typed internal history rows are
-omitted from capsules; no synthetic type is inferred for their adjacent untyped assistant responses.
+The physical terminal row must be a user row with string content and the recognized top-level kind.
+Its content must equal the untouched raw hook `user_message`, or exactly one human display timestamp
+plus one ASCII space plus that same input. The bounded prefix accepts English weekday names, valid
+`YYYY-MM-DD HH:MM:SS`, and an optional bounded timezone spelling; the timezone is not interpreted and
+the timestamp does not prove freshness or origin. Neither input is trimmed or repeatedly normalized.
+Legacy ISO timestamps, unknown rendering, list content and arbitrary persistence overrides fall back.
+
+Any compaction-summary marker on the terminal row stops classification, even if its content matches.
+A summary's `has_user_turn: false` flag describes summarized history, not whether its carrier contains
+a live ask. Standalone reference-summary suffixes therefore also fall back rather than searching older
+rows. Missing metadata, unknown kinds, merged content and ordinary terminal rows preserve normal
+behavior. If the host loses the current row entirely and supplies an older identically worded typed
+row, the hook exposes no immutable row token to distinguish it; this is best-effort matching under the
+host's well-formed staging contract, not an identity guarantee against corrupt or forged hook payloads.
+`display_metadata` alone, user-authored JSON, `api_content`, and envelope prefixes never establish
+internal provenance. Typed internal history rows are omitted from capsules; no synthetic type is
+inferred for their adjacent untyped assistant responses. This affects automatic planning/recall only,
+not retention or explicit tools.
 
 ### Capsule and handoff bounds
 
