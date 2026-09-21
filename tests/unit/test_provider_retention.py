@@ -420,6 +420,7 @@ def test_retain_only_primary_acquires_runtime_admits_and_keeps_prefetch_empty(
         "better_hindsight_reflect",
         "better_hindsight_retain",
         "better_hindsight_status",
+        "better_hindsight_mental_models",
     ]
     assert handle.admissions == [
         ("callback-session", "synthetic direct user", "synthetic direct assistant", 3)

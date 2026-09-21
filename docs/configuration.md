@@ -8,7 +8,10 @@ Recall is enabled by default. Context-aware recall planning, reflection, and aut
 disabled by default. Enable the planner in `shadow` mode first; enable reflection only after reviewing
 the configured Hindsight LLM/data/cost boundary; enable retention only after fake-service proof and an
 isolated Hindsight development deployment. Capability is controlled directly by `recall.enabled`,
-`planner.mode`, `reflect.enabled`, and `retain.enabled`.
+`planner.mode`, `reflect.enabled`, and `retain.enabled`. The separate default-off mental-model pilot
+uses `mental_models.enabled` for reads/status and additionally `mental_models.create_enabled` for
+creation; it does not depend on `reflect.enabled` or `retain.enabled`. See
+[mental models](mental-models.md) before enabling this bank-wide Hindsight 0.10.0 capability.
 
 ## Sources and precedence
 
@@ -78,6 +81,12 @@ This example uses only synthetic/local values and contains no API key. Retention
     "max_tokens": 1024,
     "tags": null,
     "tag_mode": null
+  },
+  "mental_models": {
+    "enabled": false,
+    "create_enabled": false,
+    "max_models": 20,
+    "timeout_seconds": 10.0
   },
   "retain": {
     "enabled": false,

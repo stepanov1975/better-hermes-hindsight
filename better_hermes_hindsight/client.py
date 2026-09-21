@@ -239,11 +239,14 @@ class MissionSnapshot:
 class HindsightClientError(RuntimeError):
     """Sanitized fixed-category client failure safe for logs and operator output."""
 
-    __slots__ = ("category", "reason")
+    __slots__ = ("category", "reason", "status")
 
-    def __init__(self, category: str, message: str, *, reason: str | None = None) -> None:
+    def __init__(
+        self, category: str, message: str, *, reason: str | None = None, status: int | None = None
+    ) -> None:
         super().__init__(message)
         self.category = category
+        self.status = status
         candidate = category if reason is None else reason
         self.reason = candidate if candidate in HINDSIGHT_ERROR_REASONS else "unexpected_error"
 
@@ -659,6 +662,28 @@ class HindsightClientAdapter:
                 response,
                 bank_id=self._bank_id,
             ),
+        )
+
+    async def mental_model_request(
+        self,
+        method: str,
+        path: str,
+        body: Mapping[str, object] | None = None,
+        *,
+        decoder: Callable[[object], T],
+    ) -> T:
+        """Internal pilot seam; caller owns the total multi-request deadline."""
+        return await _observed_http_call(
+            operation="mental_models",
+            category="mental_models_failed",
+            message="Better Hindsight mental-model request failed.",
+            call=lambda: self._transport.request(
+                method,
+                path,
+                json_body=body,
+                max_response_bytes=256 * 1024,
+            ),
+            decoder=decoder,
         )
 
     async def get_bank_config(self) -> MissionSnapshot:
@@ -1172,7 +1197,9 @@ async def _observed_http_call(
             response_bytes=error.response_bytes,
             status=error.status,
         )
-        raise HindsightClientError(category, message, reason=error.reason) from None
+        raise HindsightClientError(
+            category, message, reason=error.reason, status=error.status
+        ) from None
     except Exception:
         _emit_http_event(started_at=started_at, operation=operation, outcome="transport_error")
         raise HindsightClientError(category, message, reason="transport_error") from None

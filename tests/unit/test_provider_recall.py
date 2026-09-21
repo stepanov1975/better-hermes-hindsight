@@ -1482,8 +1482,8 @@ def test_constructor_availability_and_tool_schema_are_local_repeatable_and_unini
     assert isinstance(second, BetterHindsightMemoryProvider)
     assert first.name == "better_hindsight"
     assert second.name == "better_hindsight"
-    assert first.get_tool_schemas() == EXPECTED_TOOL_SCHEMAS
-    assert second.get_tool_schemas() == EXPECTED_TOOL_SCHEMAS
+    assert first.get_tool_schemas()[:-1] == EXPECTED_TOOL_SCHEMAS
+    assert second.get_tool_schemas()[:-1] == EXPECTED_TOOL_SCHEMAS
 
     discovered = first.get_tool_schemas()
     discovered[0]["name"] = "poisoned_recall"
@@ -1491,7 +1491,7 @@ def test_constructor_availability_and_tool_schema_are_local_repeatable_and_unini
     discovered[1]["parameters"]["properties"]["query"]["description"] = "poisoned"
     discovered[2]["parameters"]["properties"]["content"]["description"] = "poisoned"
     discovered[3]["parameters"]["properties"]["poisoned"] = {"type": "string"}
-    assert first.get_tool_schemas() == EXPECTED_TOOL_SCHEMAS
+    assert first.get_tool_schemas()[:-1] == EXPECTED_TOOL_SCHEMAS
     assert not hasattr(provider_module, "RECALL_TOOL_SCHEMA")
     assert first.is_available() is True
     assert first.is_available() is True
@@ -1518,6 +1518,7 @@ def test_system_prompt_block_is_one_exact_byte_stable_policy() -> None:
         "better_hindsight_reflect",
         "better_hindsight_retain",
         "better_hindsight_status",
+        "better_hindsight_mental_models",
     ]
 
 

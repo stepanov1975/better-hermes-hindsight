@@ -109,6 +109,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         "_pending_session_switches",
         "_recall_enabled",
         "_reflect_enabled",
+        "_mental_models_enabled",
         "_retain_enabled",
         "_runtime",
         "_session_id",
@@ -130,6 +131,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         self._pending_session_switches: dict[str, tuple[str, bool, bool]] = {}
         self._recall_enabled = False
         self._reflect_enabled = False
+        self._mental_models_enabled = False
         self._retain_enabled = False
         self._runtime: ProcessRuntimeHandle | None = None
         self._session_id = ""
@@ -222,6 +224,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         self._config = config
         self._recall_enabled = authorization.recall_enabled
         self._reflect_enabled = authorization.reflect_enabled
+        self._mental_models_enabled = authorization.mental_models_enabled
         self._retain_enabled = authorization.retain_enabled
         self._runtime = runtime
         if planner_will_activate:
@@ -237,7 +240,9 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
                     outcome="activation_failed",
                 )
         registrar = self._system_prompt_section_registrar
-        if (self._recall_enabled or self._reflect_enabled) and registrar is not None:
+        if (
+            self._recall_enabled or self._reflect_enabled or self._mental_models_enabled
+        ) and registrar is not None:
             self._system_prompt_section_registrar = None
             try:
                 if _ensure_system_prompt_section(registrar):
@@ -540,11 +545,14 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         """Advertise bounded recall/reflection, durable retention, and passive status tools."""
 
+        from .mental_models import tool_schema
+
         return [
             _recall_tool_schema(),
             _reflect_tool_schema(),
             _retain_tool_schema(),
             _status_tool_schema(),
+            tool_schema(),
         ]
 
     def handle_tool_call(
@@ -556,6 +564,8 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         """Dispatch model tools through the authorized provider handle."""
 
         del kwargs
+        if tool_name == "better_hindsight_mental_models":
+            return self._handle_mental_models_tool(args)
         if tool_name == _RECALL_TOOL_NAME:
             return self._handle_recall_tool(args)
         if tool_name == _REFLECT_TOOL_NAME:
@@ -565,6 +575,34 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         if tool_name == _STATUS_TOOL_NAME:
             return self._handle_status_tool(args)
         return _tool_json(error=_UNKNOWN_TOOL)
+
+    def _handle_mental_models_tool(self, args: dict[str, Any]) -> str:
+        from .mental_models import INVALID, UNAVAILABLE, render, stable_id, validate_args
+        from .redaction import redact_sensitive_text
+
+        config, runtime = self._config, self._runtime
+        if not self._mental_models_enabled or config is None or runtime is None:
+            return UNAVAILABLE
+        try:
+            validate_args(args)
+        except Exception:
+            return INVALID
+        if args["action"] == "create" and not config.mental_models.create_enabled:
+            return UNAVAILABLE
+        try:
+            return runtime.mental_models(args, timeout=config.mental_models.timeout_seconds)
+        except Exception as error:
+            if isinstance(error, HindsightClientError) and error.status in {422, 429}:
+                return UNAVAILABLE
+            if args["action"] == "create":
+                return render(
+                    {
+                        "result": "unconfirmed",
+                        "id": stable_id(config, redact_sensitive_text(args["source_query"])),
+                        "verification": "No retry. Reconcile this ID before claiming creation.",
+                    }
+                )
+            return UNAVAILABLE
 
     def _handle_recall_tool(self, args: dict[str, Any]) -> str:
         if not isinstance(args, dict) or set(args) != {"query"}:
@@ -905,6 +943,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         self._plan_mailbox_activation = None
         self._recall_enabled = False
         self._reflect_enabled = False
+        self._mental_models_enabled = False
         self._retain_enabled = False
         self._runtime = None
         self._session_id = ""

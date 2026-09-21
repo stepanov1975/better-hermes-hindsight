@@ -246,6 +246,7 @@ def _released_retention_harness(
             "better_hindsight_reflect",
             "better_hindsight_retain",
             "better_hindsight_status",
+            "better_hindsight_mental_models",
         ]
         assert manager.has_tool("better_hindsight_recall") is True
         assert manager.has_tool("better_hindsight_reflect") is True
