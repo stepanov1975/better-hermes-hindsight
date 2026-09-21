@@ -34,6 +34,7 @@ from better_hermes_hindsight.management import apply_missions, check_missions
 from better_hermes_hindsight.outbox import OutboxRow, ProfileLockOwner, SQLiteOutbox
 from better_hermes_hindsight.retention import RetainedSegment, build_retained_segments
 from tests.integration.helpers import materialize_standard_plugin, write_host_selection
+from tests.outbox_inspection import outbox_failure_details, wait_for_rows
 
 ROOT = Path(__file__).resolve().parents[2]
 _RETAIN_TAGS = ("better-hindsight-live",)
@@ -510,14 +511,12 @@ def _wait_for_rows(
     config: BetterHindsightConfig,
     predicate: Callable[[tuple[OutboxRow, ...]], bool],
 ) -> tuple[OutboxRow, ...]:
-    deadline = time.monotonic() + _DRAIN_TIMEOUT_SECONDS
-    while True:
-        rows = _read_rows(config)
-        if predicate(rows):
-            return rows
-        if time.monotonic() >= deadline:
-            raise AssertionError("bounded outbox wait expired")
-        time.sleep(0.05)
+    return wait_for_rows(
+        lambda: _read_rows(config),
+        predicate,
+        timeout=_DRAIN_TIMEOUT_SECONDS,
+        poll_interval=0.05,
+    )
 
 
 def _acquire_sender_barrier(config: BetterHindsightConfig) -> ProfileLockOwner:
@@ -720,6 +719,7 @@ def _run_live_child() -> int:
                     "failure_function": site.name,
                     "failure_line": site.lineno,
                     "status": "failed",
+                    **outbox_failure_details(exception),
                 },
                 sort_keys=True,
             )

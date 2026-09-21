@@ -26,8 +26,6 @@ from better_hermes_hindsight.config import BetterHindsightConfig, load_config
 from better_hermes_hindsight.outbox import (
     AdmissionResult,
     AdmissionStatus,
-    OutboxOpenError,
-    OutboxReadError,
     OutboxRow,
     SQLiteOutbox,
 )
@@ -48,6 +46,7 @@ from better_hermes_hindsight.runtime import (
     finalize_process_runtime,
     reset_process_runtime_for_tests,
 )
+from tests.outbox_inspection import wait_for_rows as wait_for_inspected_rows
 
 EXPECTED_RETENTION_WARNING = "Better Hindsight local retention admission was rejected."
 
@@ -1228,22 +1227,7 @@ def test_actual_sender_late_success_preserves_runtime_then_replays_after_cleanup
     def wait_for_rows(
         predicate: Callable[[tuple[OutboxRow, ...]], bool],
     ) -> tuple[OutboxRow, ...]:
-        deadline = time.monotonic() + 3.0
-        while True:
-            try:
-                rows = read_rows()
-            except (OutboxOpenError, OutboxReadError):
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    pytest.fail("durable outbox could not be reopened before the deadline")
-                threading.Event().wait(timeout=min(0.02, remaining))
-                continue
-            if predicate(rows):
-                return rows
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                pytest.fail("durable outbox state did not reach the expected value")
-            threading.Event().wait(timeout=min(0.02, remaining))
+        return wait_for_inspected_rows(read_rows, predicate, timeout=3.0, poll_interval=0.02)
 
     monkeypatch.setattr(runtime_module.AsyncRunner, "shutdown", shutdown_with_order)
     handle = acquire_process_runtime(

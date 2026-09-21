@@ -76,11 +76,23 @@ _STATUS_SHM_REGION_BYTES = 32_768
 _STATUS_ERROR_CATEGORIES = frozenset({"retain_timeout", "retain_failed", "retain_unconfirmed"})
 
 
-class OutboxOpenError(RuntimeError):
+class _OutboxInspectionError(RuntimeError):
+    """Keep legacy exception text/arguments while exposing a fixed retry category."""
+
+    def __init__(
+        self,
+        *args: object,
+        category: Literal["sqlite_contention", "local_failure"] = "local_failure",
+    ) -> None:
+        super().__init__(*args)
+        self.category = category
+
+
+class OutboxOpenError(_OutboxInspectionError):
     """A fixed, sanitized outbox-open failure."""
 
 
-class OutboxReadError(RuntimeError):
+class OutboxReadError(_OutboxInspectionError):
     """A fixed, sanitized outbox-read failure."""
 
 
@@ -377,11 +389,13 @@ class SQLiteOutbox:
                 with contextlib.suppress(Exception):
                     connection.close()
             raise OutboxOpenError(OUTBOX_SCHEMA_UNSUPPORTED_MESSAGE) from None
-        except Exception:
+        except Exception as error:
             if connection is not None:
                 with contextlib.suppress(Exception):
                     connection.close()
-            raise OutboxOpenError(OUTBOX_OPEN_FAILED_MESSAGE) from None
+            raise OutboxOpenError(
+                OUTBOX_OPEN_FAILED_MESSAGE, category=_inspection_error_category(error)
+            ) from None
         return cls(
             config=config,
             connection=connection,
@@ -707,8 +721,10 @@ class SQLiteOutbox:
                 if not math.isfinite(deadline):
                     raise sqlite3.DatabaseError
                 return deadline
-            except Exception:
-                raise OutboxReadError(OUTBOX_READ_FAILED_MESSAGE) from None
+            except Exception as error:
+                raise OutboxReadError(
+                    OUTBOX_READ_FAILED_MESSAGE, category=_inspection_error_category(error)
+                ) from None
 
     def _owner_descriptor(self, owner: ProfileLockOwner) -> int | None:
         if not isinstance(owner, ProfileLockOwner):
@@ -789,8 +805,10 @@ class SQLiteOutbox:
                     """
                 ).fetchall()
                 return tuple(_row_from_record(record) for record in records)
-            except Exception:
-                raise OutboxReadError(OUTBOX_READ_FAILED_MESSAGE) from None
+            except Exception as error:
+                raise OutboxReadError(
+                    OUTBOX_READ_FAILED_MESSAGE, category=_inspection_error_category(error)
+                ) from None
 
     def close(self) -> None:
         """Close this connection owner idempotently without deleting durable rows."""
@@ -1597,6 +1615,15 @@ def _row_from_record(record: tuple[object, ...]) -> OutboxRow:
         created_at=float(cast(float, record[12])),
         updated_at=float(cast(float, record[13])),
     )
+
+
+def _inspection_error_category(
+    error: Exception,
+) -> Literal["sqlite_contention", "local_failure"]:
+    # Numeric SQLite result codes only: messages may contain private paths or SQL.
+    if isinstance(error, sqlite3.Error) and _is_contention(error):
+        return "sqlite_contention"
+    return "local_failure"
 
 
 def _is_contention(error: sqlite3.Error) -> bool:
