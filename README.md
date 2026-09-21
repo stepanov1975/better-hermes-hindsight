@@ -7,6 +7,20 @@ Better Hermes Hindsight is an unofficial Hermes memory provider for supported ex
 
 The provider ID is `better_hindsight`, deliberately separate from bundled `hindsight`, so the existing provider and bank remain available for rollback.
 
+## 0.7.0 snapshot
+
+This snapshot assigns a new deployment identity to the post-`v0.6.2` behavior and includes the
+current-Hermes compatibility-test and hook-manifest fixes. See [release notes](CHANGELOG.md#070)
+and [immutable rollback](docs/rollback.md#restore-the-prior-better-snapshot). A source version alone
+does not prove that a release has been published or installed; verify the tag and deployed commit.
+
+**Merge is a release action:** a push to `main` that passes the pinned-Hermes CI job automatically
+creates the version tag and publishes a GitHub source snapshot through `release.yml`. That job does
+not wait for the separately scheduled/manual current-Hermes, live-Hindsight, or security workflows.
+Before merging a version change, verify the combined candidate against pinned/current Hermes,
+packaging/security, and supported isolated live Hindsight. After publication, verify the immutable
+tag and repeat the gates on its exact commit. Installation separately requires version/commit readback.
+
 ## Quick start
 
 You need a working Hermes installation and an external Hindsight 0.8.5, 0.9.1, 0.9.2, or 0.10.0 service.
@@ -138,7 +152,13 @@ when upgrading either project because its behavior continues to evolve.
 The default-off planner uses Jev as its sole decision path via an OpenRouter decision call
 (`~typesafe/jev-latest`, decisions API, not chat completions). It sends a bounded cleaned
 current-message/recent-conversation capsule; this is an additional external data and cost boundary.
-Provide `OPENROUTER_API_KEY` through your normal Hermes secret mechanism.
+Provide `OPENROUTER_API_KEY` through your normal Hermes secret mechanism. "Cleaned" means
+scaffolding/envelope filtering and bounded ordinary text, **not outbound credential redaction**.
+Optional rewriting sends context to the host-selected auxiliary model/provider; Hindsight receives
+the selected projected query. Private-capture redaction and recalled-output redaction do not sanitize
+these outbound inputs. `evaluation.enabled=false` disables local evidence capture, not enabled
+planner/rewrite requests or their charges. Do not put secrets in conversation inputs. Local deadlines
+and byte/token bounds do not guarantee backend cancellation or cap all model/retry costs.
 
 ```json
 {

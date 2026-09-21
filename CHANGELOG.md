@@ -7,12 +7,37 @@ For supported settings and migration guidance, see `docs/configuration.md`.
 
 ## Unreleased
 
+## 0.7.0
+
+Optional snapshot for deployment identification after the post-0.6.2 planner changes;
+this version does not establish a permanent Hermes compatibility matrix.
+
+### Added
+
+- Default-off private planner evaluation captures bounded cleaned conversation inputs, decision
+  metadata, rewrite observations, and effective retrieval queries (not retrieved memory bodies).
+  Profile-local files are sensitive, best-effort observations, not correctness labels; capture
+  is bounded and can drop under load or at shutdown.
+
 ### Changed
 
 - Remove the combined LLM decision/rewrite planner and its route selector. Jev is now the
   sole decision path; remove `planner.route` from existing configurations. The rewrite-only
   auxiliary task retains its existing key. Independent rewriting (`false`/`true`/`shadow`),
-  planner modes, first-turn bypass, bounded direct fallback, and private evaluation remain supported.
+  planner modes, ordinary first-turn bypass, bounded direct fallback, and private evaluation remain
+  supported. Planning defaults to `off`, rewriting to `false`. `true` applies a validated rewrite
+  only in active mode; `"shadow"` observes without applying. A Jev `skip`/`reuse` in active mode
+  avoids rewriting and Hindsight. Planner failure is not a skip and preserves direct recall.
+- Jev sends a bounded cleaned conversation capsule to OpenRouter's decisions API; optional rewriting
+  sends context through the Hermes auxiliary model route. Cleaning is not outbound credential
+  redaction. Disabling private capture does not disable these requests, Hindsight query egress,
+  or provider charges. Local deadlines and output bounds are not complete backend cost caps.
+- Suppress automatic recall in active planner mode for exactly matched trusted current-row
+  `delegation_closeout`/`internal_notification` metadata, including supported gateway timestamps
+  and first turns. Exclude typed internal history from planner inputs. Shadow mode still recalls;
+  off mode, explicit tools, and retention are unchanged. Missing/ambiguous provenance, summary
+  carriers, multimodal rows, and unsupported timestamps retain ordinary behavior: this is not
+  universal internal-turn exclusion and never infers provenance from text.
 
 - Support exact Hindsight 0.10.0 in server-side `cl100k_base` compatibility mode, preserving
   support for 0.8.5, 0.9.1 and 0.9.2. The new server's default `o200k_base` tokenizer remains
@@ -23,6 +48,9 @@ For supported settings and migration guidance, see `docs/configuration.md`.
 
 ### Fixed
 
+- Publish the Jev gate before observational rewriting and run shadow rewriting in one process-shared
+  daemon slot without a waiting queue. Busy or late observations cannot delay recall or change its
+  decision; an uncooperative host may still occupy the slot and incur model/retry cost.
 - Use version-appropriate bank listings for live-test existence and ownership checks instead of
   the `/profile` endpoint removed in 0.10.0; validate pagination before claiming absence.
 - Check useful automatic recall and typed explicit recall on their respective public surfaces.
