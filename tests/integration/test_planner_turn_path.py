@@ -37,6 +37,9 @@ from tests.fakes.hindsight_server import FakeHindsightServer
 home = Path(sys.argv[1])
 scenario = sys.argv[2]
 mode = sys.argv[3]
+kind = sys.argv[4]
+first_turn = sys.argv[5] == "True"
+internal = scenario in {"internal", "timestamp"}
 query = "[System: Delegation Closeout] Synthetic worker completed the backup review."
 started, release = Event(), Event()
 decisions, rewrites, models = [], [], []
@@ -120,25 +123,78 @@ sessions:
             return response("synthetic final response")
         agent._interruptible_api_call = model_call
         agent._interruptible_streaming_api_call = model_call
-        history = [] if scenario == "internal" else [
+        history = [] if internal and first_turn else [
             {"role":"user", "content":"Remember our synthetic backup policy?"},
             {"role":"assistant", "content":"We chose synthetic daily backups."},
         ]
+        if scenario in {"ordinary_same", "summary", "summary_merged"}:
+            history[0] = {"role":"user", "content":query,
+                          "display_kind":"delegation_closeout"}
         options = {}
-        if scenario == "internal":
-            options = {"persist_user_display_kind":"delegation_closeout",
+        if internal:
+            options = {"persist_user_display_kind":kind,
                        "persist_user_display_metadata":{"version":1}}
+        api_query = query
+        if scenario in {"timestamp", "ordinary_same"}:
+            from datetime import datetime, timezone, timedelta
+            from gateway.message_timestamps import render_user_content_with_timestamp
+            timestamp = datetime(2026, 9, 20, 19, 7, 33, tzinfo=timezone.utc).timestamp()
+            api_query = render_user_content_with_timestamp(
+                query, timestamp, tz=timezone(timedelta(hours=2), "CEST"))
+            assert api_query != query
+            options.update(persist_user_message=query, persist_user_timestamp=timestamp)
+        staged = []
+        def observe_staging(**kwargs):
+            assert kwargs["user_message"] == query
+            current = kwargs["conversation_history"][-1]
+            if scenario == "timestamp":
+                assert current["content"] == api_query
+                assert current["display_kind"] == kind
+                assert kwargs["is_first_turn"] is first_turn
+            if scenario in {"summary", "summary_merged"}:
+                # Summary carriers must not inherit an older row's internal origin.
+                summary = {"role":"user", "content":"Synthetic reference summary",
+                           "_compressed_summary":True,
+                           "_compressed_summary_has_user_turn":False}
+                if scenario == "summary_merged":
+                    from agent.context_compressor import ContextCompressor, _SUMMARY_END_MARKER
+                    compressor = object.__new__(ContextCompressor)
+                    compressor._summary_has_user_turn = False
+                    merge = getattr(compressor, "_merge_summary_into_tail_row", None)
+                    if merge is not None:
+                        # Newer hosts expose the real carrier-construction helper.
+                        summary = dict(current)
+                        merge(summary, "Synthetic reference summary", "user", True)
+                    else:
+                        # The pinned host does this inline in compress(); construct its
+                        # equivalent synthetic carrier without requiring a newer private API.
+                        summary = {**current, **summary, "content":
+                            "Synthetic reference summary\n\n" + _SUMMARY_END_MARKER
+                            + "\n\n" + current["content"]}
+                        summary.pop("api_content", None)
+                    assert summary["_compressed_summary"] is True
+                    assert summary["_compressed_summary_has_user_turn"] is False
+                    assert summary["content"] != current["content"]
+                    assert query in summary["content"]
+                # The older identical typed row must never supply this carrier's origin.
+                kwargs["conversation_history"][:] = [history[0], summary]
+            staged.append(True)
+        manager._hooks["pre_llm_call"].insert(0, observe_staging)
         if scenario != "blocked":
             release.set()
         result = await asyncio.wait_for(asyncio.to_thread(
-            agent.run_conversation, query, None, history, **options), timeout=3)
+            agent.run_conversation, api_query, None, history, **options), timeout=3)
         assert result["completed"] is True
         assert len(models) == 1
-        if scenario == "internal":
+        assert staged == [True], "staging assertions must not be swallowed by hook dispatch"
+        if internal:
             rows = [m for m in result["messages"] if m.get("role") == "user"]
-            assert rows[-1]["display_kind"] == "delegation_closeout"
+            assert rows[-1]["display_kind"] == kind
+            assert rows[-1]["content"] == query
             assert not decisions and not rewrites
             assert len(server.records) == (0 if mode == "active" else 1)
+            if server.records:
+                assert server.records[0].json_body["query"] == query
         elif scenario == "blocked":
             assert await asyncio.to_thread(started.wait, 3)
             assert len(decisions) == len(rewrites) == len(server.records) == 1
@@ -165,7 +221,7 @@ sessions:
             assert len(groups) == len(models)
             for stages in groups.values():
                 assert {"input", "decision", "retrieval"} <= stages.keys()
-                if scenario == "internal":
+                if internal:
                     assert stages["decision"]["outcome"] == "internal_message"
                     assert "rewrite" not in stages
             if scenario == "blocked":
@@ -194,14 +250,23 @@ print(json.dumps(asyncio.run(run()), sort_keys=True))
         ("internal", "shadow"),
         ("internal", "off"),
         ("untyped", "active"),
+        ("ordinary_same", "active"),
+        ("summary", "active"),
+        ("summary_merged", "active"),
         ("blocked", "active"),
     ],
 )
-def test_real_host_planner_turn_path(tmp_path: Path, scenario: str, mode: str) -> None:
+def test_real_host_planner_turn_path(
+    tmp_path: Path,
+    scenario: str,
+    mode: str,
+    kind: str = "delegation_closeout",
+    first_turn: bool = True,
+) -> None:
     home = tmp_path / "hermes-home"
     materialize_standard_plugin(source=ROOT, hermes_home=home)
     completed = subprocess.run(
-        [sys.executable, "-c", _SCRIPT, str(home), scenario, mode],
+        [sys.executable, "-c", _SCRIPT, str(home), scenario, mode, kind, str(first_turn)],
         cwd=tmp_path,
         env=clean_subprocess_env(
             tmp_path,
@@ -218,3 +283,12 @@ def test_real_host_planner_turn_path(tmp_path: Path, scenario: str, mode: str) -
     payload = json.loads(completed.stdout.splitlines()[-1])
     assert payload["models"] == (2 if scenario == "blocked" else 1)
     print(json.dumps(payload, sort_keys=True))
+
+
+@pytest.mark.parametrize("mode", ["active", "shadow", "off"])
+@pytest.mark.parametrize("kind", ["delegation_closeout", "internal_notification"])
+@pytest.mark.parametrize("first_turn", [True, False])
+def test_timestamped_internal_real_host_turn(
+    tmp_path: Path, mode: str, kind: str, first_turn: bool
+) -> None:
+    test_real_host_planner_turn_path(tmp_path, "timestamp", mode, kind, first_turn)

@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol, cast
 
@@ -94,6 +96,13 @@ def _clip_text(text: str, maximum: int) -> str:
 
 
 _INTERNAL_DISPLAY_KINDS = ("delegation_closeout", "internal_notification")
+_DISPLAY_TIMESTAMP_MAX_CHARS = 64
+_DISPLAY_TIMESTAMP = re.compile(
+    r"\[(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) "
+    r"(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2}) "
+    r"(?P<time>[0-9]{2}:[0-9]{2}:[0-9]{2})"
+    r"(?: [A-Za-z0-9_+/:\-]{1,32})?\] "
+)
 
 
 def _is_internal_message(message: Mapping[str, object]) -> bool:
@@ -102,24 +111,37 @@ def _is_internal_message(message: Mapping[str, object]) -> bool:
 
 
 def _current_is_internal(current: str, history: object) -> bool:
-    if not isinstance(history, (list, tuple)):
+    if not isinstance(history, (list, tuple)) or not history:
         return False
-    # Only cross explicitly typed, reference-only compaction rows. Never attach an
-    # older matching row's provenance to a newer ordinary user turn (or clipped match).
-    for row in reversed(history[-_HISTORY_INSPECTED_ROWS_PER_EXCHANGE:]):
-        if not isinstance(row, Mapping):
-            return False
-        if row.get("role") != "user":
-            return False
-        if row.get("content") == current:
-            return _is_internal_message(row)
-        if (
-            row.get("_compressed_summary") is True
-            and row.get("_compressed_summary_has_user_turn") is False
-        ):
-            continue
+    row = history[-1]
+    # Summary provenance describes summarized history, not whether its carrier also
+    # contains a live ask. Never cross that boundary to inherit an older row's kind.
+    if (
+        not isinstance(row, Mapping)
+        or row.get("role") != "user"
+        or "_compressed_summary" in row
+        or "_compressed_summary_has_user_turn" in row
+        or not _is_internal_message(row)
+    ):
         return False
-    return False
+    content = row.get("content")
+    if not isinstance(content, str):
+        return False
+    if content == current:
+        return True
+    # The gateway can stage rendered API text while passing the clean persistence
+    # override as current. Recognize one presentation wrapper, never body provenance.
+    extra = len(content) - len(current)
+    if not 0 < extra <= _DISPLAY_TIMESTAMP_MAX_CHARS:
+        return False
+    match = _DISPLAY_TIMESTAMP.fullmatch(content[:extra])
+    if match is None:
+        return False
+    try:
+        datetime.fromisoformat(match["date"] + "T" + match["time"])
+    except ValueError:
+        return False
+    return content[extra:] == current
 
 
 def _safe_history_message(message: object, *, maximum: int) -> tuple[str, str] | None:
