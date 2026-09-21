@@ -154,6 +154,9 @@ assert loaded.enabled is True
 assert loaded.error is None
 assert provider.name == "better_hindsight"
 assert len(manager._hooks.get("pre_llm_call", [])) == 1
+assert loaded.hooks_registered == loaded.manifest.provides_hooks == ["pre_llm_call"]
+assert loaded.tools_registered == loaded.manifest.provides_tools == []
+assert loaded.middleware_registered == []
 assert set(manager._aux_tasks) == {"better_hindsight_recall_planner"}
 print(json.dumps({
     "auxiliary_tasks": sorted(manager._aux_tasks),
