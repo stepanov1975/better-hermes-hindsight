@@ -211,4 +211,6 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     permissions:
       contents: write
-    uses: ./.github/workflows/release.yml
+    # Job-level reusable workflows resolve from the caller commit, not the runner workspace.
+    # actionlint 1.7.12 rejects $/; remove this exception when the pinned version supports it.
+    uses: ./.github/workflows/release.yml # zizmor: ignore[self-repository]
