@@ -14,13 +14,13 @@ Merge into `$HERMES_HOME/better_hindsight/config.json` (synthetic example):
   "mental_models": {
     "enabled": true,
     "create_enabled": true,
-    "max_models": 5,
+    "max_models": 20,
     "timeout_seconds": 10.0
   }
 }
 ```
 
-Defaults are `enabled=false`, `create_enabled=false`, `max_models=5`, and
+Defaults are `enabled=false`, `create_enabled=false`, `max_models=20`, and
 `timeout_seconds=10.0`. Reads/status require `enabled`; creation additionally requires
 `create_enabled`. Creation without reads enabled is a configuration error. `max_models` must be
 an integer 1–20; timeout must be finite, greater than zero and at most 30 seconds. These gates are

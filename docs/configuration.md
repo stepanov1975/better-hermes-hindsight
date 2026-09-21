@@ -85,7 +85,7 @@ This example uses only synthetic/local values and contains no API key. Retention
   "mental_models": {
     "enabled": false,
     "create_enabled": false,
-    "max_models": 5,
+    "max_models": 20,
     "timeout_seconds": 10.0
   },
   "retain": {

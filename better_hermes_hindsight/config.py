@@ -289,7 +289,7 @@ class MentalModelsConfig:
 
     enabled: bool = False
     create_enabled: bool = False
-    max_models: int = 5
+    max_models: int = 20
     timeout_seconds: float = 10.0
 
 
@@ -1036,7 +1036,7 @@ def _parse_mental_models(value: object) -> MentalModelsConfig:
         enabled=enabled,
         create_enabled=create_enabled,
         max_models=_parse_positive_int(
-            values.get("max_models", 5), "mental_models.max_models", maximum=20
+            values.get("max_models", 20), "mental_models.max_models", maximum=20
         ),
         timeout_seconds=_parse_bounded_float(
             values.get("timeout_seconds", 10.0),

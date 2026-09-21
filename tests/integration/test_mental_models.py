@@ -447,6 +447,7 @@ def test_exact_id_and_destination_validation(tmp_path: Path, server: Server) -> 
 def test_config_and_destination_identity(tmp_path: Path) -> None:
     config = load_config(tmp_path, environ={})
     assert not config.mental_models.enabled and not config.mental_models.create_enabled
+    assert config.mental_models.max_models == 20
     for pilot in (
         {"enabled": True, "max_models": 21},
         {"create_enabled": True},

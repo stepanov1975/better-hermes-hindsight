@@ -261,7 +261,7 @@ Merge this optional section into `$HERMES_HOME/better_hindsight/config.json`:
   "mental_models": {
     "enabled": true,
     "create_enabled": false,
-    "max_models": 5,
+    "max_models": 20,
     "timeout_seconds": 10.0
   }
 }
