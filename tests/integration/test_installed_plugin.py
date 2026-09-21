@@ -35,7 +35,8 @@ assert provider.name == "better_hindsight"
 assert provider.is_available() is False
 assert "aiohttp" not in sys.modules
 assert "tiktoken" not in sys.modules
-print(type(provider).__module__)
+from pathlib import Path
+print(Path(sys.modules[type(provider).__module__].__file__).resolve())
 """
 
 
@@ -143,8 +144,9 @@ def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
         cwd=tmp_path,
         environ=environ,
     )
-    assert discovery_without_dependency.stdout.strip().endswith(
-        "_hermes_user_memory.better_hindsight.better_hermes_hindsight.provider"
+    assert (
+        Path(discovery_without_dependency.stdout.strip())
+        == (home / "plugins/better_hindsight/better_hermes_hindsight/provider.py").resolve()
     )
 
     _run(
@@ -186,7 +188,7 @@ def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
                 "commands = discover_plugin_cli_commands(); "
                 "print(json.dumps({'provider_name': provider.name, "
                 "'provider_type': type(provider).__name__, "
-                "'provider_module': type(provider).__module__, "
+                "'provider_file': sys.modules[type(provider).__module__].__file__, "
                 "'top_level_loaded': 'better_hermes_hindsight' in sys.modules, "
                 "'commands': [item['name'] for item in commands]}, sort_keys=True))"
             ),
@@ -197,9 +199,7 @@ def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
     payload = json.loads(probe.stdout.strip().splitlines()[-1])
     assert payload == {
         "commands": ["better_hindsight"],
-        "provider_module": (
-            "_hermes_user_memory.better_hindsight.better_hermes_hindsight.provider"
-        ),
+        "provider_file": str(installed / "better_hermes_hindsight/provider.py"),
         "provider_name": "better_hindsight",
         "provider_type": "BetterHindsightMemoryProvider",
         "top_level_loaded": False,

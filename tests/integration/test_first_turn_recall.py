@@ -153,7 +153,9 @@ sessions:
         assert [provider.name for provider in manager.providers] == ["better_hindsight"]
         provider = manager.providers[0]
         package = type(provider).__module__.rsplit(".", 1)[0]
-        assert package == "_hermes_user_memory.better_hindsight.better_hermes_hindsight"
+        assert Path(sys.modules[type(provider).__module__].__file__).resolve() == (
+            hermes_home / "plugins/better_hindsight/better_hermes_hindsight/provider.py"
+        ).resolve()
         formatting = importlib.import_module(f"{package}.formatting")
         runtime = importlib.import_module(f"{package}.runtime")
         CONTEXT_BEGIN_MARKER = formatting.CONTEXT_BEGIN_MARKER
@@ -273,7 +275,7 @@ sessions:
             "provider_names": [provider.name for provider in manager.providers],
             "record_count": len(records),
             "scenario": scenario_name,
-            "synthetic_package": package,
+            "installed_provider_loaded": True,
         }
     finally:
         if agent is not None and not finalized:
@@ -345,9 +347,7 @@ def test_current_agent_first_turn_recalls_current_query_before_first_model_reque
         "model",
     ]
     assert payload["provider_names"] == ["better_hindsight"]
-    assert payload["synthetic_package"] == (
-        "_hermes_user_memory.better_hindsight.better_hermes_hindsight"
-    )
+    assert payload["installed_provider_loaded"] is True
     assert payload["record_count"] == 1
     assert payload["finalized"] is True
     assert payload["better_system_policy_in_system_role"] is True

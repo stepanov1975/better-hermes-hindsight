@@ -1,6 +1,8 @@
 manifest_version: 1
 name: better_hindsight
 kind: standalone
+provides_hooks:
+  - pre_llm_call
 version: 0.7.0
 description: Context-aware recall planner and bounded external Hindsight memory provider.
 pip_dependencies:

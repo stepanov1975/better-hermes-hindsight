@@ -154,6 +154,9 @@ assert loaded.enabled is True
 assert loaded.error is None
 assert provider.name == "better_hindsight"
 assert len(manager._hooks.get("pre_llm_call", [])) == 1
+assert loaded.hooks_registered == loaded.manifest.provides_hooks == ["pre_llm_call"]
+assert loaded.tools_registered == loaded.manifest.provides_tools == []
+assert loaded.middleware_registered == []
 assert set(manager._aux_tasks) == {"better_hindsight_recall_planner"}
 print(json.dumps({
     "auxiliary_tasks": sorted(manager._aux_tasks),
@@ -284,9 +287,11 @@ assert command["setup_fn"].__name__ == "register_cli"
 assert command["handler_fn"].__name__ == "better_hindsight_command"
 assert inspect.iscoroutinefunction(command["setup_fn"]) is False
 assert inspect.iscoroutinefunction(command["handler_fn"]) is False
-expected_cli_module = (
-    "_hermes_user_memory.better_hindsight.better_hermes_hindsight.operator_cli"
-)
+package = type(provider).__module__.rsplit(".", 1)[0]
+expected_cli_module = f"{package}.operator_cli"
+assert Path(inspect.getfile(command["handler_fn"])).resolve() == (
+    hermes_home / "plugins/better_hindsight/better_hermes_hindsight/operator_cli.py"
+).resolve()
 assert command["setup_fn"].__module__ == expected_cli_module
 assert command["handler_fn"].__module__ == expected_cli_module
 
@@ -307,7 +312,7 @@ assert apply_args.confirm is True
 
 print(json.dumps({
     "cli_commands": [command["name"]],
-    "cli_module": command["setup_fn"].__module__,
+    "installed_cli_loaded": True,
     "commit": release_commit,
     "discovered": names.count("better_hindsight"),
     "loaded": provider.name,
@@ -320,6 +325,7 @@ print(json.dumps({
 _INACTIVE_DISCOVERY_SCRIPT = r"""
 import inspect
 import json
+import os
 import sys
 from importlib import metadata
 from pathlib import Path
@@ -355,7 +361,13 @@ assert Path(memory_source).resolve() == release_path("plugins/memory/__init__.py
 # inactive command token through full Hermes, where unknown text can enter chat fallback.
 commands = memory_loader.discover_plugin_cli_commands()
 assert commands == []
-assert "_hermes_user_memory.better_hindsight.cli" not in sys.modules
+assert not any(
+    getattr(module, "__file__", None)
+    and Path(module.__file__).resolve() == (
+        Path(os.environ["HERMES_HOME"]) / "plugins/better_hindsight/cli.py"
+    ).resolve()
+    for module in tuple(sys.modules.values())
+)
 print(json.dumps({
     "active_provider": memory_loader._get_active_memory_provider(),
     "commands": commands,
@@ -501,7 +513,7 @@ def test_current_loader_discovers_active_standard_plugin_cli_and_recall_tool(
     payload = json.loads(completed.stdout.splitlines()[-1])
     assert payload == {
         "cli_commands": ["better_hindsight"],
-        "cli_module": ("_hermes_user_memory.better_hindsight.better_hermes_hindsight.operator_cli"),
+        "installed_cli_loaded": True,
         "commit": EXPECTED_HERMES_COMMIT,
         "discovered": 1,
         "loaded": "better_hindsight",
