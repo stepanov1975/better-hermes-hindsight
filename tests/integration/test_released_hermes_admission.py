@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import socket
 import threading
@@ -285,7 +286,22 @@ def test_released_memory_manager_inline_fallback_performs_only_local_admission(
         platform="cli",
         agent_context="primary",
     )
-    monkeypatch.setattr(manager, "_get_sync_executor", lambda: None)
+    daemon_pool = importlib.import_module("tools.daemon_pool")
+
+    executor_attempts = []
+    callback_threads = []
+    original_sync_turn = provider.sync_turn
+
+    def unavailable_executor(*args: Any, **kwargs: Any) -> NoReturn:
+        executor_attempts.append(True)
+        raise RuntimeError("synthetic executor creation failure")
+
+    def recording_sync_turn(*args: Any, **kwargs: Any) -> None:
+        callback_threads.append(threading.get_ident())
+        original_sync_turn(*args, **kwargs)
+
+    monkeypatch.setattr(daemon_pool, "DaemonThreadPoolExecutor", unavailable_executor)
+    monkeypatch.setattr(provider, "sync_turn", recording_sync_turn)
 
     try:
         manager.sync_all(
@@ -298,6 +314,8 @@ def test_released_memory_manager_inline_fallback_performs_only_local_admission(
             ],
         )
 
+        assert executor_attempts == [True]
+        assert callback_threads == [threading.get_ident()]
         rows = _read_rows(config)
         assert rows
         ordered = sorted(rows, key=lambda row: row.segment_index)

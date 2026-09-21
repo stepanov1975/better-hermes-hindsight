@@ -170,7 +170,7 @@ if expect_discovery:
 
     commands = discover_plugin_cli_commands()
     assert [command["name"] for command in commands] == ["better_hindsight"]
-    package = "_hermes_user_memory.better_hindsight.better_hermes_hindsight"
+    package = commands[0]["handler_fn"].__module__.rsplit(".", 1)[0]
     client_module = importlib.import_module(f"{package}.client")
     config_module = importlib.import_module(f"{package}.config")
     outbox_module = importlib.import_module(f"{package}.outbox")
@@ -272,10 +272,16 @@ try:
 except SystemExit as error:
     caught = error
 
-cli_module_name = "_hermes_user_memory.better_hindsight.cli"
-assert (cli_module_name in sys.modules) is expect_discovery
+cli_modules = [
+    module for module in tuple(sys.modules.values())
+    if getattr(module, "__file__", None)
+    and Path(module.__file__).resolve() == (
+        expected_home / "plugins/better_hindsight/cli.py"
+    ).resolve()
+]
+assert len(cli_modules) == int(expect_discovery)
 if expect_discovery:
-    discovered_module = sys.modules[cli_module_name]
+    discovered_module = cli_modules[0]
     assert Path(discovered_module.__file__).resolve() == (
         expected_home / "plugins" / "better_hindsight" / "cli.py"
     ).resolve()
