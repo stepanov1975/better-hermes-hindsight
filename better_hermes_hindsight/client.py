@@ -661,6 +661,23 @@ class HindsightClientAdapter:
             ),
         )
 
+    async def mental_model_request(
+        self, method: str, path: str, body: Mapping[str, object] | None = None
+    ) -> object:
+        """Internal pilot seam; caller owns the total multi-request deadline."""
+        return await _observed_http_call(
+            operation="mental_models",
+            category="mental_models_failed",
+            message="Better Hindsight mental-model request failed.",
+            call=lambda: self._transport.request(
+                method,
+                path,
+                json_body=body,
+                max_response_bytes=256 * 1024,
+            ),
+            decoder=lambda value: value,
+        )
+
     async def get_bank_config(self) -> MissionSnapshot:
         """Read and exactly validate allowlisted mission values."""
 

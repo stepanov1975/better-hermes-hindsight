@@ -653,6 +653,7 @@ class ProcessRuntime:
     __slots__ = (
         "__weakref__",
         "_active_calls",
+        "_mental_models",
         "_client",
         "_client_closed",
         "_closed",
@@ -675,6 +676,9 @@ class ProcessRuntime:
         sender_factory: SenderFactory = _create_sender,
         sender_enabled: bool = True,
     ) -> None:
+        from .mental_models import MentalModels
+
+        self._mental_models = MentalModels(config)
         self._runner = AsyncRunner()
         self._lifecycle = threading.Condition()
         self._active_calls = 0
@@ -823,6 +827,14 @@ class ProcessRuntime:
             return await reflect_client.reflect(query)
 
         return self.call(reflect_with_native_timeout, timeout=timeout)
+
+    def mental_models(self, args: dict[str, object], *, timeout: float) -> str:
+        from .mental_models import MentalModelClient
+
+        async def operation(client: HindsightClientProtocol) -> str:
+            return await self._mental_models.call(cast(MentalModelClient, client), args)
+
+        return self.call(operation, timeout=timeout)
 
     def finalize(self) -> bool:
         """Stop all async work before exact outbox, client, then runner closure."""
@@ -987,6 +999,9 @@ class ProcessRuntimeHandle:
         """Reflect through the shared process runtime."""
 
         return self._require_runtime().reflect(query, timeout=timeout)
+
+    def mental_models(self, args: dict[str, object], *, timeout: float) -> str:
+        return self._require_runtime().mental_models(args, timeout=timeout)
 
     def close(self) -> None:
         """Drop this handle without closing or replacing process-owned resources."""

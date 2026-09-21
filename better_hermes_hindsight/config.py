@@ -107,6 +107,7 @@ _ROOT_KEYS = {
     "recall",
     "planner",
     "reflect",
+    "mental_models",
     "retain",
     "missions",
     "outbox",
@@ -283,6 +284,16 @@ class ReflectConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class MentalModelsConfig:
+    """Default-off, bank-wide pilot; policy is never model-selected."""
+
+    enabled: bool = False
+    create_enabled: bool = False
+    max_models: int = 5
+    timeout_seconds: float = 10.0
+
+
+@dataclass(frozen=True, slots=True)
 class RetainConfig:
     """Typed retain inputs; this module performs no retention work."""
 
@@ -354,11 +365,17 @@ class MemoryAuthorization:
     recall_enabled: bool
     reflect_enabled: bool
     retain_enabled: bool
+    mental_models_enabled: bool = False
 
     @property
     def memory_enabled(self) -> bool:
         """Whether this handle may perform any memory operation."""
-        return self.recall_enabled or self.reflect_enabled or self.retain_enabled
+        return (
+            self.recall_enabled
+            or self.reflect_enabled
+            or self.retain_enabled
+            or self.mental_models_enabled
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -374,6 +391,7 @@ class BetterHindsightConfig:
     recall: RecallConfig = field(default_factory=RecallConfig)
     planner: PlannerConfig = field(default_factory=PlannerConfig)
     reflect: ReflectConfig = field(default_factory=ReflectConfig)
+    mental_models: MentalModelsConfig = field(default_factory=MentalModelsConfig)
     retain: RetainConfig = field(default_factory=RetainConfig)
     missions: MissionConfig = field(default_factory=MissionConfig)
     outbox: OutboxConfig = field(
@@ -434,6 +452,7 @@ class BetterHindsightConfig:
             identity_authorized=identity_authorized,
             recall_enabled=identity_authorized and self.recall.enabled,
             reflect_enabled=identity_authorized and self.reflect.enabled,
+            mental_models_enabled=identity_authorized and self.mental_models.enabled,
             retain_enabled=(
                 identity_authorized and self.retain.enabled and agent_context == "primary"
             ),
@@ -474,6 +493,14 @@ def load_config(
     recall = _parse_recall(merged.get("recall", {}))
     planner = _parse_planner(home, merged.get("planner", {}))
     reflect = _parse_reflect(merged.get("reflect", {}))
+    mental_models = _parse_mental_models(merged.get("mental_models", {}))
+    if mental_models.enabled and (
+        recall.tags is not None
+        or recall.tag_mode is not None
+        or reflect.tags is not None
+        or reflect.tag_mode is not None
+    ):
+        raise _error("mental_models pilot requires unscoped recall and reflect configurations")
     retain = _parse_retain(merged.get("retain", {}))
     missions = _parse_missions(merged.get("missions", {}))
     outbox = _parse_outbox(home, merged.get("outbox", {}))
@@ -527,6 +554,7 @@ def load_config(
         recall=recall,
         planner=planner,
         reflect=reflect,
+        mental_models=mental_models,
         retain=retain,
         missions=missions,
         outbox=outbox,
@@ -991,6 +1019,32 @@ def _parse_planner_path(home: Path, value: object) -> Path:
     except ValueError:
         raise _error("planner.path must remain inside hermes_home") from None
     return normalized
+
+
+def _parse_mental_models(value: object) -> MentalModelsConfig:
+    values = _expect_mapping(value, "mental_models")
+    _check_unknown_keys(
+        values, {"enabled", "create_enabled", "max_models", "timeout_seconds"}, "mental_models"
+    )
+    enabled = _parse_bool(values.get("enabled", False), "mental_models.enabled")
+    create_enabled = _parse_bool(
+        values.get("create_enabled", False), "mental_models.create_enabled"
+    )
+    if create_enabled and not enabled:
+        raise _error("mental_models.create_enabled requires mental_models.enabled")
+    return MentalModelsConfig(
+        enabled=enabled,
+        create_enabled=create_enabled,
+        max_models=_parse_positive_int(
+            values.get("max_models", 5), "mental_models.max_models", maximum=20
+        ),
+        timeout_seconds=_parse_bounded_float(
+            values.get("timeout_seconds", 10.0),
+            "mental_models.timeout_seconds",
+            minimum=0.0,
+            maximum=30.0,
+        ),
+    )
 
 
 def _parse_reflect(value: object) -> ReflectConfig:

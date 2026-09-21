@@ -82,8 +82,8 @@ Compared with bundled Hindsight, this plugin deliberately focuses on:
 - bounded recall for the **current** user query, with a default-off context-aware planner that bypasses
   first turns and can later skip, reuse existing conversational context, or issue one rewritten historical
   query;
-- four bounded model tools for recall, opt-in read-only reflection, durable retention admission, and
-  compact passive queue status;
+- five bounded model tools for recall, opt-in read-only reflection, durable retention admission,
+  compact passive queue status, and an opt-in mental-model list/read/create/status pilot;
 - opt-in automatic retention through a durable SQLite outbox;
 - semantic, independently decodable retention segments with per-occurrence event identity and timestamps;
 - stable replace-mode retries after timeout or restart;
@@ -132,7 +132,7 @@ or retrieval quality.
 | Crash behavior before remote delivery | Committed outbox rows survive process restart and are retried | Locally queued writer jobs are not persistent; shutdown drains them only within a bounded wait |
 | Retry/document strategy | Stable IDs for every admitted occurrence segment, `update_mode="replace"`, destination binding, and bounded retry backoff | Session-scoped `update_mode="append"` where supported, with a process-unique document fallback for older APIs |
 | Read-after-write freshness | Eventual: an immediately following recall can race the outbox sender | Background prefetch can wait for the local writer and server-side async retain operations before recalling |
-| Model-facing tools | Bounded structured recall, default-off read-only reflection, durable local retain admission, and compact passive queue status; no caller-selected bank or policy overrides | Recall, retain, and reflect tools in tools or hybrid mode |
+| Model-facing tools | Bounded structured recall, default-off read-only reflection, durable local retain admission, compact passive queue status, and a default-off mental-model pilot; no caller-selected bank or policy overrides | Recall, retain, and reflect tools in tools or hybrid mode |
 | Routing and authorization | One static bank with an exact single-principal allowlist | Static or templated banks across profile, workspace, platform, user, or session contexts |
 | Bank policy operations | Explicit operator check/apply for retain and observations missions | No equivalent mission drift check/apply/readback operator command |
 | Operations | Automatic recall status indicator, passive outbox status, structured diagnostics, replay, synthetic canary, watchdog evaluator, and mission drift checks | Interactive setup, recall/retain status indicators, embedded-service lifecycle, and normal provider logs |
@@ -246,6 +246,50 @@ or mismatched handoff state falls back to direct current-query recall. Earlier b
 planner decisions to SQLite. The runtime deliberately leaves that legacy path untouched: stop every Hermes
 process using the profile, remove the configured database and sidecars offline, then remove the obsolete
 planner keys.
+
+### Opt-in mental-model pilot (Hindsight 0.10.0 only)
+
+`better_hindsight_mental_models` adds explicit `list`, `read`, `create`, and `status` actions.
+A direct read reuses an existing generated summary without requesting another reflect synthesis.
+The schema is stable even when disabled; calls require the existing authorized fixed-bank principal.
+No startup/version probe, automatic prefetch, refresh, edit, delete, or scheduler is added.
+
+Merge this optional section into `$HERMES_HOME/better_hindsight/config.json`:
+
+```json
+{
+  "mental_models": {
+    "enabled": true,
+    "create_enabled": false,
+    "max_models": 5,
+    "timeout_seconds": 10.0
+  }
+}
+```
+
+Both capability gates default to **false**. Set `create_enabled` to true separately only after
+reviewing backend LLM/data/cost exposure. The pilot refuses configured recall/reflect tag scopes,
+including explicit empty tags, rather than silently widening them to bank-wide reads.
+
+- List returns at most 20 metadata records and a bounded `next_offset`; exact-ID read requests
+  content, not full reflect traces. Results are redacted untrusted evidence, include available
+  freshness (`last_refreshed_at`, `last_memory_seen_at`, server `is_stale`), and explicitly flag truncation.
+- Create accepts only `name`, `source_query`, and `reason`. List first to find reusable topics.
+  A stable custom ID deduplicates normalized identical questions, **not semantic equivalents**.
+  Existing metadata and the total-bank allowance (default 5, configurable 1–20) are checked first.
+- Creation returns **queued**, not success. Check its exact operation once, then read the generated
+  content and verify it before reporting success. Ambiguous writes are never automatically retried;
+  the next call reconciles the exact ID. Ordinary concurrent creates serialize in the shared runtime.
+  This is not a transactional quota across other processes/server writers; ambiguous reservations
+  are process-local, not a durable job queue.
+- Auto-refresh is explicitly off (including cron and consolidation), and traces are disabled.
+  The fixed `max_tokens=1024` is an output target, **not a hard backend spend cap**. Generation can
+  continue after a local timeout; server LLM/retrieval policy still determines work and cost.
+
+See [mental-model configuration and usage](docs/mental-models.md) for the exact bounds,
+wire contract, recovery limitations, and synthetic-only verification scope.
+
+### Explicit reflection
 
 Reflection is disabled by default and is never automatic. When enabled, `better_hindsight_reflect`
 accepts one nonblank bounded query for the configured bank under the authorized principal and returns

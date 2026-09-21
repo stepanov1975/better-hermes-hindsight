@@ -265,6 +265,7 @@ assert [schema["name"] for schema in provider.get_tool_schemas()] == [
     "better_hindsight_reflect",
     "better_hindsight_retain",
     "better_hindsight_status",
+    "better_hindsight_mental_models",
 ]
 assert registrations == ["better_hindsight"]
 
@@ -511,6 +512,15 @@ def test_current_loader_discovers_active_standard_plugin_cli_and_recall_tool(
 
     assert completed.returncode == 0, completed.stderr[-4000:]
     payload = json.loads(completed.stdout.splitlines()[-1])
+    pilot_schema = payload["model_tools"].pop()
+    assert pilot_schema["name"] == "better_hindsight_mental_models"
+    assert pilot_schema["parameters"]["properties"]["action"]["enum"] == [
+        "list",
+        "read",
+        "create",
+        "status",
+    ]
+    assert pilot_schema["parameters"]["additionalProperties"] is False
     assert payload == {
         "cli_commands": ["better_hindsight"],
         "installed_cli_loaded": True,

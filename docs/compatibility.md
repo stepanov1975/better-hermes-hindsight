@@ -23,9 +23,15 @@ Better intentionally targets the exact external Hindsight 0.8.5, 0.9.1, 0.9.2, a
 contracts. **0.10.0 requires server-side `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`**; its
 default `o200k_base` mode is unsupported. The isolated proof below remains a release/deployment gate;
 a version allowlist or short-query canary alone is not proof of tokenizer compatibility. Better
-implements only recall, read-only reflection, synchronous retain, bank-config read, and bank-config
-patch over `aiohttp`; it does not import or depend on the Hindsight Python SDK. Other Hindsight
-versions are unsupported until their used operations are reviewed and the isolated live proof passes.
+implements recall, read-only reflection, synchronous retain, bank-config read/patch, and the
+separately opt-in [mental-model pilot](mental-models.md) over `aiohttp`; it does not import or depend
+on the Hindsight Python SDK. Other Hindsight versions are unsupported until their used operations
+are reviewed and the isolated live proof passes.
+
+Mental-model list/read/create/status is restricted to exact Hindsight **0.10.0**, checked via
+`GET /version` only on explicit authorized pilot calls. It does not change the older supported
+recall/retain paths or add version checks to automatic recall. Loopback tests verify the reviewed
+0.10.0 wire contract, not live backend LLM generation quality or cost.
 
 These versions expose `POST /v1/default/banks/{bank_id}/reflect` with the narrow fields
 Better uses: `query`, `budget`, `max_tokens`, and optional `tags`/`tags_match`. Their response requires

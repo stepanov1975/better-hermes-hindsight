@@ -129,6 +129,23 @@ LLM and may create service-side audit/usage records. Better's local timeout and 
 bound all server-side model work or cost; deployments must configure the corresponding Hindsight
 iteration, context, wall-time, and completion-token limits.
 
+### Mental-model pilot
+
+The default-off `better_hindsight_mental_models` schema exposes only list/read/create/status.
+It shares existing provider principal authorization, fixed destination, runtime deadline, and HTTP
+transport. Reads/status and creation have separate opt-ins; scoped recall/reflect configuration is
+refused because the 0.10.0 direct-ID/list contracts do not preserve those tag boundaries. A version
+check occurs only on explicit pilot calls, never automatic recall.
+
+`mental_models.py` projects bounded metadata/content inside untrusted evidence framing, with no
+reflect traces. Creation reconciles a deterministic scoped question ID, checks a complete bounded
+metadata inventory against the total-bank allowance, and sends one explicit no-auto-refresh
+payload. A lock and bounded process-local reservations in the shared runtime serialize ordinary
+local creates and reserve ambiguous submissions. There is no new SQLite job framework, scheduler,
+refresh/edit/delete tool, background prefetch, automatic POST retry, or cross-process quota claim.
+Queued operation status is not generated-content success; the model must read and inspect content.
+See [pilot contracts and limits](docs/mental-models.md).
+
 ### Retention
 
 1. Hermes invokes `sync_turn()` after a completed turn.

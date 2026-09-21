@@ -197,6 +197,7 @@ def test_released_memory_manager_normally_runs_callback_asynchronously_before_lo
         "better_hindsight_reflect",
         "better_hindsight_retain",
         "better_hindsight_status",
+        "better_hindsight_mental_models",
     ]
 
     caller_errors: list[BaseException] = []
