@@ -591,7 +591,9 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             return UNAVAILABLE
         try:
             return runtime.mental_models(args, timeout=config.mental_models.timeout_seconds)
-        except Exception:
+        except Exception as error:
+            if isinstance(error, HindsightClientError) and error.status in {422, 429}:
+                return UNAVAILABLE
             if args["action"] == "create":
                 return render(
                     {
