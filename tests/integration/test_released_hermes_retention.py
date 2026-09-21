@@ -7,7 +7,6 @@ import contextlib
 import inspect
 import json
 import threading
-import time
 from collections.abc import Callable, Coroutine, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +17,7 @@ from agent.memory_manager import MemoryManager
 
 import better_hermes_hindsight.retention as retention_module
 from better_hermes_hindsight.config import BetterHindsightConfig, load_config
-from better_hermes_hindsight.outbox import OutboxOpenError, OutboxRow, SQLiteOutbox
+from better_hermes_hindsight.outbox import OutboxRow, SQLiteOutbox
 from better_hermes_hindsight.provider import BetterHindsightMemoryProvider
 from better_hermes_hindsight.retention import build_retained_segments
 from better_hermes_hindsight.runtime import (
@@ -27,6 +26,7 @@ from better_hermes_hindsight.runtime import (
 )
 from tests.fakes.hindsight_server import FakeHindsightServer, RequestRecord
 from tests.hermes_compat import assert_selected_hermes, selected_distribution_file
+from tests.outbox_inspection import wait_for_rows
 
 FIXTURE_BANK_ID = "released-retention-fixture-bank"
 FIXTURE_ACCESS_VALUE = "synthetic-released-retention-fixture-value"
@@ -290,19 +290,7 @@ def _wait_for_rows(
     *,
     timeout: float = 3.0,
 ) -> tuple[OutboxRow, ...]:
-    deadline = time.monotonic() + timeout
-    while True:
-        try:
-            rows = _read_rows(config)
-        except OutboxOpenError:
-            pass
-        else:
-            if predicate(rows):
-                return rows
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise AssertionError("Timed out waiting for the expected durable outbox state.")
-        threading.Event().wait(timeout=min(0.02, remaining))
+    return wait_for_rows(lambda: _read_rows(config), predicate, timeout=timeout, poll_interval=0.02)
 
 
 def _request_identity(record: RequestRecord) -> tuple[str, str]:
