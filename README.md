@@ -163,7 +163,15 @@ With planning enabled, trusted current-row `display_kind` metadata (`delegation_
 normal deadline-fenced `skip` plan and makes no recall request; shadow observes the skip but retains
 ordinary recall, and off stays unchanged. Typed internal history rows are excluded from planner
 capsules. Text prefixes never establish provenance: missing/ambiguous metadata preserves normal
-behavior. See [matching and compaction limits](docs/configuration.md#typed-internal-messages).
+behavior. The terminal row must match the untouched current input exactly, either raw or after
+one validated human-format gateway timestamp and its single space separator. This fixes timestamped
+internal notifications without disabling timestamps or changing the recall query. It does not infer
+origin from timestamp or body text. Summary-marked carriers (including reference-summary suffixes),
+multimodal content, legacy ISO/unknown timestamp formats, repeated added prefixes, and arbitrary
+persistence overrides fall back to ordinary behavior. No backwards provenance search is performed.
+Existing size/configuration/deadline guards still apply; suppression is best-effort, not guaranteed
+for every internal turn. Retention and explicit recall tools are unchanged. See
+[matching and compaction limits](docs/configuration.md#typed-internal-messages).
 
 **Upgrade:** remove `planner.route` from existing configurations (including `"jev"` and `"llm"`).
 It is now rejected as an unknown key; the combined LLM decision/rewrite implementation is removed.
