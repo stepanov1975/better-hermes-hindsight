@@ -18,8 +18,10 @@ import pytest
 from agent.memory_manager import MemoryManager
 
 from better_hermes_hindsight.config import load_config
+from better_hermes_hindsight.formatting import count_query_tokens
 from better_hermes_hindsight.mental_models import OUTPUT_MAX_BYTES, TOOL_NAME, stable_id
 from better_hermes_hindsight.provider import BetterHindsightMemoryProvider
+from better_hermes_hindsight.redaction import redact_sensitive_text
 from better_hermes_hindsight.runtime import reset_process_runtime_for_tests
 
 OP_ID = "550e8400-e29b-41d4-a716-446655440000"
@@ -68,7 +70,9 @@ class Server:
                     self.send({"content": "x" * 300000})
                     return
                 if self.path == "/version":
-                    self.send({"api_version": state.version})
+                    self.send(
+                        {} if state.fault == "version_schema" else {"api_version": state.version}
+                    )
                     return
                 parsed = urlsplit(self.path)
                 if parsed.path.endswith("/operations/" + OP_ID):
@@ -114,10 +118,17 @@ class Server:
                 state.requests.append(("POST", self.path, body))
                 state.post_started.set()
                 assert self.path == "/v1/default/banks/synthetic-bank/mental-models"
-                if state.fault != "absent_write":
+                if state.fault in {"reject_422", "reject_429"}:
+                    self.send({"error": "RAW-PRIVATE-SENTINEL"}, int(state.fault[7:]))
+                    return
+                if state.fault not in {"absent_write", "absent_malformed_ack"}:
                     state.models[body["id"]] = model(body["id"], source_query=body["source_query"])
                     state.operation_model = body["id"]
-                if state.fault in {"ambiguous_write", "absent_write"}:
+                if state.fault in {"malformed_ack", "absent_malformed_ack"}:
+                    self.send(
+                        {"mental_model_id": body["id"], "operation_id": "RAW-PRIVATE-SENTINEL"}
+                    )
+                elif state.fault in {"ambiguous_write", "absent_write"}:
                     self.send({"error": "RAW-PRIVATE-SENTINEL"}, 500)
                 elif state.fault == "slow_write":
                     time.sleep(0.4)
@@ -336,7 +347,7 @@ def test_only_explicit_path_requires_exact_version(tmp_path: Path, server: Serve
     assert server.requests == [("GET", "/version", None)]
 
 
-@pytest.mark.parametrize("fault", ["ambiguous_write", "slow_write"])
+@pytest.mark.parametrize("fault", ["ambiguous_write", "slow_write", "malformed_ack"])
 def test_ambiguous_write_reconciles_exact_id_no_second_post(
     tmp_path: Path, server: Server, fault: str
 ) -> None:
@@ -350,13 +361,113 @@ def test_ambiguous_write_reconciles_exact_id_no_second_post(
     assert sum(request[0] == "POST" for request in server.requests) == 1
 
 
-def test_ambiguous_absent_reserves_allowance(tmp_path: Path, server: Server) -> None:
+@pytest.mark.parametrize("fault", ["absent_write", "absent_malformed_ack"])
+def test_ambiguous_absent_reserves_allowance(tmp_path: Path, server: Server, fault: str) -> None:
     host = manager(tmp_path, server, cap=1)
-    server.fault = "absent_write"
+    server.fault = fault
     assert call(host, CREATE)["result"] == "ambiguous"
     assert call(host, CREATE)["result"] == "ambiguous"
     assert "error" in call(host, {**CREATE, "source_query": "Another question?"})
     assert sum(request[0] == "POST" for request in server.requests) == 1
+
+
+@pytest.mark.parametrize("status", [422, 429])
+@pytest.mark.parametrize("same_question", [True, False])
+def test_definite_rejection_releases_reservation(
+    tmp_path: Path, server: Server, status: int, same_question: bool
+) -> None:
+    host = manager(tmp_path, server, cap=1)
+    server.fault = f"reject_{status}"
+    assert "error" in call(host, CREATE)
+    assert not server.models
+    server.fault = ""
+    args = CREATE if same_question else {**CREATE, "source_query": "Another question?"}
+    assert call(host, args)["result"] == "queued"
+    assert sum(request[0] == "POST" for request in server.requests) == 2
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source_query", "x" * 1987 + " api_key=abcd"),
+        ("source_query", "a " * 496 + "api_key=abcd"),
+        ("name", "x" * 107 + " api_key=abcd"),
+    ],
+)
+def test_redaction_expansion_rejected_before_io(
+    tmp_path: Path, server: Server, field: str, value: str
+) -> None:
+    host = manager(tmp_path, server)
+    if field == "source_query":
+        assert len(value) <= 2000 and count_query_tokens(value) <= 500
+        redacted = redact_sensitive_text(value)
+        assert len(redacted) > 2000 or count_query_tokens(redacted) > 500
+    else:
+        assert len(value) == 120 and len(redact_sensitive_text(value)) > 120
+    assert "error" in call(host, {**CREATE, field: value})
+    assert not server.requests
+    assert call(host, CREATE)["result"] == "queued"
+
+
+def test_bounded_redacted_creation_reconciles(tmp_path: Path, server: Server) -> None:
+    host = manager(tmp_path, server, cap=1)
+    args = {**CREATE, "source_query": "a " * 492 + "api_key=abcd", "name": "api_key=abcd"}
+    assert count_query_tokens(redact_sensitive_text(args["source_query"])) == 500
+    first = call(host, args)
+    assert first["result"] == "queued"
+    post = next(request[2] for request in server.requests if request[0] == "POST")
+    assert post["source_query"] == redact_sensitive_text(args["source_query"])
+    assert post["name"] == "api_key=[REDACTED]"
+    reused = call(host, args)
+    assert reused["result"] == "existing" and reused["id"] == first["id"]
+    assert sum(request[0] == "POST" for request in server.requests) == 1
+
+
+@pytest.mark.parametrize("action", ["list", "read", "status", "version", "content", "create"])
+def test_schema_failure_is_one_failed_http_event(
+    tmp_path: Path, server: Server, caplog: pytest.LogCaptureFixture, action: str
+) -> None:
+    host = manager(tmp_path, server)
+    server.models["fixture"] = {**model("fixture"), "bank_id": "other-bank"}
+    args: dict[str, Any] = {"action": action}
+    if action in {"read", "status"}:
+        args["id"] = "fixture"
+    if action == "status":
+        args["operation_id"] = OP_ID
+    if action == "content":
+        server.models["fixture"] = {
+            **model("fixture"),
+            "content": {"private": "RAW-PRIVATE-SENTINEL"},
+        }
+        args = {"action": "read", "id": "fixture"}
+    if action == "version":
+        server.fault = "version_schema"
+        args = {"action": "list"}
+    if action == "create":
+        server.models.clear()
+        server.fault = "malformed_ack"
+        args = CREATE
+    with caplog.at_level("INFO", logger="better_hermes_hindsight.client"):
+        result = call(host, args)
+        if action == "create":
+            assert result["result"] == "ambiguous"
+        else:
+            assert "error" in result
+    events = [
+        json.loads(record.message)
+        for record in caplog.records
+        if record.name == "better_hermes_hindsight.client"
+    ]
+    events = [event for event in events if event.get("event") == "better_hindsight.http_request"]
+    expected = ["success", "schema_invalid"]
+    if action == "version":
+        expected = ["schema_invalid"]
+    elif action == "create":
+        expected = ["success", "endpoint_not_found", "success", "schema_invalid"]
+    assert [event["outcome"] for event in events] == expected
+    assert len(events) == len(server.requests)
+    assert all(event["operation"] == "mental_models" for event in events)
+    assert "RAW-PRIVATE-SENTINEL" not in caplog.text
 
 
 def test_concurrent_creation_shares_cap(tmp_path: Path, server: Server) -> None:

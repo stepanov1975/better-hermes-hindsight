@@ -7,8 +7,8 @@ import hashlib
 import json
 import re
 import unicodedata
-from collections.abc import Mapping
-from typing import Any, Protocol, cast
+from collections.abc import Callable, Mapping
+from typing import Any, Protocol, TypeVar, cast
 from urllib.parse import quote
 from uuid import UUID
 
@@ -22,12 +22,18 @@ OUTPUT_MAX_BYTES = 16_384
 UNAVAILABLE = '{"error":"Better Hindsight mental models are unavailable."}'
 INVALID = '{"error":"Invalid mental-model arguments."}'
 _ID = re.compile(r"[a-zA-Z0-9_-]{1,128}\Z")
+T = TypeVar("T")
 
 
 class MentalModelClient(Protocol):
     async def mental_model_request(
-        self, method: str, path: str, body: Mapping[str, object] | None = None
-    ) -> object: ...
+        self,
+        method: str,
+        path: str,
+        body: Mapping[str, object] | None = None,
+        *,
+        decoder: Callable[[object], T],
+    ) -> T: ...
 
 
 def tool_schema() -> dict[str, Any]:
@@ -86,9 +92,10 @@ def validate_args(args: dict[str, Any]) -> None:
     if action == "create":
         for key, maximum in (("name", 120), ("source_query", 2000), ("reason", 300)):
             text(args[key], maximum)
-        query = args["source_query"]
-        if project_query(query, max_chars=2000, max_tokens=500) != query:
-            raise ValueError
+        for query in (args["source_query"], redact_sensitive_text(args["source_query"])):
+            if project_query(query, max_chars=2000, max_tokens=500) != query:
+                raise ValueError
+        text(redact_sensitive_text(args["name"]), 120)
 
 
 def text(value: object, maximum: int) -> str:
@@ -183,8 +190,10 @@ class MentalModels:
         self.path = f"/v1/default/banks/{quote(config.bank_id, safe='')}"
 
     async def call(self, client: MentalModelClient, args: dict[str, Any]) -> str:
-        version = mapping(await client.mental_model_request("GET", "/version"))
-        if version.get("api_version") != "0.10.0":
+        version = await client.mental_model_request(
+            "GET", "/version", decoder=lambda value: text(mapping(value).get("api_version"), 64)
+        )
+        if version != "0.10.0":
             return '{"error":"Mental-model pilot requires Hindsight 0.10.0."}'
         action = args["action"]
         if action == "list":
@@ -243,11 +252,14 @@ class MentalModels:
     async def page(
         self, client: MentalModelClient, offset: int
     ) -> tuple[list[dict[str, object]], int]:
-        page = mapping(
-            await client.mental_model_request(
-                "GET", f"{self.path}/mental-models?detail=metadata&limit=20&offset={offset}"
-            )
+        return await client.mental_model_request(
+            "GET",
+            f"{self.path}/mental-models?detail=metadata&limit=20&offset={offset}",
+            decoder=lambda value: self.decode_page(value, offset),
         )
+
+    def decode_page(self, value: object, offset: int) -> tuple[list[dict[str, object]], int]:
+        page = mapping(value)
         total, items = page.get("total"), page.get("items")
         if (
             type(total) is not int
@@ -263,23 +275,35 @@ class MentalModels:
             raise ValueError
         return projected, total
 
-    async def read(self, client: MentalModelClient, model_id: str) -> dict[str, Any]:
-        model = mapping(
-            await client.mental_model_request(
-                "GET", f"{self.path}/mental-models/{quote(model_id, safe='')}?detail=content"
-            )
+    async def read(
+        self, client: MentalModelClient, model_id: str, *, query: str | None = None
+    ) -> dict[str, Any]:
+        return await client.mental_model_request(
+            "GET",
+            f"{self.path}/mental-models/{quote(model_id, safe='')}?detail=content",
+            decoder=lambda value: self.decode_model(value, model_id, query),
         )
+
+    def decode_model(self, value: object, model_id: str, query: str | None) -> dict[str, Any]:
+        model = mapping(value)
         if model.get("id") != model_id:
             raise ValueError
-        self.project(model)
+        self.project(model, content=True)
+        if query is not None and normalized_query(
+            text(model.get("source_query"), 2000)
+        ) != normalized_query(query):
+            raise ValueError
         return model
 
     async def status(self, client: MentalModelClient, model_id: str, op_id: str) -> str:
-        status = mapping(
-            await client.mental_model_request(
-                "GET", f"{self.path}/operations/{op_id}?include_payload=true"
-            )
+        return await client.mental_model_request(
+            "GET",
+            f"{self.path}/operations/{op_id}?include_payload=true",
+            decoder=lambda value: self.decode_status(value, model_id, op_id),
         )
+
+    def decode_status(self, value: object, model_id: str, op_id: str) -> str:
+        status = mapping(value)
         if (
             status.get("operation_id") != op_id
             or status.get("operation_type") != "refresh_mental_model"
@@ -303,15 +327,11 @@ class MentalModels:
         query = redact_sensitive_text(args["source_query"])
         model_id = stable_id(self.config, query)
         try:
-            existing = await self.read(client, model_id)
+            await self.read(client, model_id, query=query)
         except HindsightClientError as error:
             if error.reason != "endpoint_not_found":
                 raise
         else:
-            if normalized_query(text(existing.get("source_query"), 2000)) != normalized_query(
-                query
-            ):
-                raise ValueError
             self.reservations.discard(model_id)
             return render(
                 {
@@ -362,14 +382,23 @@ class MentalModels:
                 "keep_trace": False,
             },
         }
-        try:
-            response = mapping(
-                await client.mental_model_request("POST", f"{self.path}/mental-models", body)
-            )
+
+        def decode_creation(value: object) -> str:
+            response = mapping(value)
             if response.get("mental_model_id") != model_id:
                 raise ValueError
-            op_id = operation_id(response.get("operation_id"))
-        except Exception:
+            return operation_id(response.get("operation_id"))
+
+        try:
+            op_id = await client.mental_model_request(
+                "POST", f"{self.path}/mental-models", body, decoder=decode_creation
+            )
+        except Exception as error:
+            # Only received validation/rate-limit rejections prove these writes were refused.
+            # Transport loss, 5xx, and malformed acknowledgements remain ambiguous.
+            if isinstance(error, HindsightClientError) and error.status in {422, 429}:
+                self.reservations.discard(model_id)
+                raise
             return render(
                 {
                     "result": "ambiguous",

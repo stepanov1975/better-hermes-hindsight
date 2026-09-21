@@ -275,11 +275,14 @@ including explicit empty tags, rather than silently widening them to bank-wide r
   content, not full reflect traces. Results are redacted untrusted evidence, include available
   freshness (`last_refreshed_at`, `last_memory_seen_at`, server `is_stale`), and explicitly flag truncation.
 - Create accepts only `name`, `source_query`, and `reason`. List first to find reusable topics.
+  Name/question bounds apply both before and after credential-pattern redaction; expansion beyond
+  a bound is rejected before any request, rather than truncating the question or changing its identity.
   A stable custom ID deduplicates normalized identical questions, **not semantic equivalents**.
-  Existing metadata and the total-bank allowance (default 5, configurable 1–20) are checked first.
+  Existing metadata and the total-bank allowance (default 20, configurable 1–20) are checked first.
 - Creation returns **queued**, not success. Check its exact operation once, then read the generated
   content and verify it before reporting success. Ambiguous writes are never automatically retried;
   the next call reconciles the exact ID. Ordinary concurrent creates serialize in the shared runtime.
+  Received HTTP 422/429 rejections release the local reservation, permitting a later explicit attempt.
   This is not a transactional quota across other processes/server writers; ambiguous reservations
   are process-local, not a durable job queue.
 - Auto-refresh is explicitly off (including cron and consolidation), and traces are disabled.

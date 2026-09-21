@@ -64,6 +64,8 @@ underscore characters; operation IDs must be canonical UUID strings. `name` is 1
 1–300 characters. Blank fields, projected/truncated questions, unknown arguments, and policy
 fields are refused. `reason` is a local required justification; it is not persisted or sent as
 backend content. Name and question use the existing credential-pattern redaction before egress.
+The same name/question bounds are checked after redaction. Expansion beyond a character or token
+bound is rejected before HTTP or reservation, never silently truncated into a different question.
 Pattern redaction is not a universal secret detector: do not put secrets in these arguments.
 
 ### List and read
@@ -115,6 +117,10 @@ In-process reservations count pending/ambiguous submissions toward the cap until
 bank. POST is never automatically retried. On a timeout or uncertain response, the result includes
 the exact ID and instructs reconciliation. The next create call reads that ID first; if it is still
 absent but locally reserved, no second POST is sent. Ask the operator if ambiguity persists.
+Received HTTP 422 (validation) and 429 (rate-limit) rejections release the local reservation and
+return unavailable, allowing a later explicit create call. They are not automatically retried.
+Transport failures, 5xx, and malformed acknowledgements keep the reservation because the write
+may already have happened. Other statuses remain conservative in this pilot.
 
 This is deliberately **not** a durable job queue. Reservations disappear on process restart, but
 the deterministic ID and read-before-write reconciliation remain. There is no atomic cross-process
@@ -149,3 +155,6 @@ shared async runtime, and bounded HTTP adapter against a synthetic loopback serv
 gates, exact paths/payloads, lifecycle, queued/status/read flow, freshness, redaction, bounded
 output, pagination, concurrency, cap, duplicate reconciliation, failures, and timeout ambiguity.
 It performs no production writes and does not claim live backend synthesis quality or cost proof.
+Endpoint schema validation runs inside the observed HTTP decoder: malformed version, metadata,
+content, status, reconciliation, or creation responses emit `schema_invalid`, not a successful
+request event. Existing HTTP counters and watchdog adapter-contract alerts use that outcome.
