@@ -7,19 +7,19 @@ Better Hermes Hindsight is an unofficial Hermes memory provider for supported ex
 
 The provider ID is `better_hindsight`, deliberately separate from bundled `hindsight`, so the existing provider and bank remain available for rollback.
 
-## 0.7.0 snapshot preparation
+## 0.7.0 snapshot
 
-This candidate assigns a new deployment identity to the post-`v0.6.2` behavior. It is not evidence
-that `v0.7.0` has been tagged, published, or installed. See [release notes](CHANGELOG.md#070) and
-[immutable rollback](docs/rollback.md#restore-the-prior-better-snapshot).
+This snapshot assigns a new deployment identity to the post-`v0.6.2` behavior and includes the
+current-Hermes compatibility-test and hook-manifest fixes. See [release notes](CHANGELOG.md#070)
+and [immutable rollback](docs/rollback.md#restore-the-prior-better-snapshot). A source version alone
+does not prove that a release has been published or installed; verify the tag and deployed commit.
 
 **Merge is a release action:** a push to `main` that passes the pinned-Hermes CI job automatically
 creates the version tag and publishes a GitHub source snapshot through `release.yml`. That job does
 not wait for the separately scheduled/manual current-Hermes, live-Hindsight, or security workflows.
-Keep this preparation separate from fixes for #55 and #57; merge those first and verify the combined
-candidate against pinned/current Hermes, packaging/security, and supported isolated live Hindsight
-before authorizing this version-changing merge. Tag verification and installed version/commit readback
-remain separate release/deployment work; this preparation only references #56, not closes it.
+Before merging a version change, verify the combined candidate against pinned/current Hermes,
+packaging/security, and supported isolated live Hindsight. After publication, verify the immutable
+tag and repeat the gates on its exact commit. Installation separately requires version/commit readback.
 
 ## Quick start
 
