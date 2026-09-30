@@ -51,6 +51,42 @@ def inputs() -> live.DevelopmentInputs:
     )
 
 
+@pytest.mark.parametrize("version", ["0.10.0", "0.10.2"])
+def test_live_child_budget_allows_sequential_waits(
+    monkeypatch: pytest.MonkeyPatch,
+    inputs: live.DevelopmentInputs,
+    tmp_path: Path,
+    version: str,
+) -> None:
+    selected = replace(inputs, expected_version=version)
+    monkeypatch.setattr(live, "_development_inputs", lambda _env: selected)
+    monkeypatch.setattr(live, "_with_disposable_bank", lambda value: value)
+    monkeypatch.setattr(live, "_create_disposable_bank", lambda _inputs: None)
+    cleaned: list[live.DevelopmentInputs] = []
+    monkeypatch.setattr(live, "_delete_disposable_bank", cleaned.append)
+
+    def slow_child(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        # Simulate each permitted polling phase using its budget, plus modest
+        # startup/HTTP overhead, without sleeping or contacting a real server.
+        elapsed = 5 * live._DRAIN_TIMEOUT_SECONDS + 30.0
+        if kwargs["timeout"] < elapsed:
+            raise subprocess.TimeoutExpired(args, kwargs["timeout"])
+        payload = {
+            "status": "ok",
+            "version": version,
+            "documents": 1,
+            "segments": 1,
+            "tokenizer_boundary": "verified",
+            "reflect_adapter": "verified",
+            "mental_models": "verified",
+        }
+        return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(subprocess, "run", slow_child)
+    live.test_isolated_hindsight_smoke(tmp_path)
+    assert cleaned == [selected]
+
+
 def _page(inputs: live.DevelopmentInputs, banks: list[dict[str, Any]]) -> dict[str, Any]:
     if inputs.expected_version in {"0.8.5", "0.9.1"}:
         return {"banks": banks}

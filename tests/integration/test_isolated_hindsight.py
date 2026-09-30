@@ -40,7 +40,9 @@ ROOT = Path(__file__).resolve().parents[2]
 _RETAIN_TAGS = ("better-hindsight-live",)
 _SEGMENT_MAX_BYTES = 1024
 _DRAIN_TIMEOUT_SECONDS = 45.0
-_CHILD_TIMEOUT_SECONDS = 150.0
+# Three outbox waits, useful recall, and mental-model completion can each use a
+# full phase budget; leave another 75 seconds for startup and the HTTP checks.
+_CHILD_TIMEOUT_SECONDS = 5 * _DRAIN_TIMEOUT_SECONDS + 75.0
 _RETAIN_MISSION = "Retain only durable facts from this synthetic compatibility proof."
 _OBSERVATIONS_MISSION = "Consolidate only synthetic compatibility-proof facts."
 
