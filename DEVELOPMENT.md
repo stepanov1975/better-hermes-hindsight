@@ -19,8 +19,8 @@ There is no canonical-plan hash, immutable candidate, or mandatory release check
 
 Keep the provider narrow:
 
-- external/self-hosted Hindsight API versions 0.8.5, 0.9.1, 0.9.2, and 0.10.0 only;
-  0.10.0 requires server `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`
+- external/self-hosted Hindsight API versions 0.8.5, 0.9.1, 0.9.2, 0.10.0, and 0.10.2 only;
+  0.10.0 and 0.10.2 require server `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`
   and the [isolated validation gate](docs/compatibility.md);
 - Linux/POSIX deployment;
 - one configured principal and one static bank;

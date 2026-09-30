@@ -127,6 +127,8 @@ jobs:
             image: ghcr.io/vectorize-io/hindsight@sha256:84ab276b8f501546deb6ea9c64a57291718b4e16a59dd9e02a02fdd5adfe9028
           - hindsight-version: "0.10.0"
             image: ghcr.io/vectorize-io/hindsight@sha256:e34028bf84b5bc800029e5d3b13db2c469484dfe5b557b84c577d97fd6af1c74
+          - hindsight-version: "0.10.2"
+            image: ghcr.io/vectorize-io/hindsight@sha256:d1840062a5b79940ab7a9f4809ceb90fc776d4ad737cd9329e9b5836cc64ab70
 
     services:
       postgres:

@@ -124,8 +124,8 @@ phases until a later trace-enabled replay completes; this is the unavoidable plu
 ## External end-to-end canary
 
 `hermes better_hindsight canary` is an explicit synthetic write/read/delete check for a
-fixed canary bank. It accepts only the exact Hindsight API versions `0.8.5`, `0.9.1`, `0.9.2`, and
-`0.10.0` and reports the exact observed version, then uses the installed
+fixed canary bank. It accepts only the exact Hindsight API versions `0.8.5`, `0.9.1`, `0.9.2`,
+`0.10.0`, and `0.10.2` and reports the exact observed version, then uses the installed
 `HindsightClientAdapter` for synchronous retention and recall. That exercises the production
 `aiohttp` transport, wire defaults, strict response decoding, and client lifecycle rather than a
 parallel canary implementation. Direct `aiohttp` requests with unrounded total timeouts and bounded
@@ -136,7 +136,7 @@ categories, fixed adapter reasons, and numeric timing. On cleanup failure only, 
 identifies the exact synthetic document for manual recovery in the configured canary bank; no bank,
 endpoint, content, tags, or credentials are printed.
 
-For 0.10.0, **server `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base` is a prerequisite**. A passing
+For 0.10.0/0.10.2, **server `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base` is a prerequisite**. A passing
 short-query canary does not attest this server setting: `/version`, `/health`, and bank-config do not
 expose it. Verify deployment configuration and the boundary probe described in
 [compatibility](compatibility.md); Better adds no tokenizer-policy preflight to normal recall.

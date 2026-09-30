@@ -189,12 +189,12 @@ def _live_session(inputs: DevelopmentInputs) -> ClientSession:
 async def _listed_bank(session: ClientSession, inputs: DevelopmentInputs) -> dict[str, Any] | None:
     """Prove presence/absence using the authenticated bank list, never config defaults.
 
-    0.8.5/0.9.1 return the whole list; 0.9.2/0.10.0 paginate. The latter's `q`
+    0.8.5/0.9.1 return the whole list; 0.9.2/0.10.0/0.10.2 paginate. The latter's `q`
     matches substrings, not exact IDs, so exhaust and validate the filtered listing.
     Config reads are not a cross-version existence oracle and contain no name;
     /profile is retired in 0.10.0. Mission readback separately uses /config.
     """
-    paginated = inputs.expected_version in {"0.9.2", "0.10.0"}
+    paginated = inputs.expected_version in {"0.9.2", "0.10.0", "0.10.2"}
     offset = 0
     total: int | None = None
     banks: dict[str, dict[str, Any]] = {}
@@ -642,6 +642,47 @@ def _wait_for_useful_recall(provider: Any) -> None:
         time.sleep(0.25)
 
 
+def _assert_live_mental_models(provider: Any) -> None:
+    """Synthetic provider lifecycle proof, not backend synthesis quality/cost evidence."""
+
+    def call(arguments: dict[str, Any]) -> dict[str, Any]:
+        response = json.loads(
+            provider.handle_tool_call("better_hindsight_mental_models", arguments)
+        )
+        assert response.get("trust") == "untrusted_generated_evidence", response
+        records = [line for line in response["context"].splitlines() if line.startswith("{")]
+        assert len(records) == 1
+        return cast(dict[str, Any], json.loads(records[0]))
+
+    assert call({"action": "list"})["total"] == 0
+    arguments = {
+        "action": "create",
+        "name": "Synthetic Northstar recovery",
+        "source_query": "What recovery phrase is used by the synthetic Northstar rehearsal?",
+        "reason": "Disposable compatibility proof of a recurring synthetic question",
+    }
+    created = call(arguments)
+    assert created["result"] == "queued"
+    model_id, op_id = created["id"], created["operation_id"]
+    # Only this operator-owned live harness polls, under a finite test deadline.
+    # The model-facing tool itself never polls or retries a creation POST.
+    deadline = time.monotonic() + _DRAIN_TIMEOUT_SECONDS
+    while True:
+        status = call({"action": "status", "id": model_id, "operation_id": op_id})
+        assert status["status"] not in {"failed", "cancelled"}, status
+        if status["status"] == "completed":
+            break
+        assert time.monotonic() < deadline, "mental-model operation did not complete"
+        time.sleep(0.25)
+    read = call({"action": "read", "id": model_id})
+    assert read["content"].strip(), "completed mental model has empty content"
+    assert read["last_refreshed_at"], "generated model has no refresh timestamp"
+    listed = call({"action": "list"})
+    assert listed["total"] == 1 and [item["id"] for item in listed["items"]] == [model_id]
+    reused = call(arguments)
+    assert reused["result"] == "existing" and reused["id"] == model_id
+
+
 def _run_live_child() -> int:
     inputs = DevelopmentInputs(
         api_url=os.environ["BETTER_HINDSIGHT_CHILD_API_URL"],
@@ -658,7 +699,7 @@ def _run_live_child() -> int:
     try:
         home, config = _prepare_home(inputs)
         _assert_live_error_mapping(config)
-        if inputs.expected_version == "0.10.0":
+        if inputs.expected_version in {"0.10.0", "0.10.2"}:
             _assert_live_tokenizer_boundary(inputs, config)
         expected_count = _expected_segment_count((_SHORT_TURN, _LONG_TURN))
         repeated_short_count = _expected_segment_count((_SHORT_TURN,))
@@ -692,21 +733,40 @@ def _run_live_child() -> int:
             raise AssertionError("repeated completed turn created an unexpected document count")
 
         _assert_live_mission_round_trip(config)
-        if inputs.expected_version == "0.10.0":
+        if inputs.expected_version in {"0.10.0", "0.10.2"}:
             _assert_live_reflect(config)
             reflected = _remote_documents(inputs, None)
             if {key: value.get("original_text") for key, value in reflected.items()} != {
                 key: value.get("original_text") for key, value in replayed.items()
             }:
                 raise AssertionError("reflection changed retained document identities or text")
+            # Pilot is deliberately bank-wide. Restart the isolated provider with explicit
+            # unscoped policy only after the scoped recall/reflection proof has finished.
+            _stop_manager(manager, provider)
+            manager = provider = None
+            pilot_document = _profile_document(inputs)
+            pilot_document["recall"] = {"enabled": False}
+            pilot_document["retain"] = {"enabled": False}
+            pilot_document["mental_models"] = {
+                "enabled": True,
+                "create_enabled": True,
+                "timeout_seconds": 30.0,
+            }
+            (home / "better_hindsight" / "config.json").write_text(
+                json.dumps(pilot_document), encoding="utf-8"
+            )
+            manager, provider = _start_manager(home)
+            _assert_live_mental_models(provider)
         result = {
             "documents": len(documents),
             "segments": len(expected),
             "status": "ok",
             "version": inputs.expected_version,
         }
-        if inputs.expected_version == "0.10.0":
-            result.update(tokenizer_boundary="verified", reflect_adapter="verified")
+        if inputs.expected_version in {"0.10.0", "0.10.2"}:
+            result.update(
+                tokenizer_boundary="verified", reflect_adapter="verified", mental_models="verified"
+            )
         print(json.dumps(result, sort_keys=True))
         return 0
     except BaseException as exception:
@@ -758,7 +818,7 @@ def test_live_proof_is_explicitly_opt_in() -> None:
         _development_inputs({"BETTER_HINDSIGHT_ALLOW_DEV_WRITES": "1"})
 
 
-@pytest.mark.parametrize("expected_version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0"])
+@pytest.mark.parametrize("expected_version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.2"])
 def test_live_proof_preserves_selected_interpreter_symlink(
     tmp_path: Path, expected_version: str
 ) -> None:
@@ -785,7 +845,10 @@ def test_live_proof_preserves_selected_interpreter_symlink(
     assert inputs.expected_version == expected_version
 
 
-@pytest.mark.parametrize("version", ["0.9.3", "0.10.1", "0.10.0rc1", "0.11.0", "v0.10.0"])
+@pytest.mark.parametrize(
+    "version",
+    ["0.9.3", "0.10.1", "0.10.3", "0.10.2rc1", "v0.10.2", "0.10.0rc1", "0.11.0", "v0.10.0"],
+)
 def test_live_proof_rejects_unsupported_version_before_interpreter_or_network(version: str) -> None:
     with pytest.raises(RuntimeError, match="version is unsupported"):
         _development_inputs(
@@ -890,8 +953,9 @@ def test_isolated_hindsight_smoke(tmp_path: Path) -> None:
         assert payload["status"] == "ok"
         assert payload["version"] == inputs.expected_version
         assert payload["documents"] == payload["segments"]
-        if inputs.expected_version == "0.10.0":
+        if inputs.expected_version in {"0.10.0", "0.10.2"}:
             assert payload["tokenizer_boundary"] == "verified"
             assert payload["reflect_adapter"] == "verified"
+            assert payload["mental_models"] == "verified"
     finally:
         _delete_disposable_bank(inputs)

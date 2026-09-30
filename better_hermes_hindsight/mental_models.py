@@ -1,4 +1,4 @@
-"""Explicit Hindsight 0.10.0 mental-model pilot, not a refresh/job framework."""
+"""Explicit Hindsight 0.10.0/0.10.2 mental-model pilot, not a refresh/job framework."""
 
 from __future__ import annotations
 
@@ -131,7 +131,9 @@ def normalized_query(query: str) -> str:
 def stable_id(config: BetterHindsightConfig, query: str) -> str:
     scope = [config.api_url, config.bank_id, normalized_query(query)]
     digest = hashlib.sha256(json.dumps(scope, ensure_ascii=False).encode()).hexdigest()
-    return "bh-mm-" + digest
+    # History persistence in Hindsight 0.10.0/0.10.2 limits IDs to 64 characters.
+    # Keep 232 digest bits plus the prefix; the model table alone accepts longer IDs.
+    return "bh-mm-" + digest[:58]
 
 
 def render(payload: dict[str, object]) -> str:
@@ -193,8 +195,8 @@ class MentalModels:
         version = await client.mental_model_request(
             "GET", "/version", decoder=lambda value: text(mapping(value).get("api_version"), 64)
         )
-        if version != "0.10.0":
-            return '{"error":"Mental-model pilot requires Hindsight 0.10.0."}'
+        if version not in {"0.10.0", "0.10.2"}:
+            return '{"error":"Mental-model pilot requires Hindsight 0.10.0 or 0.10.2."}'
         action = args["action"]
         if action == "list":
             items, total = await self.page(client, args.get("offset", 0))
@@ -312,7 +314,7 @@ class MentalModels:
             not in {"pending", "processing", "completed", "failed", "cancelled"}
         ):
             raise ValueError
-        # Bank is enforced by the bank-scoped operation route (0.10.0 SQL predicate).
+        # Bank is enforced by the bank-scoped operation route (0.10.0/0.10.2 SQL predicate).
         return render(
             {
                 "result": "ok",

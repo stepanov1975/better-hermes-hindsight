@@ -82,6 +82,15 @@ class Server:
                             "operation_id": OP_ID,
                             "status": state.status,
                             "operation_type": state.operation_type,
+                            **(
+                                {
+                                    "id": OP_ID,
+                                    "task_type": state.operation_type,
+                                    "mental_model_id": state.operation_model,
+                                }
+                                if state.version == "0.10.2"
+                                else {}
+                            ),
                             "task_payload": {
                                 "mental_model_id": state.operation_model,
                                 "_tenant_id": "RAW-PRIVATE-SENTINEL",
@@ -171,9 +180,10 @@ def isolate(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     reset_process_runtime_for_tests()
 
 
-@pytest.fixture
-def server() -> Iterator[Server]:
+@pytest.fixture(params=["0.10.0", "0.10.2"])
+def server(request: pytest.FixtureRequest) -> Iterator[Server]:
     value = Server()
+    value.version = request.param
     try:
         yield value
     finally:
@@ -242,6 +252,8 @@ def test_manager_queued_status_read_and_exact_reuse(tmp_path: Path, server: Serv
     assert created["result"] == "queued" and created["operation_id"] == OP_ID
     body = next(request[2] for request in server.requests if request[0] == "POST")
     assert set(body) == {"id", "name", "source_query", "tags", "max_tokens", "trigger"}
+    assert len(body["id"]) <= 64  # mental_model_history.mental_model_id varchar(64)
+    assert body["id"] == created["id"]
     assert body["tags"] == [] and body["max_tokens"] == 1024
     assert body["trigger"]["refresh_after_consolidation"] is False
     assert body["trigger"]["refresh_cron"] is None
@@ -255,10 +267,11 @@ def test_manager_queued_status_read_and_exact_reuse(tmp_path: Path, server: Serv
     assert read["content"] == "Generated fixture answer" and read["is_stale"] is True
     assert read["last_refreshed_at"] != read["last_memory_seen_at"]
     assert read["truncated"] is False
-    assert (
-        call(host, {**CREATE, "source_query": "WHAT  does the team prefer?"})["result"]
-        == "existing"
-    )
+    host.shutdown_all()
+    reset_process_runtime_for_tests()
+    host = manager(tmp_path, server)
+    reused = call(host, {**CREATE, "source_query": "WHAT  does the team prefer?"})
+    assert reused["result"] == "existing" and reused["id"] == created["id"]
     assert sum(request[0] == "POST" for request in server.requests) == 1
     assert not any("/refresh" in request[1] for request in server.requests)
 
@@ -339,11 +352,23 @@ def test_fixed_failures(tmp_path: Path, server: Server, fault: str) -> None:
     assert len(server.requests) == 1
 
 
-def test_only_explicit_path_requires_exact_version(tmp_path: Path, server: Server) -> None:
-    server.version = "0.9.2"
+@pytest.mark.parametrize("version", ["0.9.2", "0.10.1", "0.10.3", "0.10.2rc1", "v0.10.2"])
+@pytest.mark.parametrize(
+    "args",
+    [
+        {"action": "list"},
+        {"action": "read", "id": "fixture"},
+        {"action": "status", "id": "fixture", "operation_id": OP_ID},
+        CREATE,
+    ],
+)
+def test_only_explicit_path_requires_exact_version(
+    tmp_path: Path, server: Server, version: str, args: dict[str, Any]
+) -> None:
+    server.version = version
     host = manager(tmp_path, server)
     assert not server.requests
-    assert "0.10.0" in call(host, {"action": "list"})["error"]
+    assert "0.10.2" in call(host, args)["error"]
     assert server.requests == [("GET", "/version", None)]
 
 
@@ -553,6 +578,89 @@ def test_exact_id_and_destination_validation(tmp_path: Path, server: Server) -> 
     server.status = "failed"
     failed = call(host, {"action": "status", "id": "fixture", "operation_id": OP_ID})
     assert failed["status"] == "failed" and "error_message" not in failed
+
+
+@pytest.mark.parametrize("content", ["", None])
+def test_pending_content_and_additive_failure_metadata_are_not_success(
+    tmp_path: Path, server: Server, content: str | None
+) -> None:
+    host = manager(tmp_path, server)
+    server.models["fixture"] = {
+        **model("fixture"),
+        "content": content,
+        "last_refreshed_at": None,
+        "last_memory_seen_at": None,
+        "is_stale": None,
+        "last_refresh_failed_at": "2026-01-03T00:00:00Z",
+    }
+    read = call(host, {"action": "read", "id": "fixture"})
+    assert read["content"] == "" and read["last_refreshed_at"] is None
+    assert read["is_stale"] is None
+    assert "last_refresh_failed_at" not in read
+    assert "not successful generation" in read["verification"]
+    listed = call(host, {"action": "list"})
+    assert listed["total"] == 1
+    assert "last_refresh_failed_at" not in listed["items"][0]
+
+
+@pytest.mark.parametrize("mode", ["ok", "empty_content", "missing_refresh", "failed"])
+def test_live_mental_model_gate_requires_generation_and_readback(
+    tmp_path: Path, server: Server, mode: str
+) -> None:
+    from tests.integration.test_isolated_hindsight import _assert_live_mental_models
+
+    host = manager(tmp_path, server)
+
+    class Provider:
+        def handle_tool_call(self, name: str, arguments: dict[str, Any]) -> str:
+            response = host.handle_tool_call(name, arguments)
+            assert isinstance(response, str)
+            if arguments["action"] == "create" and server.models:
+                record = server.models[server.operation_model]
+                record["content"] = "" if mode == "empty_content" else "synthetic generation"
+                record["last_refreshed_at"] = (
+                    None if mode == "missing_refresh" else "2026-01-03T00:00:00Z"
+                )
+                server.status = "failed" if mode == "failed" else "completed"
+            return response
+
+    if mode == "ok":
+        _assert_live_mental_models(Provider())
+    else:
+        with pytest.raises(AssertionError):
+            _assert_live_mental_models(Provider())
+    assert sum(method == "POST" for method, _, _ in server.requests) == 1
+
+
+def test_legacy_overlong_id_remains_readable_and_counts_toward_cap(
+    tmp_path: Path,
+    server: Server,
+) -> None:
+    import hashlib
+
+    from better_hermes_hindsight.mental_models import normalized_query
+
+    scope = [server.url, "synthetic-bank", normalized_query(CREATE["source_query"])]
+    legacy_id = (
+        "bh-mm-" + hashlib.sha256(json.dumps(scope, ensure_ascii=False).encode()).hexdigest()
+    )
+    server.models[legacy_id] = model(legacy_id, source_query=CREATE["source_query"])
+    original = dict(server.models[legacy_id])
+    host = manager(tmp_path, server, cap=1)
+    assert call(host, {"action": "list"})["items"][0]["id"] == legacy_id
+    assert call(host, {"action": "read", "id": legacy_id})["content"] == original["content"]
+    assert "error" in call(host, CREATE)  # Legacy entries still consume the bank allowance.
+    assert not any(method == "POST" for method, _, _ in server.requests)
+    host.shutdown_all()
+    reset_process_runtime_for_tests()
+    host = manager(tmp_path, server, cap=2)
+    created = call(host, CREATE)
+    assert created["result"] == "queued" and created["id"] != legacy_id
+    assert len(created["id"]) <= 64
+    assert server.models[legacy_id] == original  # No implicit migration or deletion.
+    reused = call(host, CREATE)
+    assert reused["result"] == "existing" and reused["id"] == created["id"]
+    assert sum(method == "POST" for method, _, _ in server.requests) == 1
 
 
 def test_config_and_destination_identity(tmp_path: Path) -> None:

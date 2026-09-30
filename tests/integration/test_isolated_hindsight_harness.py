@@ -57,7 +57,7 @@ def _page(inputs: live.DevelopmentInputs, banks: list[dict[str, Any]]) -> dict[s
     return {"banks": banks, "total": len(banks), "limit": 100, "offset": 0}
 
 
-@pytest.mark.parametrize("version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0"])
+@pytest.mark.parametrize("version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.2"])
 def test_bank_creation_and_cleanup_use_exact_listing_ownership(
     monkeypatch: pytest.MonkeyPatch, inputs: live.DevelopmentInputs, version: str
 ) -> None:
@@ -75,7 +75,7 @@ def test_bank_creation_and_cleanup_use_exact_listing_ownership(
             return 200, {"api_version": version}
         if path == "/v1/default/banks":
             query = parse_qs(urlsplit(url).query)
-            if version in {"0.9.2", "0.10.0"}:
+            if version in {"0.9.2", "0.10.0", "0.10.2"}:
                 assert query == {"q": [inputs.bank_id], "limit": ["100"], "offset": ["0"]}
             else:
                 assert not query
@@ -97,7 +97,7 @@ def test_bank_creation_and_cleanup_use_exact_listing_ownership(
     assert calls == ["GET", "GET", "PUT", "GET", "GET", "DELETE", "GET"]
 
 
-@pytest.mark.parametrize("version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0"])
+@pytest.mark.parametrize("version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.2"])
 def test_existing_foreign_bank_is_neither_overwritten_nor_deleted(
     monkeypatch: pytest.MonkeyPatch, inputs: live.DevelopmentInputs, version: str
 ) -> None:
@@ -143,7 +143,7 @@ def test_create_requires_ownership_readback(
         live._create_disposable_bank(inputs)
 
 
-@pytest.mark.parametrize("version", ["0.9.2", "0.10.0"])
+@pytest.mark.parametrize("version", ["0.9.2", "0.10.0", "0.10.2"])
 @pytest.mark.parametrize("present", [False, True])
 def test_paginated_bank_lookup_exhausts_substring_matches(
     monkeypatch: pytest.MonkeyPatch, inputs: live.DevelopmentInputs, version: str, present: bool

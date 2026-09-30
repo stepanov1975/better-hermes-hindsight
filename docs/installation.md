@@ -8,8 +8,8 @@ procedure.
 ## Prerequisites
 
 - Hermes installed and working;
-- an external Hindsight 0.8.5, 0.9.1, 0.9.2, or 0.10.0 service;
-- for 0.10.0, **server-side** `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base` before startup;
+- an external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, or 0.10.2 service;
+- for 0.10.0/0.10.2, **server-side** `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base` before startup;
   the default `o200k_base` is unsupported (see [compatibility](compatibility.md));
 - `git` available for Hermes's Git-plugin installer.
 

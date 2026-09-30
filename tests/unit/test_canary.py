@@ -266,7 +266,20 @@ def test_canary_dns_wait_does_not_escape_total_deadline(
     assert lookups == ["synthetic-dns.invalid"]
 
 
-@pytest.mark.parametrize("version", ["0.8.4", "0.9.3", "0.10.1", "0.10.0rc1", "0.11.0", "v0.10.0"])
+@pytest.mark.parametrize(
+    "version",
+    [
+        "0.8.4",
+        "0.9.3",
+        "0.10.1",
+        "0.10.3",
+        "0.10.2rc1",
+        "v0.10.2",
+        "0.10.0rc1",
+        "0.11.0",
+        "v0.10.0",
+    ],
+)
 def test_unsupported_versions_reject_config_and_preflight_without_writes(version: str) -> None:
     with pytest.raises(ValueError, match="invalid canary destination"):
         replace(_config("http://127.0.0.1:9"), expected_version=version)
@@ -380,7 +393,7 @@ def _assert_private_absent(result: dict[str, object]) -> None:
     assert not any(tag in rendered for tag in _Handler.tags)
 
 
-@pytest.mark.parametrize("api_version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0"])
+@pytest.mark.parametrize("api_version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.2"])
 def test_canary_uses_exact_protocol_proves_owned_recall_and_validates_cleanup(
     api_version: str,
 ) -> None:
