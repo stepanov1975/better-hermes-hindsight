@@ -26,6 +26,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from urllib.parse import urlsplit
 
 from tests.fakes.hindsight_server import FakeHindsightServer
 
@@ -72,6 +73,17 @@ async def scenario():
         expected_api_key=None,
     )
     await server.start()
+    endpoint = urlsplit(server.base_url)
+    unexpected_connections = []
+
+    def check_network(event, args):
+        if event == "socket.connect" and args[1] != (endpoint.hostname, endpoint.port):
+            unexpected_connections.append(repr(args[1]))
+            raise AssertionError("first-turn fixture attempted non-Hindsight network access")
+
+    # The model is fake. Even swallowed metadata/network failures must fail this proof;
+    # only the real HTTP path to the disposable Hindsight server is allowed.
+    sys.addaudithook(check_network)
     agent = None
     finalized = False
     finalize_process_runtime = None
@@ -98,7 +110,12 @@ async def scenario():
             encoding="utf-8",
         )
         (hermes_home / "config.yaml").write_text(
-            """memory:
+            """model:
+  default: fixture/model
+  provider: openai
+  base_url: http://127.0.0.1:9/v1
+  context_length: 128000
+memory:
   provider: better_hindsight
   memory_enabled: false
   user_profile_enabled: false
@@ -121,7 +138,10 @@ sessions:
         import run_agent
         from run_agent import AIAgent
 
+        # The fake model has a fixed context window and is not an Ollama server.
+        # Otherwise host initialization probes port 9 outside the recall deadline.
         with (
+            patch("agent.agent_init.query_ollama_num_ctx", return_value=None),
             patch("run_agent.get_tool_definitions", return_value=[]),
             patch("run_agent.check_toolset_requirements", return_value={}),
             patch("run_agent.OpenAI"),
@@ -256,6 +276,7 @@ sessions:
         assert finalized is True
 
         records = server.records
+        assert unexpected_connections == [], unexpected_connections
         assert len(records) == 1
         record = records[0]
         assert (record.method, record.path) == (

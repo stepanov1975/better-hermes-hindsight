@@ -34,7 +34,7 @@ pilot. Leave it off until proper scope parity is supported.
 
 The stable schema remains advertised before initialization and when disabled, matching the other
 provider tools. Disabled, unauthorized, invalid, or shut-down calls do not perform HTTP requests.
-Only explicit authorized pilot calls check `/version`; exact `api_version="0.10.0"` is required.
+Only explicit authorized pilot calls check `/version`; exact `api_version="0.10.0"` or `"0.10.2"` is required.
 Older supported automatic recall/retain behavior is unchanged.
 
 ## One tool, four actions
@@ -109,8 +109,19 @@ configurable cap cannot exceed the page size; incomplete or inconsistent invento
 write. At capacity, exact-ID reuse remains possible. This is not semantic duplicate detection:
 different phrasing can produce a different ID, so the agent must list first.
 
-The custom ID is `bh-mm-` plus SHA-256 over the configured endpoint, bank, and normalized redacted
-question (Unicode NFKC, case folding, collapsed whitespace). Retries in the same configured scope
+The custom ID is `bh-mm-` plus the first 58 hexadecimal characters of SHA-256 over the configured
+endpoint, bank, and normalized redacted question (Unicode NFKC, case folding, collapsed whitespace).
+This retains 232 digest bits and fits the 64-character `mental_model_history.mental_model_id`
+limit in both supported pilot versions; the model table itself accepts longer IDs, so an overlong
+ID can be accepted at creation but fail later when generated content is persisted.
+Earlier Better versions generated 70-character IDs using the full digest. Those models remain
+listable/readable by their original ID and count toward the bank allowance, but are not automatically
+reused by the new bounded-ID create path. List/read first: a new create for the same question can
+produce a separate bounded-ID model if capacity permits. No existing model is renamed, deleted,
+refreshed, or migrated; failed legacy models require operator-managed recovery. Do not treat their
+existence as successful generation.
+
+Retries in the same configured scope
 use the same ID regardless of name/reason. Changing endpoint spelling or question wording changes
 that identity. A create lock lives on the existing shared runtime, not on each provider instance.
 In-process reservations count pending/ambiguous submissions toward the cap until observed in the
@@ -148,7 +159,13 @@ quality and cost in a disposable synthetic bank before choosing to enable creati
 The wire contract was reviewed against Hindsight 0.10.0 source commit
 [`5d46f9c8c8eb4fb96f549aa63abe1191b82a7840`](https://github.com/vectorize-io/hindsight/tree/5d46f9c8c8eb4fb96f549aa63abe1191b82a7840),
 particularly `hindsight-api-slim/hindsight_api/api/http.py` and
-`hindsight-api-slim/hindsight_api/engine/memory_engine.py`.
+`hindsight-api-slim/hindsight_api/engine/memory_engine.py`. Exact 0.10.2 support was also reviewed
+against [`5fc4ce20917b916240cef27c212c387a177f115b`](https://github.com/vectorize-io/hindsight/tree/5fc4ce20917b916240cef27c212c387a177f115b);
+see the [operation-by-operation audit](compatibility.md#exact-hindsight-0102-source-audit).
+Its initial model content is empty, and its refresh defaults to `mid` iteration budget with
+separate refresh configuration rather than inheriting ad-hoc reflection defaults. New optional
+trigger controls are omitted; the existing explicit no-auto-refresh/no-trace payload is unchanged.
+Recheck server-side cost/quality before enabling creation; neither version's output target caps cost.
 
 `tests/integration/test_mental_models.py` drives the real Hermes `MemoryManager`, Better provider,
 shared async runtime, and bounded HTTP adapter against a synthetic loopback server. It verifies

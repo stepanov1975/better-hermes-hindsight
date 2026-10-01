@@ -320,7 +320,7 @@ def test_recall_serializes_full_contract_and_decodes_internal_models(tmp_path: P
     ]
 
 
-@pytest.mark.parametrize("supported_version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0"])
+@pytest.mark.parametrize("supported_version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.2"])
 def test_reflect_uses_exact_bounded_wire_contract_and_native_timeout(
     tmp_path: Path,
     supported_version: str,
@@ -347,7 +347,7 @@ def test_reflect_uses_exact_bounded_wire_contract_and_native_timeout(
         "usage": {"ignored_fixture_version": supported_version},
         "trace": {"ignored_fixture_version": supported_version},
     }
-    if supported_version == "0.10.0":
+    if supported_version in {"0.10.0", "0.10.2"}:
         payload["structured_output_error"] = "ignored upstream detail"
     transport.responses[("POST", path)] = payload
     adapter = HindsightClientAdapter(config=config, transport=transport)

@@ -134,7 +134,7 @@ iteration, context, wall-time, and completion-token limits.
 The default-off `better_hindsight_mental_models` schema exposes only list/read/create/status.
 It shares existing provider principal authorization, fixed destination, runtime deadline, and HTTP
 transport. Reads/status and creation have separate opt-ins; scoped recall/reflect configuration is
-refused because the 0.10.0 direct-ID/list contracts do not preserve those tag boundaries. A version
+refused because the 0.10.0/0.10.2 direct-ID/list contracts do not preserve those tag boundaries. A version
 check occurs only on explicit pilot calls, never automatic recall.
 
 `mental_models.py` projects bounded metadata/content inside untrusted evidence framing, with no
@@ -207,7 +207,7 @@ diagnostics. One process owns one exact Better configuration and runtime; anothe
 profile in that process fails open rather than crossing the profile boundary. The root entry point and
 `better_hermes_hindsight` implementation package are installed together by `hermes plugins install`;
 no second package installation or runtime environment is part of deployment. Better implements its
-narrow Hindsight 0.8.5/0.9.1/0.9.2/0.10.0 wire contract (0.10.0 requires server
+narrow Hindsight 0.8.5/0.9.1/0.9.2/0.10.0/0.10.2 wire contract (0.10.0 and 0.10.2 require server
 `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`) over `aiohttp` with cancellable `aiodns`
 resolution, uses `tiktoken` for bounded recall
 and reflection query projection, and does not import the Hindsight Python SDK, so the untouched bundled
