@@ -138,13 +138,17 @@ sessions:
         import run_agent
         from run_agent import AIAgent
 
+        # Hermes moved tool discovery from run_agent to model_tools. Patch the
+        # actual lookup site on either host without manufacturing missing attributes.
+        tools_module = "run_agent" if hasattr(run_agent, "get_tool_definitions") else "model_tools"
+
         # The fake model has a fixed context window and is not an Ollama server.
         # Otherwise host initialization probes port 9 outside the recall deadline.
         with (
             patch("agent.agent_init.query_ollama_num_ctx", return_value=None),
-            patch("run_agent.get_tool_definitions", return_value=[]),
-            patch("run_agent.check_toolset_requirements", return_value={}),
-            patch("run_agent.OpenAI"),
+            patch(f"{tools_module}.get_tool_definitions", return_value=[]),
+            patch(f"{tools_module}.check_toolset_requirements", return_value={}),
+            patch.object(AIAgent, "_create_openai_client"),
         ):
             agent = AIAgent(
                 api_key=model_secret_sentinel,

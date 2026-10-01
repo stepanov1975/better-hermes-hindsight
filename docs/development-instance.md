@@ -63,7 +63,7 @@ When `BETTER_HINDSIGHT_REQUIRE_LIVE_PROOF=1`, a missing opt-in input is a failur
 
 ## Automated compatibility proof
 
-The scheduled and manually dispatchable `Python 3.13 / Hindsight ... live` CI matrix runs this same
+The scheduled and manually dispatchable `Python 3.14 / Hindsight ... live` CI matrix runs this same
 test against exact **0.9.2, 0.10.0, and 0.10.2** release images pinned by digest in
 `.github/workflows/ci.yml`. Each lane owns a disposable PostgreSQL **18.4 / pgvector 0.8.5** service,
 uses Hindsight's real API, local embeddings and local reranker, and selects its deterministic mock

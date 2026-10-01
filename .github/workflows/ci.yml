@@ -74,7 +74,7 @@ jobs:
           git diff --check
 
   test-current-hermes:
-    name: Python 3.13 / Hermes main canary
+    name: Python 3.14 / Hermes main canary
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -96,12 +96,12 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Install development environment and current Hermes
         run: |
           python -m pip install --requirement requirements-ci.txt
-          uv sync --frozen --extra dev
+          uv sync --frozen --extra dev --python "3.14"
           uv pip install --python .venv/bin/python -e .compat/hermes-current
           uv pip check --python .venv/bin/python
 
@@ -115,7 +115,7 @@ jobs:
         run: .venv/bin/python -m pytest -p no:cacheprovider
 
   test-live-hindsight:
-    name: Python 3.13 / Hindsight ${{ matrix.hindsight-version }} live
+    name: Python 3.14 / Hindsight ${{ matrix.hindsight-version }} live
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -179,12 +179,12 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Install development environment and current Hermes
         run: |
           python -m pip install --requirement requirements-ci.txt
-          uv sync --frozen --extra dev
+          uv sync --frozen --extra dev --python "3.14"
           uv pip install --python .venv/bin/python -e .compat/hermes-current
           uv pip check --python .venv/bin/python
 

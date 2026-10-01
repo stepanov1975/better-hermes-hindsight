@@ -4,13 +4,35 @@ Better Hermes Hindsight follows the Hermes checkout used by its maintainer rathe
 
 ## Current policy
 
+- Better declares Python `>=3.11,<3.15`. Current Hermes requires Python 3.14 for its core
+  runtime dependencies; its broader bootstrap packaging bound does not make 3.13 a working runtime.
 - Required Linux CI tests Python 3.11, 3.12, and 3.13 against one reviewed Hermes source commit.
-- A weekly/manual Python 3.13 canary follows Hermes `main`; a successful canary supports an intentional
+- A weekly/manual Python 3.14 canary follows Hermes `main`; a successful canary supports an intentional
   update of the required commit rather than making pull-request results depend on a moving upstream.
 - Validation records the observed Hermes package version and Git commit when available.
 - A different commit is not rejected solely because its identity changed.
 - Compatibility fails only when required provider/CLI interfaces are missing or behavior tests fail.
 - Historical Hermes versions are not blocking CI lanes.
+
+### 0.7.1 current-host validation
+
+The local Linux suite on Python **3.14.6**, using an unmodified editable Hermes checkout at
+`234badf4012af380d23c91eae55d045a69c69ffb` (distribution version `0.0.0`), passed **1422 tests**
+with **1 explicitly gated live test skipped**. This exercises the real host's plugin install,
+setup, discovery, operator CLI, and first-turn recall against fake services. Current Hermes needs
+interactive dependency consent for install/enable; non-TTY `--enable` alone can leave a plugin disabled.
+No Hermes-core or Better runtime implementation patch was needed. Integration fixtures follow the
+new tool/client lookup sites and separately verify that host-owned loader workers terminate, while
+retaining plugin network, SQLite, sender, and operation-specific thread assertions.
+
+The required pinned-host Python 3.11–3.13 matrix remains at
+`080907e3b7ad4985cf4a7c73024a283a49381ba8`; the updated fixtures also passed the full local
+Python 3.13.12 suite (**1422 passed, 1 live test skipped**) against that host. Python 3.14 Ruff,
+formatting, mypy, dependency consistency, build, Twine, sdist-content, and locked application-runtime
+audit checks passed. No runtime package version changed in the expanded lock.
+Scheduled/manual current-host and isolated live lanes
+now select Python 3.14 explicitly. The older live evidence below is not a live proof for this host;
+the new-host 0.9.2/0.10.0/0.10.2 isolated matrix remains a separate gate before release.
 
 The relevant public host contract is Hermes's `MemoryProvider`/`MemoryManager` lifecycle: provider
 discovery, `is_available()`, `initialize()`, current-query prefetch, `recall_status()`, `sync_turn()`,

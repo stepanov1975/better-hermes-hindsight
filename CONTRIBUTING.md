@@ -7,7 +7,7 @@ Better Hermes Hindsight follows rolling Hermes development. Keep changes practic
 ```bash
 mkdir -p .compat
 git clone --depth 1 https://github.com/NousResearch/hermes-agent.git .compat/hermes-current
-uv sync --extra dev
+uv sync --extra dev --python 3.14
 uv pip install --python .venv/bin/python -e .compat/hermes-current
 uv pip check --python .venv/bin/python
 ```

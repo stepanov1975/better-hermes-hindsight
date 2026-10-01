@@ -64,8 +64,8 @@ Do not infer direct-user versus synthetic provenance from text patterns. If Herm
 - Avoid tests that freeze prose, plans, commit hashes, workflow internals, or historical release metadata.
 - Test public behavior and realistic failure paths.
 - Keep required pull-request checks reproducible against the reviewed Hermes commit and test Python
-  3.11–3.13 on Linux. Follow Hermes `main` in the scheduled/manual canary, record its commit, and update
-  the required pin deliberately after compatibility succeeds.
+  3.11–3.13 on Linux. Follow Hermes `main` on Python 3.14 in the scheduled/manual canary,
+  record its commit, and update the required pin deliberately after compatibility succeeds.
 - Do not bump the package version for every development commit. Bump it only for an optional tagged snapshot or when deployment identification needs it.
 
 ## Verification

@@ -30,7 +30,7 @@ The existing runtime should not be rewritten merely to reduce line count. Simpli
 
 - Keep required pull-request checks reproducible against one reviewed Hermes commit across Python
   3.11–3.13 on Linux.
-- Follow Hermes `main` in a scheduled/manual Python 3.13 compatibility canary; record the resolved
+- Follow Hermes `main` in a scheduled/manual Python 3.14 compatibility canary; record the resolved
   commit and update the required pin deliberately after a successful proof.
 - Record observed Hermes, Better, and Hindsight versions/commits in validation results.
 - Fail for missing or incompatible interfaces and broken behavior—not for an unknown but compatible Hermes commit.
