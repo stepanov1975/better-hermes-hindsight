@@ -18,6 +18,25 @@ Better Hermes Hindsight uses lightweight controls for a public, Linux-only Herme
 
 All checked-in Actions use full commit SHAs, checkout credentials are not persisted, and default workflow permissions are read-only. Only the post-test source-snapshot job receives `contents: write`.
 
+## Security domains
+
+- **Source and workflow checks:** `Python static/security checks` runs Semgrep (`p/ci` and
+  `p/secrets`) and zizmor. It remains required, alongside Gitleaks, actionlint, and CodeQL.
+- **Application dependencies:** `Runtime dependency audit / Python 3.11`, `3.12`, and `3.13`
+  audit the frozen `uv.lock` runtime export, without development dependencies or the project itself.
+  These remain required and do not audit the ambient scanner environment.
+- **CI/scanner/auditor dependencies:** `Toolchain dependency audit / <manifest>` separately audits
+  `requirements-ci.txt`, `requirements-security.txt`, and `requirements-audit.txt`, including their
+  resolved transitive dependencies. The Python 3.13 matrix disables fail-fast so a finding in one
+  manifest does not cancel the others. These checks are intentionally nonblocking for merges via
+  branch protection, not via suppressed failures: vulnerabilities and audit errors still produce
+  red jobs and a failed Security scans workflow (including its badge).
+
+A scanner-only advisory is not evidence that the application runtime is vulnerable, but it still
+requires maintainer triage and a toolchain update when available. Conversely, a runtime finding
+remains blocking even when source scans pass. No advisories are ignored and no audit uses
+`continue-on-error`; scanner installation or execution failures still fail the required source job.
+
 ## Repository settings
 
 The repository should keep these settings enabled:
@@ -44,6 +63,14 @@ Required checks should match the emitted jobs after their first successful run:
 - `Runtime dependency audit / Python 3.13`;
 - `Analyze (python)`; and
 - `Analyze (actions)`.
+
+Keep the three `Toolchain dependency audit / <manifest>` checks out of the required-check list;
+require the individual source and runtime contexts above, not an aggregate Security scans gate.
+Workflow YAML does not configure branch protection: verify the emitted names in Settings → Branches
+(or Rules → Rulesets) after rollout. Renaming a required source/runtime job requires a coordinated
+settings change; the toolchain split preserves those names and requires no settings change when
+protection already uses the list above. Review red toolchain jobs independently rather than treating
+a mergeable pull request as an all-green security result.
 
 The moving Hermes `main` canary is intentionally scheduled/manual rather than a pull-request requirement. This preserves early compatibility detection without allowing unrelated upstream changes to make an unchanged pull request nondeterministic.
 
