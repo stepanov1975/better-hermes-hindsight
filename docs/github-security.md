@@ -22,9 +22,10 @@ All checked-in Actions use full commit SHAs, checkout credentials are not persis
 
 - **Source and workflow checks:** `Python static/security checks` runs Semgrep (`p/ci` and
   `p/secrets`) and zizmor. It remains required, alongside Gitleaks, actionlint, and CodeQL.
-- **Application dependencies:** `Runtime dependency audit / Python 3.11`, `3.12`, and `3.13`
+- **Application dependencies:** `Runtime dependency audit / Python 3.11`, `3.12`, `3.13`, and `3.14`
   audit the frozen `uv.lock` runtime export, without development dependencies or the project itself.
-  These remain required and do not audit the ambient scanner environment.
+  These audit the application rather than the ambient scanner environment. The existing 3.11–3.13
+  checks remain required; add the new 3.14 check to branch protection after its first hosted run.
 - **CI/scanner/auditor dependencies:** `Toolchain dependency audit / <manifest>` separately audits
   `requirements-ci.txt`, `requirements-security.txt`, and `requirements-audit.txt`, including their
   resolved transitive dependencies. The Python 3.13 matrix disables fail-fast so a finding in one

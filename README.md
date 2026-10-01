@@ -7,10 +7,11 @@ Better Hermes Hindsight is an unofficial Hermes memory provider for supported ex
 
 The provider ID is `better_hindsight`, deliberately separate from bundled `hindsight`, so the existing provider and bank remain available for rollback.
 
-## 0.7.0 snapshot
+## 0.7.1 snapshot
 
-This snapshot assigns a new deployment identity to the post-`v0.6.2` behavior and includes the
-current-Hermes compatibility-test and hook-manifest fixes. See [release notes](CHANGELOG.md#070)
+This source-only snapshot adds the opt-in mental-model pilot and exact Hindsight 0.10.2 support
+since `v0.7.0`, which already supported 0.10.0. It remains a standard Hermes Git plugin: no
+PyPI publication or uploaded wheel/sdist assets. See [release notes](CHANGELOG.md#071)
 and [immutable rollback](docs/rollback.md#restore-the-prior-better-snapshot). A source version alone
 does not prove that a release has been published or installed; verify the tag and deployed commit.
 
@@ -21,14 +22,27 @@ Before merging a version change, verify the combined candidate against pinned/cu
 packaging/security, and supported isolated live Hindsight. After publication, verify the immutable
 tag and repeat the gates on its exact commit. Installation separately requires version/commit readback.
 
-## Unreleased compatibility update
+### Behavior and validation limits
 
-The source adds exact Hindsight **0.10.2** support alongside the existing supported versions;
+The default-off mental-model pilot exposes explicit list/read/create/status; creation requires
+its own opt-in and queued work must be checked, read, and verified. Planning, rewriting, reflection,
+retention, and private evaluation keep their existing defaults; this snapshot enables none of them.
+Content-free ordinary logs and separately opt-in private evaluation remain unchanged. See the
+[pilot configuration and limits](#opt-in-mental-model-pilot-hindsight-01000102-only) and
+[private evaluation](#jev-recall-decisions-and-private-evaluation).
+
+The snapshot adds exact Hindsight **0.10.2** support alongside the existing supported versions;
 0.10.0/0.10.2 still require server-side `cl100k_base`. It also fixes new mental-model IDs to fit
 Hindsight's 64-character history limit, so asynchronous generation can finish on both versions.
 Existing overlong IDs are not renamed or deleted; they remain readable and count toward the cap.
 See [compatibility proof](docs/compatibility.md#exact-hindsight-0102-source-audit) and
 [legacy mental-model IDs](docs/mental-models.md#create-status-and-verification) before deploying.
+The prior isolated 0.10.0/0.10.2 proofs used the official mock LLM: they establish synthetic lifecycle
+compatibility, not hosted-LLM quality/cost or a production migration/restore rehearsal. Revalidate the
+intended backend before enabling synthesis; local timeouts and output targets do not cap backend spend.
+The known Semgrep/PyJWT scanner-toolchain audit failure remains visible and nonblocking, separate
+from required source scans and application-runtime audits; this is not an all-green security claim.
+See [security audit scope](docs/github-security.md#security-domains).
 
 ## Quick start
 
@@ -327,7 +341,7 @@ Retries use a stable document ID and `update_mode="replace"`. A timed-out write 
 - Linux/POSIX;
 - the current intended Hermes checkout;
 - at most one Better-enabled profile per Hermes process;
-- Python 3.11, 3.12, or 3.13 on Linux;
+- Python 3.11–3.14 on Linux (current Hermes requires 3.14; older pinned Hermes covers 3.11–3.13);
 - an external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, or 0.10.2 server;
 - `aiohttp>=3.14.1,<4`, `aiodns>=4.0.4,<5`, and `tiktoken>=0.12,<0.15`, which the plugin declares through Hermes's
   standard memory-plugin dependency mechanism.
@@ -336,8 +350,9 @@ The plugin packages the official hash-verified `cl100k_base` encoding table, so 
 query counting does not make a first-use network request outside the configured operation deadline.
 
 Compatibility is behavioral rather than release-matrix based. Required CI uses one reviewed Hermes
-commit for reproducibility across Python 3.11–3.13, while a weekly/manual Python 3.13 canary follows
-Hermes `main` and records the resolved commit.
+commit for reproducibility across Python 3.11–3.13, while a weekly/manual Python 3.14 canary follows
+Hermes `main` and records the resolved commit. The isolated live lanes also use Python 3.14.
+This is not a guarantee for every Hermes revision; see [validation scope](docs/compatibility.md).
 
 ## Installation
 
@@ -348,6 +363,10 @@ current Hermes configuration with the same plugin commands used for other Git pl
 hermes plugins install --enable stepanov1975/better-hermes-hindsight
 hermes memory setup better_hindsight
 ```
+
+On current Hermes, accept the interactive dependency-preparation prompt. A non-interactive
+install can leave the plugin disabled even with `--enable`; run
+`hermes plugins enable better_hindsight` interactively before setup.
 
 It does not need another Hermes profile, Python environment, package installation, launcher, or
 custom gateway startup procedure. Its internal HTTP adapter does not import the Hindsight Python

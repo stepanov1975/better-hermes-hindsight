@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -11,6 +10,8 @@ import tomllib
 from pathlib import Path
 
 import yaml
+
+from tests.integration.helpers import clean_subprocess_env
 
 ROOT = Path(__file__).resolve().parents[2]
 ROOT_PLUGIN_FILES = ("__init__.py", "after-install.md", "cli.py", "plugin.yaml")
@@ -89,10 +90,7 @@ def _plugin_repository(tmp_path: Path) -> Path:
 
 
 def _hermes_environment(home: Path) -> dict[str, str]:
-    environ = os.environ.copy()
-    environ["HERMES_HOME"] = str(home)
-    environ["PYTHONDONTWRITEBYTECODE"] = "1"
-    return environ
+    return clean_subprocess_env(home.parent, hermes_home=home, no_proxy="127.0.0.1,localhost")
 
 
 def test_root_plugin_surface_is_self_contained_and_version_aligned() -> None:
@@ -128,8 +126,13 @@ def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
     _run(
         [
             sys.executable,
-            "-m",
-            "hermes_cli.main",
+            "-c",
+            # Supply affirmative interactive dependency consent in this isolated
+            # fixture. New Hermes deliberately leaves non-TTY installs disabled.
+            "import builtins, sys; "
+            "sys.stdin.isatty = sys.stdout.isatty = lambda: True; "
+            "builtins.input = lambda prompt='': 'y'; "
+            "from hermes_cli.main import main; main()",
             "plugins",
             "install",
             "--enable",

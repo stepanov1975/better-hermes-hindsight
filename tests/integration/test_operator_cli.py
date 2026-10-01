@@ -202,11 +202,23 @@ if mode in config_forbidden_modes and config_module is not None:
 
 original_thread_start = threading.Thread.start
 started_threads = []
+host_loader_threads = []
 
 
 def guarded_thread_start(thread):
     if "outbox-sender" in thread.name:
         raise AssertionError("operator CLI started a sender thread")
+    # Current Hermes runs discovery under a bounded host-owned loader worker.
+    # Attribute by callsite, not just a spoofable thread name; all plugin-started
+    # workers still enter the strict operation-specific assertions below.
+    caller = inspect.currentframe().f_back
+    if (caller.f_code.co_name == "run_with_load_deadline"
+            and Path(caller.f_code.co_filename).resolve()
+            == release_path("hermes_cli/plugins_loader.py")):
+        assert thread.name == "plugin-load:better_hindsight"
+        assert thread.daemon
+        host_loader_threads.append(thread)
+        return original_thread_start(thread)
     started_threads.append(thread.name)
     return original_thread_start(thread)
 
@@ -300,6 +312,7 @@ if mode in expected_calls:
 else:
     assert client_instances == []
 
+assert all(not thread.is_alive() for thread in host_loader_threads)
 if mode in client_modes:
     assert started_threads == ["better-hindsight-event-loop"]
     assert not any(
@@ -307,7 +320,7 @@ if mode in client_modes:
         for thread in threading.enumerate()
     )
 else:
-    assert started_threads == []
+    assert started_threads == [], started_threads
 
 if mode == "status_ready":
     assert len(sqlite_calls) == 1, sqlite_calls

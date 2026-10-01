@@ -7,6 +7,56 @@ For supported settings and migration guidance, see `docs/configuration.md`.
 
 ## Unreleased
 
+## 0.7.1
+
+Optional source-only snapshot for the standard Hermes Git plugin. This release does not publish
+wheel/sdist assets or a PyPI package, deploy the plugin, or change existing opt-in defaults.
+
+### Added
+
+- Add the default-off `better_hindsight_mental_models` pilot for exact Hindsight 0.10.0/0.10.2:
+  bounded fixed-bank `list`, `read`, `create`, and `status` under the existing principal policy.
+  Reads reuse generated summaries without another reflect synthesis. Creation requires a separate
+  opt-in, refuses configured tag scopes, reconciles stable question IDs, and disables auto-refresh
+  and traces. Queued creation is not success: check the operation, then read and verify the content.
+  No refresh/edit/delete, scheduler, automatic write retries, or cross-process quota is added.
+- Support exact Hindsight 0.10.2 alongside 0.8.5, 0.9.1, 0.9.2, and 0.10.0. Both 0.10 versions
+  require server-side `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`; their default tokenizer and
+  unreviewed patch releases remain unsupported. Keep Better's existing HTTP adapter, packaged
+  tokenizer, and runtime dependency ranges.
+
+### Fixed
+
+- Keep newly generated mental-model IDs within Hindsight's 64-character history limit so
+  asynchronous generation can complete on 0.10.0 and 0.10.2. Existing overlong IDs remain readable
+  and count toward the allowance; they are not automatically renamed, migrated, or deleted.
+- Classify passive outbox inspection failures without treating SQLite contention as an empty queue;
+  retry only transient inspection contention in tests. Close provider fixtures before removing
+  their temporary directories to avoid background sender races.
+
+### Validation and maintenance
+
+- Add Python 3.14 metadata and move current-Hermes canary/live lanes to 3.14, retaining
+  the reviewed Python 3.11–3.13 pinned-host lanes. Extend application-runtime auditing to 3.14
+  without changing runtime dependency ranges. Adapt integration fixtures to current Hermes's
+  tool/client lookup sites, bounded host loader threads, and interactive dependency consent;
+  provider behavior and strict no-network/no-sender assertions remain unchanged.
+- The local Python 3.14.6 suite against Hermes `234badf4012af380d23c91eae55d045a69c69ffb`
+  passed **1422 tests**, with the explicitly gated live test skipped. Prior live proofs below
+  do not establish live compatibility for this newer host; rerun the isolated live matrix.
+- Extend the scheduled/manual isolated live matrix to 0.10.2 and require mental-model
+  create/status/read/reuse on both 0.10 versions. Prior isolated proofs used real local
+  embeddings/reranking and the official mock LLM, covering tokenizer boundaries, durable
+  retention/replay, recall, missions, reflection, mental-model persistence, and cleanup.
+  This is synthetic lifecycle compatibility evidence, not hosted-LLM quality/cost evidence,
+  a production migration/restore rehearsal, or authorization to deploy. Backend generation work
+  may continue after local timeouts; 0.10.2 refresh defaults can change cost. See
+  [compatibility](docs/compatibility.md#exact-hindsight-0102-source-audit).
+- Update the locked `urllib3` dependency to 2.8.0. Separate required application-runtime audits
+  from nonblocking CI/scanner/auditor dependency audits. The known Semgrep/PyJWT scanner-toolchain
+  audit failure remains visible and is not an application-runtime finding or an all-green security
+  claim; no advisory is suppressed. See [security audit scope](docs/github-security.md#security-domains).
+
 ## 0.7.0
 
 Optional snapshot for deployment identification after the post-0.6.2 planner changes;

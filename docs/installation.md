@@ -7,7 +7,8 @@ procedure.
 
 ## Prerequisites
 
-- Hermes installed and working;
+- Hermes installed and working on its required Python (3.14 for current Hermes;
+  Better also supports 3.11–3.13 with the reviewed older host);
 - an external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, or 0.10.2 service;
 - for 0.10.0/0.10.2, **server-side** `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base` before startup;
   the default `o200k_base` is unsupported (see [compatibility](compatibility.md));
@@ -31,7 +32,11 @@ hermes plugins install --enable stepanov1975/better-hermes-hindsight
 hermes memory setup better_hindsight
 ```
 
-The first command clones and enables the complete plugin in the current Hermes plugin directory. That
+Accept the interactive dependency-preparation prompt on current Hermes. Non-interactive installs
+can leave the plugin disabled despite `--enable`; run `hermes plugins enable better_hindsight`
+interactively before setup in that case.
+
+With dependency consent, the first command clones and enables the complete plugin in the current Hermes plugin directory. That
 enablement lets the standalone companion register its `pre_llm_call` hook; the default `planner.mode`
 of `off` still makes the hook inert. The second command selects `better_hindsight` as the active memory
 provider and checks its declared dependency. No custom install script or additional runtime is involved.
@@ -72,7 +77,7 @@ hermes better_hindsight status
 hermes better_hindsight missions check
 ```
 
-The plugin should appear as installed and enabled at version `0.7.0`, and `memory.provider` should be
+The plugin should appear as installed and enabled at version `0.7.1`, and `memory.provider` should be
 `better_hindsight`. General-plugin enablement is required only for the optional planner companion; the
 memory-provider path remains separately selected through `memory.provider`. An absent outbox is reported
 as `uninitialized`; that is normal before the first admitted retained turn.
