@@ -224,3 +224,18 @@ is an operational snapshot under that model, not a defense
 against concurrent pathname replacement or an adversarial local writer. `codex_app_server`, universal
 provenance beyond the typed planner exclusions, automatic migration/deletion, and cross-platform sender election are outside the initial
 product. They do not block use in the intended environment.
+
+## Explicit maintained summaries and Knowledge Pages
+
+The default-off mental-model tool retains its 0.10.0/0.10.2 pilot and adds separately gated
+0.10.2 refresh and page reads. A narrow operator adapter owns definition PATCH/confirmed DELETE,
+policy defaults, and page creation. No local scheduler, startup reconciliation, folder deletion,
+body editing or automatic page migration is introduced. Policy is operator-owned; model callers
+cannot widen bank/principal/tags or select triggers/budgets. Reads remain generated-untrusted,
+redacted and bounded. Trees are unpaginated and explicitly bounded; page search is distinct from
+standalone model inventory. Refresh validates the existing fixed retrieval/trace policy, submits
+once, then reads bank/model-bound operation identity. Queued/completed acknowledgements are not
+content verification. Edit/delete/page creation require exact readback, including absence and
+page cascade checks. Mutations after uncertain responses are never automatically retried; finite
+operator runtimes and process-local reservations are not durable job queues or global quotas.
+See [mental models](docs/mental-models.md#operator-maintenance-and-knowledge-pages).

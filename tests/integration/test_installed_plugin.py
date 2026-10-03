@@ -100,6 +100,7 @@ def test_root_plugin_surface_is_self_contained_and_version_aligned() -> None:
         "aiohttp>=3.14.1,<4",
         "aiodns>=4.0.4,<5",
         "tiktoken>=0.12,<0.15",
+        "croniter>=6,<7",
     ]
 
     assert root_manifest["name"] == "better_hindsight"
@@ -223,7 +224,8 @@ def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
         cwd=tmp_path,
         environ=environ,
     )
-    assert "{status,canary,watchdog,diagnostics,missions}" in help_result.stdout
+    assert "summaries" in help_result.stdout and "pages" in help_result.stdout
+    assert "missions" in help_result.stdout
     assert "status" in help_result.stdout
     assert "missions" in help_result.stdout
 

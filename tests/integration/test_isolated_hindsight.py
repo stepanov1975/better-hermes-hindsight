@@ -40,9 +40,9 @@ ROOT = Path(__file__).resolve().parents[2]
 _RETAIN_TAGS = ("better-hindsight-live",)
 _SEGMENT_MAX_BYTES = 1024
 _DRAIN_TIMEOUT_SECONDS = 45.0
-# Three outbox waits, useful recall, and mental-model completion can each use a
-# full phase budget; leave another 75 seconds for startup and the HTTP checks.
-_CHILD_TIMEOUT_SECONDS = 5 * _DRAIN_TIMEOUT_SECONDS + 75.0
+# Three outbox waits, useful recall, initial mental-model completion, and three
+# maintenance completions can each use a full phase budget; allow startup/HTTP overhead.
+_CHILD_TIMEOUT_SECONDS = 8 * _DRAIN_TIMEOUT_SECONDS + 75.0
 _RETAIN_MISSION = "Retain only durable facts from this synthetic compatibility proof."
 _OBSERVATIONS_MISSION = "Consolidate only synthetic compatibility-proof facts."
 
@@ -685,6 +685,136 @@ def _assert_live_mental_models(provider: Any) -> None:
     assert reused["result"] == "existing" and reused["id"] == model_id
 
 
+def _assert_live_summary_maintenance(home: Path, provider: Any) -> None:
+    """Exact 0.10.2, owned synthetic bank; operator CLI plus real provider reads."""
+    import contextlib
+    import io
+    from argparse import ArgumentParser
+
+    from better_hermes_hindsight.operator_cli import better_hindsight_command, register_cli
+
+    def unpack(response: str) -> dict[str, Any]:
+        envelope = json.loads(response)
+        assert envelope.get("trust") == "untrusted_generated_evidence", envelope
+        return cast(
+            dict[str, Any],
+            json.loads(
+                next(line for line in envelope["context"].splitlines() if line.startswith("{"))
+            ),
+        )
+
+    def tool(arguments: dict[str, Any]) -> dict[str, Any]:
+        return unpack(provider.handle_tool_call("better_hindsight_mental_models", arguments))
+
+    def operator(words: list[str]) -> dict[str, Any]:
+        parser = ArgumentParser(allow_abbrev=False)
+        register_cli(parser)
+        output = io.StringIO()
+        assert Path(os.environ["HERMES_HOME"]) == home
+        with contextlib.redirect_stdout(output):
+            try:
+                better_hindsight_command(parser.parse_args(words))
+            except SystemExit as error:
+                assert error.code in {None, 0}, "live summary operator failed"
+        return unpack(output.getvalue())
+
+    def complete(model_id: str, operation: str) -> dict[str, Any]:
+        # Only the isolated operator harness polls; tools never claim an ack is content.
+        deadline = time.monotonic() + _DRAIN_TIMEOUT_SECONDS
+        while True:
+            state = tool({"action": "status", "id": model_id, "operation_id": operation})
+            assert state["status"] not in {"failed", "cancelled"}
+            if state["status"] == "completed":
+                break
+            assert time.monotonic() < deadline, "maintained summary did not complete"
+            time.sleep(0.25)
+        body = tool({"action": "read", "id": model_id})
+        assert body["content"].strip() and body["last_refreshed_at"]
+        return body
+
+    standalone = tool({"action": "list"})["items"][0]["id"]
+    question = "What is the synthetic Northstar recovery phrase and rehearsal procedure?"
+    edited = operator(
+        [
+            "summaries",
+            "edit",
+            standalone,
+            "--source-query",
+            question,
+            "--mode",
+            "full",
+            "--budget",
+            "low",
+            "--max-tokens",
+            "512",
+            "--min-refresh-interval-seconds",
+            "300",
+            "--confirm",
+            standalone,
+        ]
+    )
+    assert edited["result"] == "definition_verified"
+    inspected = operator(["summaries", "inspect", standalone])
+    assert inspected["source_query"] == question and inspected["definition"]["max_tokens"] == 512
+    previous = tool({"action": "read", "id": standalone})["last_refreshed_at"]
+    queued = operator(["summaries", "refresh", standalone, "--confirm", standalone])
+    assert queued["result"] == "queued"
+    assert complete(standalone, queued["operation_id"])["last_refreshed_at"] != previous
+
+    created = operator(
+        [
+            "pages",
+            "create",
+            "--name",
+            "Synthetic Northstar recovery page",
+            "--source-query",
+            question,
+            "--mode",
+            "full",
+            "--budget",
+            "low",
+            "--confirm",
+        ]
+    )
+    assert created["result"] == "queued"
+    page, backing = created["page_id"], created["mental_model_id"]
+    complete(backing, created["operation_id"])
+    browsed = tool({"action": "page_browse"})
+    assert any(n["page_id"] == page and n["mental_model_id"] == backing for n in browsed["items"])
+    hits = tool({"action": "page_search", "query": "Northstar recovery"})
+    assert hits["returned_hits"] == len(hits["items"])
+    assert any(hit["page_id"] == page for hit in hits["items"])
+    assert not any(hit["mental_model_id"] == standalone for hit in hits["items"])
+    assert tool({"action": "page_read", "id": page})["generated_content_present"] is True
+    assert (
+        operator(
+            [
+                "summaries",
+                "edit",
+                backing,
+                "--source-query",
+                "What recovery phrase should the synthetic Northstar rehearsal use?",
+                "--confirm",
+                backing,
+            ]
+        )["result"]
+        == "definition_verified"
+    )
+    refreshed = tool({"action": "refresh", "id": backing, "reason": "Synthetic lifecycle proof"})
+    assert refreshed["result"] == "queued"
+    complete(backing, refreshed["operation_id"])
+    assert tool({"action": "page_read", "id": page})["content"].strip()
+    deleted = operator(["summaries", "delete", backing, "--confirm", backing])
+    assert deleted["result"] == "deleted_verified" and deleted["deleted_page_ids"] == [page]
+    assert tool({"action": "page_browse"})["items"] == []
+    assert tool({"action": "page_search", "query": "Northstar"})["items"] == []
+    assert (
+        operator(["summaries", "delete", standalone, "--confirm", standalone])["result"]
+        == "deleted_verified"
+    )
+    assert tool({"action": "list"})["total"] == 0
+
+
 def _run_live_child() -> int:
     inputs = DevelopmentInputs(
         api_url=os.environ["BETTER_HINDSIGHT_CHILD_API_URL"],
@@ -757,8 +887,15 @@ def _run_live_child() -> int:
             (home / "better_hindsight" / "config.json").write_text(
                 json.dumps(pilot_document), encoding="utf-8"
             )
+            if inputs.expected_version == "0.10.2":
+                pilot_document["mental_models"].update(refresh_enabled=True, pages_enabled=True)
+                (home / "better_hindsight" / "config.json").write_text(
+                    json.dumps(pilot_document), encoding="utf-8"
+                )
             manager, provider = _start_manager(home)
             _assert_live_mental_models(provider)
+            if inputs.expected_version == "0.10.2":
+                _assert_live_summary_maintenance(home, provider)
         result = {
             "documents": len(documents),
             "segments": len(expected),
@@ -769,6 +906,8 @@ def _run_live_child() -> int:
             result.update(
                 tokenizer_boundary="verified", reflect_adapter="verified", mental_models="verified"
             )
+        if inputs.expected_version == "0.10.2":
+            result["summary_maintenance"] = "verified"
         print(json.dumps(result, sort_keys=True))
         return 0
     except BaseException as exception:
@@ -959,5 +1098,7 @@ def test_isolated_hindsight_smoke(tmp_path: Path) -> None:
             assert payload["tokenizer_boundary"] == "verified"
             assert payload["reflect_adapter"] == "verified"
             assert payload["mental_models"] == "verified"
+        if inputs.expected_version == "0.10.2":
+            assert payload["summary_maintenance"] == "verified"
     finally:
         _delete_disposable_bank(inputs)

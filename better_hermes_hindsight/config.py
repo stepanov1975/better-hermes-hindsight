@@ -19,6 +19,7 @@ from typing import Literal, TypeAlias, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from .redaction import redact_sensitive_text
+from .summary_policy import SummaryPolicy, parse_policy
 
 DEFAULT_API_URL = "http://localhost:8888"
 DEFAULT_BANK_ID = "hermes"
@@ -289,6 +290,9 @@ class MentalModelsConfig:
 
     enabled: bool = False
     create_enabled: bool = False
+    refresh_enabled: bool = False
+    pages_enabled: bool = False
+    creation: SummaryPolicy = field(default_factory=SummaryPolicy)
     max_models: int = 20
     timeout_seconds: float = 10.0
 
@@ -1024,17 +1028,34 @@ def _parse_planner_path(home: Path, value: object) -> Path:
 def _parse_mental_models(value: object) -> MentalModelsConfig:
     values = _expect_mapping(value, "mental_models")
     _check_unknown_keys(
-        values, {"enabled", "create_enabled", "max_models", "timeout_seconds"}, "mental_models"
+        values,
+        {
+            "enabled",
+            "create_enabled",
+            "refresh_enabled",
+            "pages_enabled",
+            "creation",
+            "max_models",
+            "timeout_seconds",
+        },
+        "mental_models",
     )
     enabled = _parse_bool(values.get("enabled", False), "mental_models.enabled")
     create_enabled = _parse_bool(
         values.get("create_enabled", False), "mental_models.create_enabled"
     )
-    if create_enabled and not enabled:
-        raise _error("mental_models.create_enabled requires mental_models.enabled")
+    refresh_enabled = _parse_bool(
+        values.get("refresh_enabled", False), "mental_models.refresh_enabled"
+    )
+    pages_enabled = _parse_bool(values.get("pages_enabled", False), "mental_models.pages_enabled")
+    if (create_enabled or refresh_enabled or pages_enabled) and not enabled:
+        raise _error("mental_models capabilities require mental_models.enabled")
     return MentalModelsConfig(
         enabled=enabled,
         create_enabled=create_enabled,
+        refresh_enabled=refresh_enabled,
+        pages_enabled=pages_enabled,
+        creation=parse_policy(values.get("creation", {})),
         max_models=_parse_positive_int(
             values.get("max_models", 20), "mental_models.max_models", maximum=20
         ),

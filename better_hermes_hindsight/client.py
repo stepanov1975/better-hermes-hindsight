@@ -407,7 +407,12 @@ class _AiohttpJsonTransport:
                 )
             async with request as response:
                 status = response.status
-                if status != 200:
+                # Hindsight 0.10.2 Knowledge Page creation returns 201, unlike
+                # the existing mental-model pilot. Keep all other routes strict.
+                page_created = (
+                    status == 201 and method == "POST" and path.endswith("/knowledge-base/pages")
+                )
+                if status != 200 and not page_created:
                     response.close()
                     raise _JsonTransportError(_status_outcome(status), status=status)
                 media_type = (

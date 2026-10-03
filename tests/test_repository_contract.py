@@ -42,6 +42,7 @@ def test_package_and_plugin_metadata_are_consistent() -> None:
         "aiohttp>=3.14.1,<4",
         "aiodns>=4.0.4,<5",
         "tiktoken>=0.12,<0.15",
+        "croniter>=6,<7",
     ]
 
     assert project["name"] == "better-hermes-hindsight"

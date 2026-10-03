@@ -303,6 +303,7 @@ def test_read_only_and_lifecycle(tmp_path: Path, server: Server) -> None:
         "name",
         "source_query",
         "reason",
+        "query",
     }
     assert schema["parameters"]["additionalProperties"] is False
     assert schema["parameters"]["properties"]["action"]["enum"] == [
@@ -310,6 +311,10 @@ def test_read_only_and_lifecycle(tmp_path: Path, server: Server) -> None:
         "read",
         "create",
         "status",
+        "refresh",
+        "page_browse",
+        "page_search",
+        "page_read",
     ]
     host = manager(tmp_path, server, create=False)
     assert "error" in call(host, CREATE)
