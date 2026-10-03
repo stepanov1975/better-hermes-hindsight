@@ -576,6 +576,36 @@ def test_current_loader_discovers_active_standard_plugin_cli_and_recall_tool(
                 "parameters": {
                     "additionalProperties": False,
                     "properties": {
+                        "attachments": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 16,
+                            "description": "Explicit local image/file snapshots. "
+                            "Allowed roots and byte limits apply. "
+                            "Binary bytes cannot be text-redacted; "
+                            "sent to the configured Hindsight "
+                            "model. No URLs; queued locally is not delivered.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+                                    "kind": {"type": "string", "enum": ["image", "file"]},
+                                    "media_type": {
+                                        "type": "string",
+                                        "enum": [
+                                            "image/png",
+                                            "image/jpeg",
+                                            "image/webp",
+                                            "image/gif",
+                                            "application/pdf",
+                                            "text/plain",
+                                        ],
+                                    },
+                                },
+                                "required": ["path", "kind", "media_type"],
+                                "additionalProperties": False,
+                            },
+                        },
                         "content": {
                             "description": "The self-contained durable information to store.",
                             "maxLength": 8192,

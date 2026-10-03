@@ -654,6 +654,7 @@ class ProcessRuntime:
         "__weakref__",
         "_active_calls",
         "_mental_models",
+        "_config",
         "_client",
         "_client_closed",
         "_closed",
@@ -678,6 +679,7 @@ class ProcessRuntime:
     ) -> None:
         from .mental_models import MentalModels
 
+        self._config = config
         self._mental_models = MentalModels(config)
         self._runner = AsyncRunner()
         self._lifecycle = threading.Condition()
@@ -740,6 +742,26 @@ class ProcessRuntime:
         self._begin_operation()
         try:
             return self._runner.run(lambda: operation(self._client), timeout=timeout)
+        finally:
+            self._finish_operation()
+
+    def admit_multimodal(
+        self, *, content: str, context: str | None, attachments: object
+    ) -> AdmissionResult:
+        """Explicit local snapshot admission."""
+        from .multimodal import build_multimodal_segment
+
+        self._begin_operation()
+        try:
+            if self._outbox is None:
+                return AdmissionResult(AdmissionStatus.INVALID)
+            segment = build_multimodal_segment(
+                self._config, content=content, context=context, attachments=attachments
+            )
+            result = self._outbox.admit((segment,))
+            if result.accepted and self._sender is not None:
+                self._sender.wake()
+            return result
         finally:
             self._finish_operation()
 
@@ -968,6 +990,13 @@ class ProcessRuntimeHandle:
         """Run an explicit operation through the shared process runtime."""
 
         return self._require_runtime().call(operation, timeout=timeout)
+
+    def admit_multimodal(
+        self, *, content: str, context: str | None, attachments: object
+    ) -> AdmissionResult:
+        return self._require_runtime().admit_multimodal(
+            content=content, context=context, attachments=attachments
+        )
 
     def admit_turn(
         self,

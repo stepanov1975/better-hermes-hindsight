@@ -14,7 +14,13 @@ from typing import Protocol, TypeVar, cast
 from urllib.parse import quote
 
 from . import __version__
-from .config import BetterHindsightConfig, ObservationScopes, RecallConfig, ReflectConfig
+from .config import (
+    MULTIMODAL_PAYLOAD_SCHEMA,
+    BetterHindsightConfig,
+    ObservationScopes,
+    RecallConfig,
+    ReflectConfig,
+)
 from .telemetry import elapsed_milliseconds, emit_event
 
 HINDSIGHT_REQUEST_TIMEOUT_SECONDS = 300.0
@@ -139,6 +145,7 @@ class RecallResult:
     tags: list[str] | None = None
     source_fact_ids: list[str] | None = None
     scores: RecallScores | None = None
+    attachments: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -189,6 +196,7 @@ class ReflectResponse:
     """Strictly decoded reflection text consumed by the provider formatter."""
 
     text: str = field(repr=False)
+    attachments: tuple[dict[str, object], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -521,6 +529,8 @@ class HindsightClientAdapter:
 
     __slots__ = (
         "_bank_id",
+        "_config",
+        "_multimodal_supported",
         "_bank_path",
         "_recall_config",
         "_reflect_config",
@@ -530,6 +540,8 @@ class HindsightClientAdapter:
     )
 
     def __init__(self, *, config: BetterHindsightConfig, transport: JsonTransportProtocol) -> None:
+        self._config = config
+        self._multimodal_supported = False
         self._bank_id = config.bank_id
         self._bank_path = f"/v1/default/banks/{quote(config.bank_id, safe='')}"
         self._recall_config = config.recall
@@ -577,6 +589,10 @@ class HindsightClientAdapter:
         *,
         timeout_seconds: float | None,
     ) -> RecallResponse:
+        if self._recall_config.include_attachments:
+            await self._require_multimodal_supported(
+                operation="recall", timeout_seconds=timeout_seconds
+            )
         return await _observed_http_call(
             operation="recall",
             category="recall_failed",
@@ -588,7 +604,11 @@ class HindsightClientAdapter:
                 timeout_seconds=timeout_seconds,
                 max_response_bytes=HINDSIGHT_MAX_RECALL_RESPONSE_BYTES,
             ),
-            decoder=_decode_recall_response,
+            decoder=lambda response: _decode_recall_response(
+                response,
+                bank_id=self._bank_id,
+                include_attachments=self._recall_config.include_attachments,
+            ),
         )
 
     async def reflect(self, query: str) -> ReflectResponse:
@@ -615,6 +635,10 @@ class HindsightClientAdapter:
         *,
         timeout_seconds: float | None,
     ) -> ReflectResponse:
+        if self._reflect_config.include_attachments:
+            await self._require_multimodal_supported(
+                operation="reflect", timeout_seconds=timeout_seconds
+            )
         return await _observed_http_call(
             operation="reflect",
             category="reflect_failed",
@@ -626,7 +650,11 @@ class HindsightClientAdapter:
                 timeout_seconds=timeout_seconds,
                 max_response_bytes=HINDSIGHT_MAX_REFLECT_RESPONSE_BYTES,
             ),
-            decoder=_decode_reflect_response,
+            decoder=lambda response: _decode_reflect_response(
+                response,
+                bank_id=self._bank_id,
+                include_attachments=self._reflect_config.include_attachments,
+            ),
         )
 
     async def retain_segment(self, segment: RetainSegment) -> RetainConfirmation:
@@ -649,6 +677,25 @@ class HindsightClientAdapter:
             "strategy": None,
             "update_mode": "replace",
         }
+        if segment.payload_schema == MULTIMODAL_PAYLOAD_SCHEMA:
+            from .multimodal import decode_envelope
+
+            if not self._config.multimodal.enabled or not self._config.retain.enabled:
+                raise HindsightClientError(
+                    "retain_failed", "Better Hindsight retain failed.", reason="schema_invalid"
+                )
+            try:
+                envelope = decode_envelope(segment.content, self._config)
+            except Exception:
+                raise HindsightClientError(
+                    "retain_failed", "Better Hindsight retain failed.", reason="schema_invalid"
+                ) from None
+            await self._require_multimodal_supported(
+                operation="retain", timeout_seconds=self._config.retain.timeout_seconds
+            )
+            item["content"] = envelope["blocks"]
+            item["timestamp"] = envelope["timestamp"]
+            item["context"] = envelope["context"]
         return await _observed_http_call(
             operation="retain",
             category="retain_failed",
@@ -663,6 +710,33 @@ class HindsightClientAdapter:
                 bank_id=self._bank_id,
             ),
         )
+
+    async def _require_multimodal_supported(
+        self, *, operation: str, timeout_seconds: float | None
+    ) -> None:
+        if self._multimodal_supported:
+            return
+        category = f"{operation}_failed"
+        version = await _observed_http_call(
+            operation=operation,
+            category=category,
+            message="Better Hindsight multimodal version check failed.",
+            call=lambda: self._transport.request(
+                "GET",
+                "/version",
+                json_body=None,
+                timeout_seconds=timeout_seconds,
+                max_response_bytes=32_768,
+            ),
+            decoder=lambda value: _required_exact(_exact_dict(value), "api_version", str),
+        )
+        if version != "0.10.2":
+            raise HindsightClientError(
+                category,
+                "Better Hindsight multimodal requires Hindsight 0.10.2.",
+                reason="schema_invalid",
+            )
+        self._multimodal_supported = True
 
     async def mental_model_request(
         self,
@@ -776,13 +850,16 @@ def _recall_body(query: str, config: RecallConfig) -> dict[str, object]:
 
 
 def _reflect_body(query: str, config: ReflectConfig) -> dict[str, object]:
-    return {
+    body: dict[str, object] = {
         "query": query,
         "budget": config.budget,
         "max_tokens": config.max_tokens,
         "tags": list(config.tags) if config.tags is not None else None,
         "tags_match": config.tag_mode or "any",
     }
+    if config.include_attachments:
+        body["include"] = {"facts": {}, "tool_calls": None}
+    return body
 
 
 def recall_request_parameters(config: RecallConfig) -> dict[str, object]:
@@ -860,12 +937,17 @@ def _decode_mission_update(value: object) -> None:
     _validate_bank_config_response_shape(value)
 
 
-def _decode_recall_response(value: object) -> RecallResponse:
+def _decode_recall_response(
+    value: object, *, bank_id: str = "", include_attachments: bool = False
+) -> RecallResponse:
     payload = _exact_dict(value)
     raw_results = _required_exact(payload, "results", list)
     if len(raw_results) > HINDSIGHT_MAX_RECALL_RESULTS:
         raise TypeError
-    results = [_decode_recall_result(item) for item in raw_results]
+    results = [
+        _decode_recall_result(item, bank_id=bank_id, include_attachments=include_attachments)
+        for item in raw_results
+    ]
     raw_source_facts = payload.get("source_facts")
     source_facts: dict[str, RecallResult] | None
     if raw_source_facts is None:
@@ -878,7 +960,9 @@ def _decode_recall_response(value: object) -> RecallResponse:
         for key, item in facts.items():
             if type(key) is not str:
                 raise TypeError
-            source_facts[key] = _decode_recall_result(item)
+            source_facts[key] = _decode_recall_result(
+                item, bank_id=bank_id, include_attachments=include_attachments
+            )
     return RecallResponse(
         results=results,
         source_facts=source_facts,
@@ -886,12 +970,28 @@ def _decode_recall_response(value: object) -> RecallResponse:
     )
 
 
-def _decode_reflect_response(value: object) -> ReflectResponse:
+def _decode_reflect_response(
+    value: object, *, bank_id: str = "", include_attachments: bool = False
+) -> ReflectResponse:
     payload = _exact_dict(value)
     text = _required_exact(payload, "text", str)
     if not text.strip() or len(text.encode("utf-8")) > HINDSIGHT_MAX_REFLECT_TEXT_BYTES:
         raise TypeError
-    return ReflectResponse(text=text)
+    from .multimodal import attachment_descriptors
+
+    attachments: list[dict[str, object]] = []
+    based_on = payload.get("based_on")
+    if include_attachments and type(based_on) is dict:
+        memories = based_on.get("memories")
+        if type(memories) is list:
+            for memory in memories[:8]:
+                if type(memory) is dict:
+                    attachments.extend(
+                        attachment_descriptors(memory.get("attachments"), bank_id=bank_id)
+                    )
+                    if len(attachments) >= 8:
+                        break
+    return ReflectResponse(text=text, attachments=tuple(attachments[:8]))
 
 
 def _decode_recall_trace(value: object) -> RecallTrace | None:
@@ -1021,7 +1121,11 @@ def _optional_finite_number(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def _decode_recall_result(value: object) -> RecallResult:
+def _decode_recall_result(
+    value: object, *, bank_id: str = "", include_attachments: bool = False
+) -> RecallResult:
+    from .multimodal import attachment_descriptors
+
     payload = _exact_dict(value)
     return RecallResult(
         id=_required_exact(payload, "id", str),
@@ -1038,6 +1142,9 @@ def _decode_recall_result(value: object) -> RecallResult:
         tags=_optional_string_list(payload, "tags"),
         source_fact_ids=_optional_string_list(payload, "source_fact_ids"),
         scores=_optional_scores(payload.get("scores")),
+        attachments=attachment_descriptors(payload.get("attachments"), bank_id=bank_id)
+        if include_attachments
+        else (),
     )
 
 

@@ -229,6 +229,26 @@ When Hermes changes:
 
 CI may follow Hermes `main` and therefore occasionally report an upstream compatibility break. That is useful information, not evidence that every previous Better commit needs a new release declaration.
 
+## Multimodal feature boundary
+
+Text-only support still spans all listed API versions. The separately opted-in multimodal capability
+requires **exact 0.10.2** (reviewed source `5fc4ce20917b916240cef27c212c387a177f115b`). Version probing
+occurs only on binary sends or attachment-enabled reads; no startup probe or default text-request
+change is introduced. An older/unknown server cannot receive a caption-only binary fallback.
+`include_attachments` on reflection requests facts and never tool-call traces; recall projects
+attachments already present on fact results/source facts, not retrieved chunk unions.
+
+Deterministic coverage includes actual provider/runtime fake-service integration and loopback HTTP
+response-loss/process-kill replay of original admitted bytes, document ID and timestamp. The existing
+explicit isolated live harness conditionally adds a 0.10.2 synthetic image/plain-file lifecycle:
+chunk extraction policy with exact readback, provider restart after source mutation/deletion, stored
+attachment byte/hash readback through authenticated routes, document/chunk provenance and provider
+recall/reflection. It makes no flattened document-text equality assumption for block inputs. Other
+version lanes keep their text-only proof. The mock LLM proves lifecycle/plumbing, not vision semantic
+quality or arbitrary document/backend compatibility. A skipped local live gate is not a live pass;
+run the current-branch 0.10.2 isolated CI lane before claiming live verification. No production service
+or data is authorized by these tests. See [multimodal policy and usage](multimodal.md).
+
 ## Supported deployment
 
 The practical target is Linux/POSIX, one configured principal, one static bank, one Better-enabled

@@ -208,7 +208,9 @@ def _decode_query_tokens(encoding: _QueryEncoding, tokens: list[int]) -> str:
     return encoded.decode("utf-8", errors="ignore")
 
 
-def format_reflection_context(text: object, *, max_bytes: int) -> str:
+def format_reflection_context(
+    text: object, *, max_bytes: int, attachments: tuple[dict[str, object], ...] = ()
+) -> str:
     """Return one complete bounded, redacted reflection evidence record or an empty string."""
 
     if type(max_bytes) is not int or max_bytes <= 0:
@@ -222,6 +224,8 @@ def format_reflection_context(text: object, *, max_bytes: int) -> str:
             "memory": redact_sensitive_text(text),
             "type": "reflection",
         }
+        if attachments:
+            record["attachments"] = list(attachments)
         fixed_bytes = len((CONTEXT_PREAMBLE + "\n\n" + CONTEXT_SUFFIX).encode("utf-8"))
         line = _serialize_record(record)
         if fixed_bytes + len(line.encode("utf-8")) <= max_bytes:
@@ -397,6 +401,9 @@ def _project_record(result: object, *, include_type: bool) -> dict[str, object] 
         remaining_input_bytes -= value_bytes
 
     record: dict[str, object] = {"memory": redact_sensitive_text(text), **raw_fields}
+    attachments = getattr(result, "attachments", ())
+    if attachments:
+        record["attachments"] = list(attachments)
     return record
 
 
@@ -416,6 +423,10 @@ def _memory_fingerprint(
     if not isinstance(text, str):
         raise TypeError("recall result text is malformed")
     normalized = " ".join(unicodedata.normalize("NFKC", text).split())
+    if record.get("attachments"):
+        normalized += "\x00" + json.dumps(
+            record["attachments"], sort_keys=True, separators=(",", ":")
+        )
     temporal: list[str | None] = []
     for field_name in ("occurred_start", "occurred_end", "mentioned_at"):
         value = record.get(field_name)
