@@ -26,6 +26,7 @@ LEGACY_PAYLOAD_SCHEMA_VERSION = "better-hindsight-turn-v1"
 PAYLOAD_SCHEMA_VERSION = "better-hindsight-turn-v2"
 RETAINED_EVENT_RECORD_SCHEMA = "better-hindsight-retained-event-v2"
 RETAINED_MODEL_RECORD_SCHEMA = "better-hindsight-retained-memory-v1"
+MULTIMODAL_PAYLOAD_SCHEMA = "better-hindsight-multimodal-v1"
 DEFAULT_RECALL_TIMEOUT_SECONDS = 3.5
 DEFAULT_RECALL_INPUT_MAX_CHARS = 4096
 DEFAULT_RECALL_INPUT_MAX_TOKENS = 500
@@ -108,6 +109,7 @@ _ROOT_KEYS = {
     "planner",
     "reflect",
     "mental_models",
+    "multimodal",
     "retain",
     "missions",
     "outbox",
@@ -128,6 +130,7 @@ _RECALL_KEYS = {
     "prefer_observations",
     "min_scores",
     "include_source_facts",
+    "include_attachments",
     "max_source_facts_tokens",
 }
 _PLANNER_KEYS = {
@@ -147,6 +150,7 @@ _REFLECT_KEYS = {
     "input_max_chars",
     "input_max_tokens",
     "output_max_bytes",
+    "include_attachments",
     "budget",
     "max_tokens",
     "tags",
@@ -252,6 +256,7 @@ class RecallConfig:
     tag_mode: RecallTagMode | None = None
     prefer_observations: bool | None = None
     min_scores: RecallMinScores | None = None
+    include_attachments: bool = False
     include_source_facts: bool | None = None
     max_source_facts_tokens: int | None = None
 
@@ -276,6 +281,7 @@ class ReflectConfig:
     timeout_seconds: float = DEFAULT_REFLECT_TIMEOUT_SECONDS
     input_max_chars: int = DEFAULT_REFLECT_INPUT_MAX_CHARS
     input_max_tokens: int = DEFAULT_REFLECT_INPUT_MAX_TOKENS
+    include_attachments: bool = False
     output_max_bytes: int = DEFAULT_REFLECT_OUTPUT_MAX_BYTES
     budget: ReflectBudget = cast(ReflectBudget, DEFAULT_REFLECT_BUDGET)
     max_tokens: int = DEFAULT_REFLECT_MAX_TOKENS
@@ -291,6 +297,17 @@ class MentalModelsConfig:
     create_enabled: bool = False
     max_models: int = 20
     timeout_seconds: float = 10.0
+
+
+@dataclass(frozen=True, slots=True)
+class MultimodalConfig:
+    """Default-off local snapshot policy; encoded rows have a separate bounded budget."""
+
+    enabled: bool = False
+    allowed_roots: tuple[Path, ...] = field(default=(), repr=False)
+    max_attachments: int = 4
+    max_decoded_bytes: int = 8_388_608
+    max_encoded_bytes: int = 12_582_912
 
 
 @dataclass(frozen=True, slots=True)
@@ -393,6 +410,7 @@ class BetterHindsightConfig:
     reflect: ReflectConfig = field(default_factory=ReflectConfig)
     mental_models: MentalModelsConfig = field(default_factory=MentalModelsConfig)
     retain: RetainConfig = field(default_factory=RetainConfig)
+    multimodal: MultimodalConfig = field(default_factory=MultimodalConfig)
     missions: MissionConfig = field(default_factory=MissionConfig)
     outbox: OutboxConfig = field(
         default_factory=lambda: OutboxConfig(Path("better_hindsight/outbox.sqlite3"))
@@ -409,6 +427,27 @@ class BetterHindsightConfig:
             retain_tags=self.retain.tags,
             observation_scopes=self.retain.observation_scopes,
         )
+
+    @property
+    def multimodal_destination_fingerprint(self) -> str:
+        """Bind new rows to destination and the full operator admission policy."""
+        base = derive_destination_fingerprint(
+            api_url=self.api_url,
+            bank_id=self.bank_id,
+            retain_tags=self.retain.tags,
+            observation_scopes=self.retain.observation_scopes,
+            payload_schema=MULTIMODAL_PAYLOAD_SCHEMA,
+        )
+        policy = [
+            base,
+            self.multimodal.enabled,
+            self.retain.enabled,
+            [str(path) for path in self.multimodal.allowed_roots],
+            self.multimodal.max_attachments,
+            self.multimodal.max_decoded_bytes,
+            self.multimodal.max_encoded_bytes,
+        ]
+        return hashlib.sha256(json.dumps(policy, separators=(",", ":")).encode()).hexdigest()
 
     @property
     def legacy_destination_fingerprint(self) -> str:
@@ -502,6 +541,7 @@ def load_config(
     ):
         raise _error("mental_models pilot requires unscoped recall and reflect configurations")
     retain = _parse_retain(merged.get("retain", {}))
+    multimodal = _parse_multimodal(merged.get("multimodal", {}))
     missions = _parse_missions(merged.get("missions", {}))
     outbox = _parse_outbox(home, merged.get("outbox", {}))
     diagnostics = _parse_diagnostics(home, merged.get("diagnostics", {}))
@@ -556,6 +596,7 @@ def load_config(
         reflect=reflect,
         mental_models=mental_models,
         retain=retain,
+        multimodal=multimodal,
         missions=missions,
         outbox=outbox,
         diagnostics=diagnostics,
@@ -907,6 +948,9 @@ def _parse_recall(value: object) -> RecallConfig:
     )
 
     return RecallConfig(
+        include_attachments=_parse_bool(
+            values.get("include_attachments", False), "recall.include_attachments"
+        ),
         enabled=_parse_bool(values.get("enabled", True), "recall.enabled"),
         timeout_seconds=_parse_bounded_float(
             values.get("timeout_seconds", DEFAULT_RECALL_TIMEOUT_SECONDS),
@@ -1071,6 +1115,9 @@ def _parse_reflect(value: object) -> ReflectConfig:
         ),
     )
     return ReflectConfig(
+        include_attachments=_parse_bool(
+            values.get("include_attachments", False), "reflect.include_attachments"
+        ),
         enabled=_parse_bool(values.get("enabled", False), "reflect.enabled"),
         timeout_seconds=_parse_bounded_float(
             values.get("timeout_seconds", DEFAULT_REFLECT_TIMEOUT_SECONDS),
@@ -1190,6 +1237,49 @@ def _parse_min_scores(value: object) -> RecallMinScores | None:
         keyword=score("keyword"),
         reranker=score("reranker"),
         final=score("final"),
+    )
+
+
+def _parse_multimodal(value: object) -> MultimodalConfig:
+    values = _expect_mapping(value, "multimodal")
+    _check_unknown_keys(
+        values,
+        {"enabled", "allowed_roots", "max_attachments", "max_decoded_bytes", "max_encoded_bytes"},
+        "multimodal",
+    )
+    roots = values.get("allowed_roots", [])
+    if not isinstance(roots, (list, tuple)) or len(roots) > 16:
+        raise _error("multimodal.allowed_roots requires at most 16 absolute directory paths")
+    validated: list[Path] = []
+    for value in roots:
+        if not isinstance(value, str) or not value or not Path(value).is_absolute():
+            raise _error("multimodal.allowed_roots requires absolute directory paths")
+        path = Path(value)
+        if ".." in path.parts or path == Path("/"):
+            raise _error("multimodal.allowed_roots must be narrow directory roots")
+        resolved = path.resolve(strict=False)
+        if resolved == Path("/"):
+            raise _error("multimodal.allowed_roots must be narrow directory roots")
+        validated.append(resolved)
+    enabled = _parse_bool(values.get("enabled", False), "multimodal.enabled")
+    if enabled and not validated:
+        raise _error("multimodal.enabled requires allowed_roots")
+    return MultimodalConfig(
+        enabled=enabled,
+        allowed_roots=tuple(sorted(set(validated))),
+        max_attachments=_parse_positive_int(
+            values.get("max_attachments", 4), "multimodal.max_attachments", maximum=16
+        ),
+        max_decoded_bytes=_parse_positive_int(
+            values.get("max_decoded_bytes", 8_388_608),
+            "multimodal.max_decoded_bytes",
+            maximum=16_777_216,
+        ),
+        max_encoded_bytes=_parse_positive_int(
+            values.get("max_encoded_bytes", 12_582_912),
+            "multimodal.max_encoded_bytes",
+            maximum=25_165_824,
+        ),
     )
 
 

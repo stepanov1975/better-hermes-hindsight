@@ -68,7 +68,7 @@ def test_live_child_budget_allows_sequential_waits(
     def slow_child(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         # Simulate each permitted polling phase using its budget, plus modest
         # startup/HTTP overhead, without sleeping or contacting a real server.
-        elapsed = 5 * live._DRAIN_TIMEOUT_SECONDS + 30.0
+        elapsed = 8 * live._DRAIN_TIMEOUT_SECONDS + 30.0
         if kwargs["timeout"] < elapsed:
             raise subprocess.TimeoutExpired(args, kwargs["timeout"])
         payload = {
@@ -79,6 +79,7 @@ def test_live_child_budget_allows_sequential_waits(
             "tokenizer_boundary": "verified",
             "reflect_adapter": "verified",
             "mental_models": "verified",
+            **({"multimodal": "verified"} if version == "0.10.2" else {}),
         }
         return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
 

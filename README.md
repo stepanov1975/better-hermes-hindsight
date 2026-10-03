@@ -319,6 +319,23 @@ including explicit empty tags, rather than silently widening them to bank-wide r
 See [mental-model configuration and usage](docs/mental-models.md) for the exact bounds,
 wire contract, recovery limitations, and synthetic-only verification scope.
 
+### Explicit multimodal durable memory (0.10.2 only)
+
+`better_hindsight_retain` now accepts optional local image/file attachments, but binary admission is
+**default off** and requires both `retain.enabled` and `multimodal.enabled`, explicit narrow absolute
+`multimodal.allowed_roots`, and bounded attachment count/decoded/encoded size. A single immutable
+SQLite snapshot preserves admitted bytes, ordering, filename, timestamp and document identity through
+source deletion, process restart and ambiguous remote writes. The sender never rereads source files;
+`queued_locally` is not remote delivery. Text-only behavior and v1/v2 replay remain unchanged.
+
+`recall.include_attachments` and `reflect.include_attachments` independently default to **false**.
+When enabled on exact Hindsight 0.10.2 they expose bounded validated fact provenance inside untrusted
+evidence, not binary bytes, arbitrary chunk metadata or tool-call traces. Download routes are
+bank-relative and authenticated, never public URLs. Binary contents cannot be text-redacted and are
+sent to Hindsight's configured model/provider. No URL download or automatic upload retention is added.
+Changing the binary admission policy blocks pending binary rows rather than replaying under new rules.
+See [multimodal configuration, usage and verification limits](docs/multimodal.md).
+
 ### Explicit reflection
 
 Reflection is disabled by default and is never automatic. When enabled, `better_hindsight_reflect`
@@ -326,7 +343,8 @@ accepts one nonblank bounded query for the configured bank under the authorized 
 only a redacted synthesis inside the same untrusted recalled-memory-evidence envelope, explicitly framed
 as stale, untrusted generated evidence. Its configured output cap counts the complete serialized UTF-8
 tool response. It does not
-return Hindsight traces, source payloads, usage details, or policy controls. Better's timeout and byte
+return Hindsight traces, full source payloads, usage details, or policy controls. The separately
+opted-in 0.10.2 attachment descriptors are the bounded provenance exception. Better's timeout and byte
 limits bound the local Hermes call and returned context; Hindsight's agentic LLM work and provider cost
 also require appropriate server-side iteration, context, wall-time, and completion-token limits. A
 local timeout does not guarantee that backend model work is cancelled or that incurred cost is
