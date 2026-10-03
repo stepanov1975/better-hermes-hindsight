@@ -305,6 +305,72 @@ def test_attachment_reads_gate_exact_version_without_changing_default_text(
         assert [call[1] for call in transport.calls] == ["/version"]
 
 
+@pytest.mark.parametrize("include_attachments", [False, True])
+@pytest.mark.parametrize("direct_attachment", [False, True])
+def test_linked_source_fact_attachment_provenance(
+    tmp_path: Path, include_attachments: bool, direct_attachment: bool
+) -> None:
+    config = load_config(
+        tmp_path,
+        injected={
+            "bank_id": "test",
+            "recall": {
+                "include_attachments": include_attachments,
+                "include_source_facts": True,
+            },
+        },
+        environ={},
+    )
+    transport = Transport()
+    transport.reply = {
+        "results": [
+            {
+                "id": "observation",
+                "type": "observation",
+                "text": "Usable observation",
+                "source_fact_ids": ["source", "missing", "source", "second_source"],
+                "attachments": [descriptor("att_direct")] if direct_attachment else None,
+            },
+            {"id": "unlinked", "type": "observation", "text": "Unlinked observation"},
+            {
+                "id": "world",
+                "type": "world",
+                "text": "Not an observation",
+                "source_fact_ids": ["source"],
+            },
+        ],
+        "source_facts": {
+            "source": {"id": "source", "text": "Source caption", "attachments": [descriptor()]},
+            "second_source": {
+                "id": "second_source",
+                "text": "Second source caption",
+                "attachments": [descriptor(f"att_{index}") for index in range(8)],
+            },
+            "unrelated": {
+                "id": "unrelated",
+                "text": "Unrelated caption",
+                "attachments": [descriptor("att_unrelated")],
+            },
+        },
+        "source_facts_truncated": True,
+        "chunks": {"chunk": {"attachments": [descriptor("att_chunk")]}},
+    }
+    response = asyncio.run(
+        HindsightClientAdapter(config=config, transport=transport).recall("caption")
+    )
+    assert response.results[0].text == "Usable observation"
+    assert response.results[0].source_fact_ids == ["source", "missing", "source", "second_source"]
+    expected = ([descriptor("att_direct")] if direct_attachment else []) + [descriptor()]
+    expected += [descriptor(f"att_{index}") for index in range(8)]
+    assert response.results[0].attachments == (tuple(expected[:8]) if include_attachments else ())
+    assert not response.results[1].attachments
+    assert not response.results[2].attachments
+    assert response.source_facts is not None
+    assert response.source_facts["unrelated"].attachments == (
+        (descriptor("att_unrelated"),) if include_attachments else ()
+    )
+
+
 def test_malformed_optional_metadata_preserves_text_and_no_chunk_attribution(
     tmp_path: Path,
 ) -> None:

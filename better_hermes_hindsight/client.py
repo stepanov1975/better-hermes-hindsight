@@ -8,7 +8,7 @@ import logging
 import math
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from importlib.util import find_spec
 from typing import Protocol, TypeVar, cast
 from urllib.parse import quote
@@ -963,6 +963,23 @@ def _decode_recall_response(
             source_facts[key] = _decode_recall_result(
                 item, bank_id=bank_id, include_attachments=include_attachments
             )
+    if include_attachments and source_facts:
+        for index, result in enumerate(results):
+            if result.type != "observation":
+                continue
+            attachments = list(result.attachments)
+            # Only explicit observation links establish provenance. Missing source facts
+            # are normal when the server's source-fact token budget is exhausted.
+            for source_id in result.source_fact_ids or []:
+                source = source_facts.get(source_id)
+                if source is None:
+                    continue
+                for attachment in source.attachments:
+                    if attachment not in attachments and len(attachments) < 8:
+                        attachments.append(attachment)
+                if len(attachments) >= 8:
+                    break
+            results[index] = replace(result, attachments=tuple(attachments))
     return RecallResponse(
         results=results,
         source_facts=source_facts,

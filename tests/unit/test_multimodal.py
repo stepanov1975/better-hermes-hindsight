@@ -306,8 +306,14 @@ def test_unicode_attachment_filenames_redact_and_output_caps_are_complete() -> N
     for limit in (100, 500, 1024, 4096):
         output = format_recall_context(response, max_bytes=limit)
         assert len(output.encode()) <= limit
-        if output:
-            assert output.endswith("[RECALLED_MEMORY_EVIDENCE_END]")
-            for line in output.splitlines():
-                if line.startswith("{"):
-                    assert json.loads(line)["attachments"] == list(projected)
+        if limit == 100:
+            assert not output
+            continue
+        assert output.endswith("[RECALLED_MEMORY_EVIDENCE_END]")
+        records = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+        assert len(records) == 1
+        assert records[0]["memory"].startswith("雪")
+        if limit == 4096:
+            assert records[0]["attachments"] == list(projected)
+        else:
+            assert "attachments" not in records[0]

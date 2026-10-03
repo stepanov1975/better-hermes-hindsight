@@ -227,7 +227,9 @@ def format_reflection_context(
         if attachments:
             record["attachments"] = list(attachments)
         fixed_bytes = len((CONTEXT_PREAMBLE + "\n\n" + CONTEXT_SUFFIX).encode("utf-8"))
-        line = _serialize_record(record)
+        line = _serialize_without_crowding_text(
+            record, available_line_bytes=max_bytes - fixed_bytes
+        )
         if fixed_bytes + len(line.encode("utf-8")) <= max_bytes:
             return _render([line])
         truncated = _fit_truncated_record(
@@ -333,10 +335,13 @@ def format_recall_context_with_selected_results_and_provenance(
             if fingerprint in seen_memories:
                 continue
             seen_memories.add(fingerprint)
-            line = _serialize_record(record)
+            separator_bytes = 1 if lines else 0
+            line = _serialize_without_crowding_text(
+                record,
+                available_line_bytes=max_bytes - fixed_bytes - lines_bytes - separator_bytes,
+            )
             _raise_if_deadline_reached(deadline)
             line_bytes = len(line.encode("utf-8"))
-            separator_bytes = 1 if lines else 0
             if fixed_bytes + lines_bytes + separator_bytes + line_bytes <= max_bytes:
                 lines.append(line)
                 lines_bytes += separator_bytes + line_bytes
@@ -434,6 +439,18 @@ def _memory_fingerprint(
             raise TypeError(f"recall result {field_name} is malformed")
         temporal.append(value)
     return normalized, temporal[0], temporal[1], temporal[2]
+
+
+def _serialize_without_crowding_text(
+    record: dict[str, object], *, available_line_bytes: int
+) -> str:
+    """Drop optional handles before truncating or discarding usable memory text."""
+
+    line = _serialize_record(record)
+    if "attachments" in record and len(line.encode("utf-8")) > available_line_bytes:
+        del record["attachments"]
+        line = _serialize_record(record)
+    return line
 
 
 def _serialize_record(record: dict[str, object]) -> str:
