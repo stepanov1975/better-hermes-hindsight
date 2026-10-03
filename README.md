@@ -24,7 +24,10 @@ tag and repeat the gates on its exact commit. Installation separately requires v
 
 ### Behavior and validation limits
 
-The default-off mental-model pilot exposes explicit list/read/create/status; creation requires
+The default-off mental-model tool exposes list/read/create/status plus separately opt-in refresh
+and Knowledge Page browse/search/read on exact 0.10.2. Operator-only commands maintain definitions,
+refresh policy and deletion, and create pages with exact readback. No existing configuration is
+automatically enabled or synchronized. Creation requires
 its own opt-in and queued work must be checked, read, and verified. Planning, rewriting, reflection,
 retention, and private evaluation keep their existing defaults; this snapshot enables none of them.
 Content-free ordinary logs and separately opt-in private evaluation remain unchanged. See the
@@ -294,7 +297,11 @@ Merge this optional section into `$HERMES_HOME/better_hindsight/config.json`:
 }
 ```
 
-Both capability gates default to **false**. Set `create_enabled` to true separately only after
+All capability gates (`enabled`, `create_enabled`, `refresh_enabled`, `pages_enabled`) default to
+**false**. New refresh/page operations and operator maintenance require exact 0.10.2; old pilot
+list/read/create/status remain available on 0.10.0. Page search excludes standalone summaries.
+See [summary maintenance and page commands](docs/mental-models.md#operator-maintenance-and-knowledge-pages)
+for edit/delete confirmation, page creation, and policy examples. Set `create_enabled` to true separately only after
 reviewing backend LLM/data/cost exposure. The pilot refuses configured recall/reflect tag scopes,
 including explicit empty tags, rather than silently widening them to bank-wide reads.
 
@@ -312,8 +319,9 @@ including explicit empty tags, rather than silently widening them to bank-wide r
   Received HTTP 422/429 rejections release the local reservation, permitting a later explicit attempt.
   This is not a transactional quota across other processes/server writers; ambiguous reservations
   are process-local, not a durable job queue.
-- Auto-refresh is explicitly off (including cron and consolidation), and traces are disabled.
-  The fixed `max_tokens=1024` is an output target, **not a hard backend spend cap**. Generation can
+- Auto-refresh defaults off (cron/consolidation); operator-owned creation defaults can enable one
+  server-side trigger explicitly. Traces remain disabled. Default `max_tokens=1024` is an output
+  target, **not a hard backend spend cap**. Generation can
   continue after a local timeout; server LLM/retrieval policy still determines work and cost.
 
 See [mental-model configuration and usage](docs/mental-models.md) for the exact bounds,
@@ -343,7 +351,7 @@ Retries use a stable document ID and `update_mode="replace"`. A timed-out write 
 - at most one Better-enabled profile per Hermes process;
 - Python 3.11–3.14 on Linux (current Hermes requires 3.14; older pinned Hermes covers 3.11–3.13);
 - an external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, or 0.10.2 server;
-- `aiohttp>=3.14.1,<4`, `aiodns>=4.0.4,<5`, and `tiktoken>=0.12,<0.15`, which the plugin declares through Hermes's
+- `aiohttp>=3.14.1,<4`, `aiodns>=4.0.4,<5`, `tiktoken>=0.12,<0.15`, and `croniter>=6,<7`, which the plugin declares through Hermes's
   standard memory-plugin dependency mechanism.
 
 The plugin packages the official hash-verified `cl100k_base` encoding table, so recall and reflection
@@ -384,6 +392,11 @@ hermes better_hindsight diagnostics list
 hermes better_hindsight diagnostics replay <record-id>
 hermes better_hindsight missions check
 hermes better_hindsight missions apply --confirm
+hermes better_hindsight summaries list
+hermes better_hindsight summaries inspect <model-id>
+hermes better_hindsight summaries refresh <model-id> --confirm <model-id>
+hermes better_hindsight pages browse
+hermes better_hindsight pages search "deployment decisions"
 hermes better_hindsight canary
 hermes better_hindsight watchdog --help
 ```
