@@ -519,6 +519,10 @@ def test_current_loader_discovers_active_standard_plugin_cli_and_recall_tool(
         "read",
         "create",
         "status",
+        "refresh",
+        "page_browse",
+        "page_search",
+        "page_read",
     ]
     assert pilot_schema["parameters"]["additionalProperties"] is False
     assert payload == {

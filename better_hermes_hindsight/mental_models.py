@@ -40,7 +40,11 @@ def tool_schema() -> dict[str, Any]:
     return {
         "name": TOOL_NAME,
         "description": (
-            "Explicit opt-in bank-wide mental-model list/read/create/status. List first and reuse "
+            "Explicit opt-in bank-wide mental-model list/read/create/status/refresh and "
+            "Knowledge Page page_browse/page_search/page_read. New operations require 0.10.2 "
+            "and separate operator opt-ins. Page search excludes standalone models. "
+            "Refresh queues backend work and costs; it cannot edit definitions or policy. "
+            "List first and reuse "
             "an existing model for the topic; only exact normalized questions are deduplicated, "
             "not semantic equivalents. Create only for a durable recurring question worth backend "
             "LLM cost, with a short reason. Creation queues work, not verified content. "
@@ -51,13 +55,26 @@ def tool_schema() -> dict[str, Any]:
         "parameters": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["list", "read", "create", "status"]},
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "list",
+                        "read",
+                        "create",
+                        "status",
+                        "refresh",
+                        "page_browse",
+                        "page_search",
+                        "page_read",
+                    ],
+                },
                 "id": {"type": "string", "maxLength": 128},
                 "operation_id": {"type": "string", "maxLength": 36},
                 "offset": {"type": "integer", "minimum": 0, "maximum": 100000},
                 "name": {"type": "string", "minLength": 1, "maxLength": 120},
                 "source_query": {"type": "string", "minLength": 1, "maxLength": 2000},
                 "reason": {"type": "string", "minLength": 1, "maxLength": 300},
+                "query": {"type": "string", "minLength": 1, "maxLength": 2000},
             },
             "required": ["action"],
             "additionalProperties": False,
@@ -68,6 +85,10 @@ def tool_schema() -> dict[str, Any]:
 def validate_args(args: dict[str, Any]) -> None:
     action = args.get("action")
     keys = {
+        "page_browse": ({"action"}, {"action", "offset"}),
+        "page_search": ({"action", "query"}, {"action", "query"}),
+        "page_read": ({"action", "id"}, {"action", "id"}),
+        "refresh": ({"action", "id", "reason"}, {"action", "id", "reason"}),
         "list": ({"action"}, {"action", "offset"}),
         "read": ({"action", "id"}, {"action", "id"}),
         "status": ({"action", "id", "operation_id"}, {"action", "id", "operation_id"}),
@@ -81,11 +102,22 @@ def validate_args(args: dict[str, Any]) -> None:
     required, allowed = keys[action]
     if not required <= set(args) <= allowed:
         raise ValueError
-    if action == "list":
+    if action in {"list", "page_browse"}:
         offset = args.get("offset", 0)
         if type(offset) is not int or not 0 <= offset <= 100000:
             raise ValueError
-    if action in {"read", "status"}:
+    if action == "page_search":
+        for query in (args["query"], redact_sensitive_text(args["query"])):
+            text(query, 2000)
+            if project_query(query, max_chars=2000, max_tokens=500) != query:
+                raise ValueError
+    if action == "page_read":
+        from .knowledge_pages import page_id
+
+        page_id(args["id"])
+    if action == "refresh":
+        text(args["reason"], 300)
+    if action in {"read", "status", "refresh"}:
         identifier(args["id"])
     if action == "status":
         operation_id(args["operation_id"])
@@ -158,7 +190,12 @@ def render(payload: dict[str, object]) -> str:
         payload["truncated"] = True
         while items and len(rendered.encode()) > OUTPUT_MAX_BYTES:
             items.pop()
-            payload["next_offset"] = cast(int, payload["offset"]) + len(items)
+            if payload.get("inventory") == "knowledge_pages_only":
+                payload["next_offset"] = None
+                if "returned_hits" in payload:
+                    payload["returned_hits"] = len(items)
+            else:
+                payload["next_offset"] = cast(int, payload["offset"]) + len(items)
             rendered = encode()
         if not items or len(rendered.encode()) > OUTPUT_MAX_BYTES:
             raise ValueError
@@ -182,6 +219,21 @@ def render(payload: dict[str, object]) -> str:
     return rendered
 
 
+def submission_result(status_response: str, payload: dict[str, object]) -> str:
+    """Preserve the verified operation state without claiming generated content."""
+    envelope = json.loads(status_response)
+    status = json.loads(
+        next(line for line in envelope["context"].splitlines() if line.startswith("{"))
+    )["status"]
+    payload["status"] = status
+    if status in {"failed", "cancelled"}:
+        payload["result"] = status
+        payload["verification"] = (
+            "Generation did not succeed. Inspect this exact operation and target."
+        )
+    return render(payload)
+
+
 class MentalModels:
     """One instance on the shared runtime loop; reservations survive ambiguous POSTs."""
 
@@ -189,6 +241,11 @@ class MentalModels:
         self.config = config
         self.lock = asyncio.Lock()
         self.reservations: set[str] = set()
+        self.refresh_ambiguities: set[str] = set()
+        self.refresh_unconfirmed: dict[str, dict[str, object]] = {}
+        self.page_creation_ambiguous = False
+        self.page_creation_unconfirmed: dict[str, object] | None = None
+        self.creation_unconfirmed: dict[str, object] | None = None
         self.path = f"/v1/default/banks/{quote(config.bank_id, safe='')}"
 
     async def call(self, client: MentalModelClient, args: dict[str, Any]) -> str:
@@ -198,6 +255,24 @@ class MentalModels:
         if version not in {"0.10.0", "0.10.2"}:
             return '{"error":"Mental-model pilot requires Hindsight 0.10.0 or 0.10.2."}'
         action = args["action"]
+        if action in {"refresh", "page_browse", "page_read", "page_search"}:
+            if version != "0.10.2":
+                return (
+                    '{"error":"Summary maintenance and Knowledge Pages require Hindsight 0.10.2."}'
+                )
+            if action == "refresh":
+                async with self.lock:
+                    return await self.refresh(client, args["id"])
+            from .knowledge_pages import KnowledgePages
+
+            pages = KnowledgePages(self.path)
+            if action == "page_browse":
+                return await pages.browse(client, args.get("offset", 0))
+            if action == "page_search":
+                return await pages.search(client, redact_sensitive_text(args["query"]))
+            result = await pages.read(client, args["id"])
+            await self.read(client, cast(str, result["mental_model_id"]))
+            return render(result)
         if action == "list":
             items, total = await self.page(client, args.get("offset", 0))
             offset = args.get("offset", 0)
@@ -218,7 +293,7 @@ class MentalModels:
         if action == "status":
             return await self.status(client, args["id"], args["operation_id"])
         async with self.lock:
-            return await self.create(client, args)
+            return await self.create(client, args, modern=version == "0.10.2")
 
     def project(self, model: dict[str, Any], *, content: bool = False) -> dict[str, object]:
         if model.get("bank_id") != self.config.bank_id:
@@ -314,6 +389,14 @@ class MentalModels:
             not in {"pending", "processing", "completed", "failed", "cancelled"}
         ):
             raise ValueError
+        known = self.refresh_unconfirmed.get(model_id)
+        if (
+            status["status"] in {"completed", "failed", "cancelled"}
+            and known is not None
+            and known.get("operation_id") == op_id
+        ):
+            self.refresh_unconfirmed.pop(model_id)
+            self.refresh_ambiguities.discard(model_id)
         # Bank is enforced by the bank-scoped operation route (0.10.0/0.10.2 SQL predicate).
         return render(
             {
@@ -325,7 +408,96 @@ class MentalModels:
             }
         )
 
-    async def create(self, client: MentalModelClient, args: dict[str, Any]) -> str:
+    async def refresh(
+        self, client: MentalModelClient, model_id: str, *, model: dict[str, Any] | None = None
+    ) -> str:
+        if model_id in self.refresh_unconfirmed:
+            return render(self.refresh_unconfirmed[model_id])
+        if model is None:
+            model = await self.read(client, model_id)
+        from .summary_policy import validate_fixed_policy
+
+        validate_fixed_policy(model)
+        if model_id in self.refresh_ambiguities:
+            return render(
+                {
+                    "result": "ambiguous",
+                    "id": model_id,
+                    "verification": (
+                        "No retry. Operator must reconcile unknown refresh "
+                        "before another submission."
+                    ),
+                }
+            )
+        self.refresh_ambiguities.add(model_id)
+
+        def decode(value: object) -> str:
+            response = mapping(value)
+            if response.get("status") != "queued":
+                raise ValueError
+            return operation_id(response.get("operation_id"))
+
+        try:
+            op_id = await client.mental_model_request(
+                "POST",
+                f"{self.path}/mental-models/{quote(model_id, safe='')}/refresh",
+                decoder=decode,
+            )
+        except Exception as error:
+            if isinstance(error, HindsightClientError) and error.status in {422, 429}:
+                self.refresh_ambiguities.discard(model_id)
+                return render(
+                    {
+                        "result": "rejected",
+                        "id": model_id,
+                        "error": "summary_write_rejected",
+                        "verification": (
+                            "No refresh submitted. A later explicit attempt is permitted."
+                        ),
+                    }
+                )
+            return render(
+                {
+                    "result": "ambiguous",
+                    "id": model_id,
+                    "verification": "No retry. Reconcile unknown operation with the operator.",
+                }
+            )
+        # Keep validated ACK IDs even if status verification fails or is cancelled.
+        self.refresh_unconfirmed[model_id] = {
+            "result": "unconfirmed",
+            "id": model_id,
+            "operation_id": op_id,
+            "verification": (
+                "No retry. Acknowledged operation is not verified; reconcile exact "
+                "status then read this model and inspect content."
+            ),
+        }
+        try:
+            status_response = await self.status(client, model_id, op_id)
+        except Exception:
+            return render(self.refresh_unconfirmed[model_id])
+        self.refresh_unconfirmed.pop(model_id, None)
+        self.refresh_ambiguities.discard(model_id)
+        return submission_result(
+            status_response,
+            {
+                "result": "queued",
+                "id": model_id,
+                "operation_id": op_id,
+                "verification": (
+                    "Check status once, then read this model and inspect generated content."
+                ),
+            },
+        )
+
+    async def create(
+        self, client: MentalModelClient, args: dict[str, Any], *, modern: bool = True
+    ) -> str:
+        from .summary_policy import SummaryPolicy
+
+        if not modern and self.config.mental_models.creation != SummaryPolicy():
+            return '{"error":"Configured creation policy requires Hindsight 0.10.2."}'
         query = redact_sensitive_text(args["source_query"])
         model_id = stable_id(self.config, query)
         try:
@@ -366,23 +538,8 @@ class MentalModels:
             "name": redact_sensitive_text(args["name"]),
             "source_query": query,
             "tags": [],
-            "max_tokens": 1024,
-            "trigger": {
-                "mode": "full",
-                "refresh_after_consolidation": False,
-                "refresh_cron": None,
-                "min_refresh_interval_seconds": 0,
-                "fact_types": None,
-                "exclude_mental_models": True,
-                "exclude_mental_model_ids": None,
-                "tags_match": "any",
-                "tag_groups": None,
-                "include_chunks": False,
-                "recall_max_tokens": 4096,
-                "recall_chunks_max_tokens": 0,
-                "response_schema": None,
-                "keep_trace": False,
-            },
+            "max_tokens": self.config.mental_models.creation.max_tokens,
+            "trigger": self.config.mental_models.creation.trigger(modern=modern),
         }
 
         def decode_creation(value: object) -> str:
@@ -400,7 +557,14 @@ class MentalModels:
             # Transport loss, 5xx, and malformed acknowledgements remain ambiguous.
             if isinstance(error, HindsightClientError) and error.status in {422, 429}:
                 self.reservations.discard(model_id)
-                raise
+                return render(
+                    {
+                        "result": "rejected",
+                        "id": model_id,
+                        "error": "summary_write_rejected",
+                        "verification": "No model created. A later explicit attempt is permitted.",
+                    }
+                )
             return render(
                 {
                     "result": "ambiguous",

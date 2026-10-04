@@ -100,6 +100,8 @@ This example uses only synthetic/local values and contains no API key. Retention
   "mental_models": {
     "enabled": false,
     "create_enabled": false,
+    "refresh_enabled": false,
+    "pages_enabled": false,
     "max_models": 20,
     "timeout_seconds": 10.0
   },
@@ -688,3 +690,17 @@ operation; mission, bank, and configuration tools remain absent, and reflection 
 
 Development writes require an isolated Hindsight instance and synthetic bank. Production canary
 checks likewise use synthetic content and an explicitly designated bank.
+
+## Summary maintenance defaults
+
+`mental_models.refresh_enabled` defaults to `false`; set it to `true` to separately enable only
+the model-facing refresh action. `mental_models.pages_enabled` also defaults to `false`; set it
+to `true` to enable model-facing and operator Knowledge Page operations.
+Both require `mental_models.enabled=true`. `mental_models.creation` accepts only `mode`, `budget`,
+`refresh_after_consolidation`, `refresh_cron`, `min_refresh_interval_seconds`, `max_tokens`,
+`recall_max_tokens`, and `observations_max_tokens`; defaults, ranges and complete operator examples
+are in [summary maintenance](mental-models.md#operator-maintenance-and-knowledge-pages).
+All automatic triggers default off. Configuration is never synchronized to existing server models:
+use confirmed `summaries edit` and exact readback. Five-field UTC cron is validated with the
+explicit `croniter>=6,<7` runtime/plugin dependency. Output/retrieval token targets and local
+timeouts are not backend spend caps or guaranteed cancellation.

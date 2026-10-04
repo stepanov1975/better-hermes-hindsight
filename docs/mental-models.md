@@ -37,7 +37,7 @@ provider tools. Disabled, unauthorized, invalid, or shut-down calls do not perfo
 Only explicit authorized pilot calls check `/version`; exact `api_version="0.10.0"` or `"0.10.2"` is required.
 Older supported automatic recall/retain behavior is unchanged.
 
-## One tool, four actions
+## One tool, explicit actions
 
 `better_hindsight_mental_models` takes these mutually exclusive argument shapes:
 
@@ -138,15 +138,16 @@ the deterministic ID and read-before-write reconciliation remain. There is no at
 quota: other processes, operators, deletions, changed destinations, or server writers can race the
 inventory. Do not claim a global cost/quota guarantee. A POST may persist the model before queue
 submission fails; an existing model can therefore have empty/stale content and no known operation.
-The pilot will not refresh or repair it; use operator-managed recovery outside this tool.
+Use explicitly enabled refresh with operator reconciliation; never infer generation from existence.
 
-Every create explicitly sets `tags=[]`, `max_tokens=1024`, and a fixed trigger:
+Creation defaults explicitly set `tags=[]`, `max_tokens=1024`, and this trigger:
 `mode=full`, `refresh_after_consolidation=false`, `refresh_cron=null`,
 `min_refresh_interval_seconds=0`, `fact_types=null`, `exclude_mental_models=true`,
 `exclude_mental_model_ids=null`, `tags_match=any`, `tag_groups=null`, `include_chunks=false`,
 `recall_max_tokens=4096`, `recall_chunks_max_tokens=0`, `response_schema=null`, `keep_trace=false`.
-No model argument can override them. No refresh/edit/delete endpoint, SDK, scheduler, automatic
-prefetch, or provider-core change is included.
+No model argument can override creation policy. Operators may configure the allowlisted defaults
+below or explicitly patch an existing definition. No SDK, local scheduler, startup policy sync,
+automatic prefetch, or direct markdown-body editing is included.
 
 **Cost caveat:** the initial create queues server-side LLM work. `max_tokens` is a final-answer
 output target, not a hard spend cap. Server policy/directives, retrieval, model reasoning, and
@@ -163,8 +164,10 @@ particularly `hindsight-api-slim/hindsight_api/api/http.py` and
 against [`5fc4ce20917b916240cef27c212c387a177f115b`](https://github.com/vectorize-io/hindsight/tree/5fc4ce20917b916240cef27c212c387a177f115b);
 see the [operation-by-operation audit](compatibility.md#exact-hindsight-0102-source-audit).
 Its initial model content is empty, and its refresh defaults to `mid` iteration budget with
-separate refresh configuration rather than inheriting ad-hoc reflection defaults. New optional
-trigger controls are omitted; the existing explicit no-auto-refresh/no-trace payload is unchanged.
+separate refresh configuration rather than inheriting ad-hoc reflection defaults. On 0.10.2 the payload also explicitly sets `budget=mid`,
+`reflect_search_observations_max_tokens=5000`, and
+`reflect_search_observations_include_entities=false`. On 0.10.0 these additive fields are omitted;
+nondefault creation policy requires 0.10.2. Automatic triggers still default off and traces stay off.
 Recheck server-side cost/quality before enabling creation; neither version's output target caps cost.
 
 `tests/integration/test_mental_models.py` drives the real Hermes `MemoryManager`, Better provider,
@@ -175,3 +178,112 @@ It performs no production writes and does not claim live backend synthesis quali
 Endpoint schema validation runs inside the observed HTTP decoder: malformed version, metadata,
 content, status, reconciliation, or creation responses emit `schema_invalid`, not a successful
 request event. Existing HTTP counters and watchdog adapter-contract alerts use that outcome.
+
+## Operator maintenance and Knowledge Pages
+
+New operations require exact Hindsight **0.10.2**. Enable `refresh_enabled` for model-facing
+refresh and `pages_enabled` for model-facing and operator page access. All flags default false
+and require `enabled=true`. Operator summary edit/refresh/delete requires `enabled` and CLI
+identity authorization plus exact-target confirmation; `refresh_enabled` gates the model tool,
+not an explicitly confirmed operator refresh. Operator creation also requires `create_enabled`.
+No bank/principal/tag/budget arguments are added to the model tool. Configured tag scopes remain
+refused, including scopes on disabled recall/reflection.
+
+```json
+{"mental_models":{"enabled":true,"create_enabled":true,"refresh_enabled":false,
+ "pages_enabled":true,"creation":{"mode":"full","budget":"mid",
+ "refresh_after_consolidation":false,"refresh_cron":null,
+ "min_refresh_interval_seconds":0,"max_tokens":1024,"recall_max_tokens":4096,
+ "observations_max_tokens":5000}}}
+```
+
+`creation` changes only future creations, never existing models. `mode` is full/delta, `budget`
+is low/mid/high. `refresh_cron` is a validated five-field cron (UTC); macros and seconds fields
+and surrounding whitespace are refused rather than normalized. Cron and
+`refresh_after_consolidation=true` are mutually exclusive. Integers must
+not be booleans: interval 0–31536000 seconds, output 256–8192 tokens, recall/observations each
+1–16384 tokens. Automatic triggers run on the **server**, can incur recurring cost even when
+Hermes is stopped, and are not cancelled by local deadlines. The minimum interval is server
+refresh policy, not a local throttle or a hard spend guarantee. Delta can fall back to full on
+first generation or a changed question. No trace, source schema, tags, chunks, or inclusion
+of other mental models can be configured through this surface.
+
+```text
+hermes better_hindsight summaries list
+hermes better_hindsight summaries create --name "Decisions" --source-query "What are the durable decisions?" --confirm
+hermes better_hindsight summaries inspect <model-id>
+hermes better_hindsight summaries edit <model-id> --source-query "What decisions changed?" --budget low --max-tokens 512 --confirm <model-id>
+hermes better_hindsight summaries edit <model-id> --refresh-cron "0 4 * * *" --min-refresh-interval-seconds 3600 --confirm <model-id>
+hermes better_hindsight summaries edit <model-id> --refresh-cron none --confirm <model-id>
+hermes better_hindsight summaries edit <model-id> --after-consolidation true --confirm <model-id>
+hermes better_hindsight summaries refresh <model-id> --confirm <model-id>
+hermes better_hindsight summaries status <model-id> <operation-id>
+hermes better_hindsight summaries delete <model-id> --confirm <model-id>
+hermes better_hindsight pages create --name "Decisions page" --source-query "What are the durable decisions?" --confirm
+hermes better_hindsight pages browse
+hermes better_hindsight pages search "decisions"
+hermes better_hindsight pages read <page-id>
+```
+
+Page-backed summary renames are refused without a write: use Hindsight's page interface to
+keep the page title and backing-model name synchronized. Standalone renames and other
+page-backed definition edits remain supported.
+
+Edit PATCHes the **mental-model definition**, preserving unspecified trigger fields and tags,
+then reads the exact target. It does not implicitly refresh or accept body/content editing.
+IDs remain unchanged after editing a question; deterministic reuse refuses a mismatched existing
+question rather than silently reusing the wrong model. Confirmed delete verifies model absence,
+associated page-tree absence, and exact page-resource 404s. It warns of that page cascade and
+never calls folder/subtree deletion. Fixed bank-wide retrieval/trace policy is required for
+refresh and definition edits; externally scoped or traced models are not silently widened.
+
+Knowledge Pages are dedicated tree resources with backing model IDs, not every standalone
+mental model. Page creation always sets the full safe defaults rather than inheriting server
+automatic-refresh defaults. `--parent-id` may name an existing folder only. The same bank-wide
+model allowance includes backing models; there is no automatic standalone-to-page migration.
+Page IDs are `kp-` plus 32 lowercase hexadecimal characters; folder IDs are `kf-` plus 32 hex
+characters (not canonical UUID operation IDs). Always use the exact returned identifier.
+Browse traverses at most 200 nodes / 12 levels, refusing larger/malformed trees; it may truncate
+serialized output at 16 KiB, returning `next_offset` for continuation. Supply that offset
+as `pages browse --offset N` or model-tool `page_browse`'s `offset`; continuation assumes an
+unchanged tree, not a transactionally consistent snapshot. Search is bounded to 10 ranked page hits,
+validates the returned-hit count and finite scores, and **excludes standalone models**. Scores
+are rank-based, not confidence. Read uses stored `body`, never the rendered placeholder markdown;
+`generated_content_present=false` means no generated body. The exact legacy stored placeholder
+`Generating content...` is projected as empty/unwritten, matching the pinned engine; other
+text is not treated as a placeholder. HTTP remains capped at 256 KiB.
+All projections are redacted, bounded, untrusted generated evidence, not instructions.
+
+Model tool additions (only these argument shapes):
+
+```json
+{"action":"refresh","id":"example-model","reason":"Durable decisions changed"}
+{"action":"page_browse"}
+{"action":"page_search","query":"deployment decisions"}
+{"action":"page_read","id":"kp-550e8400e29b41d4a716446655440010"}
+```
+
+Refresh submits once and binds operation status to exact bank/model/task. It returns **queued**
+with the observed status for pending/processing/completed work, never generated success.
+Immediate failed/cancelled states are returned explicitly for refresh and operator creation;
+those commands and explicit failed/cancelled status checks exit nonzero. Check status then
+read and inspect nonempty content. No operation polling/retry loop exists in tools or CLI. Ambiguous submissions require operator reconciliation;
+model-runtime reservations prevent a second uncertain refresh in that process. Operator commands
+are finite runtimes: reservations do not survive a subsequent command/process restart. Page
+creation uses server-generated IDs, so reconcile the tree after an uncertain result before
+creating again. A successful acknowledgement alone is insufficient for edit/delete/create
+readback; timeout or mismatch reports unconfirmed rather than claiming success.
+A validated refresh/page-create acknowledgement retains its exact operation/model/page IDs in
+that bounded unconfirmed response, including subsequent calls in the same runtime, without
+another write. Reconcile those IDs with explicit status and read commands; an unconfirmed
+acknowledgement does not establish successful generation or verified resource binding.
+Provider deadline cancellation after a validated refresh ACK also preserves known IDs.
+A received page-create HTTP 409 is a definitive name conflict, not an ambiguous write; no
+ambiguity reservation is retained. Other mutation endpoints retain their existing conservative
+409 treatment. No automatic retry is sent.
+
+`test_maintained_summaries.py` exercises real provider/MemoryManager and operator CLI lifecycle
+against synthetic loopback HTTP. The opt-in `test_isolated_hindsight.py` additionally runs exact
+0.10.2 edit/readback, refresh/status/read, page create/browse/search/read, and delete/absence in
+its owned disposable bank. A skipped live gate is not evidence of real backend execution or
+LLM quality/cost. No production enablement or writes are part of this implementation.

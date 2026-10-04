@@ -163,8 +163,9 @@ encoding and 500-token projection remain unchanged; no SDK or dependency bump is
 
 Server-side mental-model generation is **not** behaviorally identical: 0.10.2 defaults refresh to
 `mid` iteration budget, separates refresh configuration from ad-hoc reflection defaults, and adds
-observation-retrieval options and failed-refresh tracking. Better continues to send its existing
-explicit no-auto-refresh/no-trace trigger and omits those new optional controls. Its 1024-token
+observation-retrieval options and failed-refresh tracking. Better now explicitly sets its operator-owned refresh budget and observation bounds on 0.10.2;
+automatic refresh remains off by default and trace/schema/tag controls stay fixed. The 0.10.0 pilot
+keeps its prior payload and refuses nondefault creation policy. Its 1024-token
 answer target does not cap backend work. Revalidate synthesis quality/cost with the intended server
 configuration before enabling creation. The deterministic suite runs both exact pilot versions,
 including empty content, additive fields, ambiguity and refusal of unreviewed versions for every action.
@@ -255,3 +256,19 @@ The practical target is Linux/POSIX, one configured principal, one static bank, 
 profile per process, one external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, or 0.10.2 service under the tokenizer
 policy above, and the normal Hermes memory-provider execution path. Other platforms and runtimes are best effort and do not block use in
 the intended environment.
+
+## Exact 0.10.2 summary maintenance contract
+
+New operator maintenance, refresh and Knowledge Page surfaces require exactly 0.10.2; other
+versions retain existing supported recall/retain and 0.10.0 pilot behavior. Executable-source
+review at `5fc4ce20917b916240cef27c212c387a177f115b` covers `api/http.py` and
+`engine/memory_engine.py`: mental-model PATCH merges only explicitly set trigger fields and does
+not refresh; POST refresh returns a queued operation; knowledge-page creation returns HTTP 201,
+page/backing-model/operation IDs and starts empty generation. Engine page/folder IDs use `kp-` /
+`kf-` plus UUID **hex**, not UUID strings. GET page exposes stored `body` separately from rendered
+`markdown` placeholders; tree nodes reference backing models; search returns `total=len(results)`
+for the bounded hit set, excluding standalone models. Model DELETE cascades associated pages.
+The adapter deliberately does not use page-node PATCH, whose source-query changes implicitly
+queue regeneration, or subtree DELETE. Loopback tests pin these seams; the exact-version isolated
+synthetic live harness now exercises the full control/page lifecycle. Pending CI live execution
+is not claimed as completed proof; the historical 0.7.1 proofs above did not test these new controls.

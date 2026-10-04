@@ -197,7 +197,7 @@ assert "hindsight_client_api" not in sys.modules
     assert is_available() is True
 
 
-@pytest.mark.parametrize("missing_module", ["aiohttp", "aiodns", "tiktoken"])
+@pytest.mark.parametrize("missing_module", ["aiohttp", "aiodns", "tiktoken", "croniter"])
 def test_availability_requires_each_runtime_dependency(
     monkeypatch: pytest.MonkeyPatch, missing_module: str
 ) -> None:

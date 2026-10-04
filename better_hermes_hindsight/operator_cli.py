@@ -19,6 +19,9 @@ def register_cli(parser: ArgumentParser) -> None:
     """Register the bounded operator command grammar."""
 
     commands = parser.add_subparsers(dest="better_hindsight_action", required=True)
+    from .summary_management import register_commands
+
+    register_commands(commands)
     commands.add_parser("status", help="Inspect the local retention outbox")
     commands.add_parser("canary", help="Run the explicitly enabled synthetic Hindsight canary")
 
@@ -98,7 +101,11 @@ def better_hindsight_command(args: Namespace) -> None:
                 status,
             )
 
-            if command == "status":
+            if command.startswith("summary_"):
+                from .summary_management import namespace_arguments, run_operator
+
+                result = run_operator(config, namespace_arguments(args))
+            elif command == "status":
                 result = status(config)
             elif command == "diagnostics_list":
                 result = list_diagnostics(config)
@@ -109,17 +116,23 @@ def better_hindsight_command(args: Namespace) -> None:
             else:
                 result = apply_missions(config, confirmed=args.confirm is True)
         except Exception:
-            error = {
-                "status": "status_unavailable",
-                "diagnostics_list": "diagnostics_unavailable",
-                "diagnostics_replay": "diagnostic_replay_unavailable",
-                "missions_check": "mission_check_unavailable",
-                "missions_apply": "mission_prewrite_unavailable",
-            }[command]
+            error = (
+                "summary_unavailable"
+                if command.startswith("summary_")
+                else {
+                    "status": "status_unavailable",
+                    "diagnostics_list": "diagnostics_unavailable",
+                    "diagnostics_replay": "diagnostic_replay_unavailable",
+                    "missions_check": "mission_check_unavailable",
+                    "missions_apply": "mission_prewrite_unavailable",
+                }[command]
+            )
             result = _fixed_result(command, error)
 
     output_limit = (
-        _MAX_DIAGNOSTIC_JSON_BYTES if command.startswith("diagnostics_") else _MAX_JSON_BYTES
+        _MAX_DIAGNOSTIC_JSON_BYTES
+        if command.startswith(("diagnostics_", "summary_"))
+        else _MAX_JSON_BYTES
     )
     try:
         encoded = _canonical_json(result.payload, max_bytes=output_limit)
@@ -138,6 +151,8 @@ def _finish(exit_code: int) -> None:
 
 def _command_name(args: Namespace) -> str:
     action = getattr(args, "better_hindsight_action", None)
+    if action in {"summaries", "pages"}:
+        return "summary_" + str(getattr(args, "summary_action", "invalid"))
     if action == "status":
         return "status"
     if action == "diagnostics":

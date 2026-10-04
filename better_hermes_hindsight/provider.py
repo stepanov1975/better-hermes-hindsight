@@ -589,6 +589,10 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             return INVALID
         if args["action"] == "create" and not config.mental_models.create_enabled:
             return UNAVAILABLE
+        if args["action"] == "refresh" and not config.mental_models.refresh_enabled:
+            return UNAVAILABLE
+        if args["action"].startswith("page_") and not config.mental_models.pages_enabled:
+            return UNAVAILABLE
         try:
             return runtime.mental_models(args, timeout=config.mental_models.timeout_seconds)
         except Exception as error:

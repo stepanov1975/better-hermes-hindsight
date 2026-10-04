@@ -415,7 +415,12 @@ class _AiohttpJsonTransport:
                 )
             async with request as response:
                 status = response.status
-                if status != 200:
+                # Hindsight 0.10.2 Knowledge Page creation returns 201, unlike
+                # the existing mental-model pilot. Keep all other routes strict.
+                page_created = (
+                    status == 201 and method == "POST" and path.endswith("/knowledge-base/pages")
+                )
+                if status != 200 and not page_created:
                     response.close()
                     raise _JsonTransportError(_status_outcome(status), status=status)
                 media_type = (
@@ -485,10 +490,13 @@ def _status_outcome(status: int) -> str:
 
 
 def is_available() -> bool:
-    """Return whether both installed runtime dependencies are importable."""
+    """Return whether all installed runtime dependencies are importable."""
 
     try:
-        return all(find_spec(module) is not None for module in ("aiohttp", "aiodns", "tiktoken"))
+        return all(
+            find_spec(module) is not None
+            for module in ("aiohttp", "aiodns", "tiktoken", "croniter")
+        )
     except (ImportError, ValueError):
         return False
 
