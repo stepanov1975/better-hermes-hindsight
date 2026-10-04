@@ -1609,3 +1609,20 @@ def test_provider_invalid_terminal_status_cannot_release_refresh(
         assert len([r for r in server.requests if r[0] == "POST"]) == 1
     finally:
         manager.shutdown_all()
+
+
+def test_page_create_verifies_raw_name_not_redacted_projection(
+    tmp_path: Path, server: Server
+) -> None:
+    config_home(tmp_path, server)
+    code, result = cli(
+        tmp_path,
+        ["pages", "create", "--name", "api_key=abcd", "--source-query", QUESTION, "--confirm"],
+    )
+    assert code == 0 and result["result"] == "queued"
+    assert result["page_id"] == PAGE and result["mental_model_id"] == "page-backing"
+    assert result["operation_id"] == OP
+    body = next(body for method, _, body in server.requests if method == "POST")
+    assert body["name"] == "api_key=[REDACTED]"
+    assert "abcd" not in json.dumps(server.requests)
+    assert server.nodes[PAGE]["name"] == body["name"]

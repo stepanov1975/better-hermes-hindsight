@@ -572,11 +572,9 @@ async def create_page(
         record = await models.read(client, backing, query=cast(str, body["source_query"]))
         verify_creation(record, policy, cast(str, body["name"]))
         read = await pages.read(client, page, expected_name=cast(str, body["name"]))
-        if (
-            read["mental_model_id"] != backing
-            or read["parent_id"] != parent
-            or read["name"] != body["name"]
-        ):
+        # Raw node/resource names are checked by expected_name above; the
+        # model-facing projection may redact the stored name a second time.
+        if read["mental_model_id"] != backing or read["parent_id"] != parent:
             raise ValueError
         status_response = await models.status(client, backing, op_id)
     except Exception:
