@@ -146,6 +146,28 @@ refresh/edit/delete tool, background prefetch, automatic POST retry, or cross-pr
 Queued operation status is not generated-content success; the model must read and inspect content.
 See [pilot contracts and limits](docs/mental-models.md).
 
+### Explicit multimodal memory
+
+The default-off binary retain extension admits one immutable canonical envelope into the same SQLite
+content column, with distinct `better-hindsight-multimodal-v1` schema and full destination/admission
+policy fingerprint. Operator roots and count/decoded/encoded budgets bound regular-file snapshots;
+Hermes file-read policy, descriptor-based no-symlink opens and file identity/change checks protect
+admission. Ordered base64 blocks, hashes, safe file basename, context and fixed timestamp are persisted;
+source paths are not metadata, and the sender never reopens source files. One transaction admits all
+blocks or none. Existing text v1/v2 identity, capacity, sender locking and replay remain compatible.
+
+An explicit binary send and opt-in attachment-aware recall/reflection probe exact Hindsight 0.10.2,
+never on startup or default text reads. Older/unknown APIs receive no lossy caption-only fallback.
+Synchronous replace-mode retries preserve the original ID/timestamp/bytes after ambiguous responses,
+without claiming exactly-once delivery. Changed or disabled binary policy blocks pending binary rows.
+
+Default-off read projections validate bounded fact attachment handles and bank-relative authenticated
+routes independently; malformed metadata does not discard valid text. Chunk attachment sets are not
+substituted for fact provenance. Reflection optionally requests facts, never tool-call traces, and
+returns only bounded attachment handles alongside synthesis. All evidence stays redacted and untrusted;
+no binary download/rendering tool or automatic upload retention is introduced. Binary contents cannot
+be text-redacted and cross the configured model/provider boundary. See [multimodal](docs/multimodal.md).
+
 ### Retention
 
 1. Hermes invokes `sync_turn()` after a completed turn.
@@ -187,8 +209,8 @@ Durability begins only after admission commits. A network timeout may be ambiguo
   stores the capsule; the process-local handoff retains only a source-query digest and small decision.
 - API credentials come from the environment and are not part of destination fingerprints or persisted payload metadata.
 - Reflection is explicit, default-off, fixed to the configured destination/policy, and returned only as
-  untrusted generated evidence; its source records, traces, directives, and usage metadata are not
-  exposed to the model.
+  untrusted generated evidence; full source records, traces, directives, and usage metadata are not
+  exposed to the model. Separately opted-in 0.10.2 attachment handles are bounded provenance only.
 - Outbox rows bind to a credential-free fingerprint of endpoint, bank, schema, tags, and observation scopes.
 - Rows for another destination remain blocked until an operator deliberately restores the old configuration or performs a separately reviewed recovery.
 - Status is passive: it uses SQLite read-only URI opens, performs no application-owned schema

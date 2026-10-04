@@ -40,9 +40,9 @@ ROOT = Path(__file__).resolve().parents[2]
 _RETAIN_TAGS = ("better-hindsight-live",)
 _SEGMENT_MAX_BYTES = 1024
 _DRAIN_TIMEOUT_SECONDS = 45.0
-# Three outbox waits, useful recall, initial mental-model completion, and three
-# maintenance completions can each use a full phase budget; allow startup/HTTP overhead.
-_CHILD_TIMEOUT_SECONDS = 8 * _DRAIN_TIMEOUT_SECONDS + 75.0
+# Five base waits, three maintenance completions, and three multimodal phases
+# can each use a full phase budget; allow startup/HTTP overhead.
+_CHILD_TIMEOUT_SECONDS = 11 * _DRAIN_TIMEOUT_SECONDS + 75.0
 _RETAIN_MISSION = "Retain only durable facts from this synthetic compatibility proof."
 _OBSERVATIONS_MISSION = "Consolidate only synthetic compatibility-proof facts."
 
@@ -815,6 +815,158 @@ def _assert_live_summary_maintenance(home: Path, provider: Any) -> None:
     assert tool({"action": "list"})["total"] == 0
 
 
+def _assert_live_multimodal(inputs: DevelopmentInputs, home: Path) -> None:
+    """Exact 0.10.2 stored bytes/provenance proof, not vision semantic quality.
+
+    Chunk extraction records attachment edges deterministically, including when CI uses
+    its mock LLM. No equality assumption is made about flattened document block text.
+    """
+    import base64
+
+    from better_hermes_hindsight.multimodal import attachment_descriptors
+
+    assert inputs.expected_version == "0.10.2"
+    source = home / "synthetic-attachments"
+    source.mkdir()
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+    )
+    file_bytes = b"Synthetic Northstar attachment guide: cobalt lantern."
+    image, guide = source / "pixel.png", source / "guide.txt"
+    image.write_bytes(png)
+    guide.write_bytes(file_bytes)
+    document = _profile_document(inputs)
+    document["multimodal"] = {"enabled": True, "allowed_roots": [str(source)]}
+    document["recall"]["include_attachments"] = True
+    document["reflect"] = {"enabled": True, "include_attachments": True, "timeout_seconds": 30.0}
+    (home / "better_hindsight" / "config.json").write_text(json.dumps(document))
+    config = load_config(home, environ={"HINDSIGHT_API_KEY": inputs.api_key})
+    bank_path = f"/v1/default/banks/{quote(inputs.bank_id, safe='')}"
+
+    async def chunks_policy() -> None:
+        async with _live_session(inputs) as session:
+            await _raw_json(
+                session,
+                "PATCH",
+                inputs.api_url + bank_path + "/config",
+                json_body={"updates": {"retain_extraction_mode": "chunks"}},
+            )
+            _, readback = await _raw_json(session, "GET", inputs.api_url + bank_path + "/config")
+            assert readback is not None
+            # Readback uses the reviewed API's nested config shape.
+            assert readback["config"]["retain_extraction_mode"] == "chunks"
+
+    asyncio.run(chunks_policy())
+    manager = provider = None
+    barrier: ProfileLockOwner | None = _acquire_sender_barrier(config)
+    try:
+        manager, provider = _start_manager(home)
+        result = json.loads(
+            provider.handle_tool_call(
+                "better_hindsight_retain",
+                {
+                    "content": "Synthetic Northstar attachment guide uses cobalt lantern.",
+                    "context": "synthetic attachment proof",
+                    "attachments": [
+                        {"path": str(image), "kind": "image", "media_type": "image/png"},
+                        {"path": str(guide), "kind": "file", "media_type": "text/plain"},
+                    ],
+                },
+            )
+        )
+        assert result == {"result": "queued_locally"}
+        rows = _wait_for_rows(config, lambda rows: len(rows) == 1)
+        document_id = rows[0].document_id
+        assert str(source) not in rows[0].content
+        _stop_manager(manager, provider)
+        manager = provider = None
+        image.write_bytes(b"changed source must not be sent")
+        guide.unlink()
+        assert barrier is not None
+        barrier.release()
+        barrier = None
+        manager, provider = _start_manager(home)
+        _wait_for_rows(config, lambda rows: not rows)
+
+        async def verify() -> None:
+            async with _live_session(inputs) as session:
+                _, stored = await _raw_json(
+                    session,
+                    "GET",
+                    inputs.api_url + bank_path + "/documents/" + quote(document_id, safe=""),
+                )
+                assert stored is not None
+                attachments = attachment_descriptors(
+                    stored.get("attachments"), bank_id=inputs.bank_id
+                )
+                expected = {
+                    hashlib.sha256(png).hexdigest(): png,
+                    hashlib.sha256(file_bytes).hexdigest(): file_bytes,
+                }
+                assert {item["hash"] for item in attachments} == set(expected)
+                for item in attachments:
+                    assert item["byte_size"] == len(expected[str(item["hash"])])
+                    async with session.get(
+                        inputs.api_url + str(item["url"]), allow_redirects=False
+                    ) as response:
+                        assert response.status == 200
+                        assert await response.read() == expected[str(item["hash"])]
+                _, chunks = await _raw_json(
+                    session,
+                    "GET",
+                    inputs.api_url
+                    + bank_path
+                    + "/documents/"
+                    + quote(document_id, safe="")
+                    + "/chunks",
+                )
+                assert chunks is not None
+                hashes = {
+                    item["hash"]
+                    for chunk in chunks["items"]
+                    for item in attachment_descriptors(
+                        chunk.get("attachments"), bank_id=inputs.bank_id
+                    )
+                }
+                assert hashes == set(expected), "stored chunks lost attachment provenance"
+
+        asyncio.run(verify())
+        recalled = json.loads(
+            provider.handle_tool_call(
+                "better_hindsight_recall",
+                {"query": "Synthetic Northstar attachment guide cobalt lantern"},
+            )
+        )
+        assert recalled.get("result") == "ok"
+        assert any(record.get("attachments") for record in recalled["memories"])
+        reflected = json.loads(
+            provider.handle_tool_call(
+                "better_hindsight_reflect",
+                {"query": "What is the Synthetic Northstar attachment guide?"},
+            )
+        )
+        assert reflected.get("result") == "ok"
+        assert "RECALLED_MEMORY_EVIDENCE_BEGIN" in reflected["context"]
+        reflection_records = [
+            json.loads(line) for line in reflected["context"].splitlines() if line.startswith("{")
+        ]
+        reflection_attachments = [
+            item
+            for record in reflection_records
+            for item in attachment_descriptors(record.get("attachments"), bank_id=inputs.bank_id)
+        ]
+        assert reflection_attachments, "live reflection lost attachment provenance"
+        assert {item["hash"] for item in reflection_attachments} <= {
+            hashlib.sha256(png).hexdigest(),
+            hashlib.sha256(file_bytes).hexdigest(),
+        }, "reflection attachment provenance did not match the admitted fixture"
+    finally:
+        if manager is not None and provider is not None:
+            _stop_manager(manager, provider)
+        if barrier is not None:
+            barrier.release()
+
+
 def _run_live_child() -> int:
     inputs = DevelopmentInputs(
         api_url=os.environ["BETTER_HINDSIGHT_CHILD_API_URL"],
@@ -896,6 +1048,10 @@ def _run_live_child() -> int:
             _assert_live_mental_models(provider)
             if inputs.expected_version == "0.10.2":
                 _assert_live_summary_maintenance(home, provider)
+        if inputs.expected_version == "0.10.2":
+            _stop_manager(manager, provider)
+            manager = provider = None
+            _assert_live_multimodal(inputs, home)
         result = {
             "documents": len(documents),
             "segments": len(expected),
@@ -908,6 +1064,7 @@ def _run_live_child() -> int:
             )
         if inputs.expected_version == "0.10.2":
             result["summary_maintenance"] = "verified"
+            result["multimodal"] = "verified"
         print(json.dumps(result, sort_keys=True))
         return 0
     except BaseException as exception:
@@ -1100,5 +1257,6 @@ def test_isolated_hindsight_smoke(tmp_path: Path) -> None:
             assert payload["mental_models"] == "verified"
         if inputs.expected_version == "0.10.2":
             assert payload["summary_maintenance"] == "verified"
+            assert payload["multimodal"] == "verified"
     finally:
         _delete_disposable_bank(inputs)

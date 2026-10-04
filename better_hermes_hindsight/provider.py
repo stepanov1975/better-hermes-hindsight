@@ -712,6 +712,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         rendered = _bounded_reflection_tool_json(
             response.text,
             max_bytes=config.reflect.output_max_bytes,
+            attachments=response.attachments,
         )
         if rendered is None:
             record("format_error")
@@ -733,6 +734,7 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
             <= {
                 "content",
                 "context",
+                "attachments",
             }
         ):
             return _tool_json(error=_RETAIN_TOOL_INVALID_CONTENT)
@@ -756,14 +758,21 @@ class BetterHindsightMemoryProvider(MemoryProvider):  # type: ignore[misc]
         if not self._retain_enabled or config is None or runtime is None:
             return _tool_json(error=_RETAIN_TOOL_UNAVAILABLE)
         try:
-            admission = runtime.admit_turn(
-                session_id=_RETAIN_TOOL_SESSION_ID,
-                user_content=_RETAIN_TOOL_SOURCE_MARKER,
-                assistant_content=content,
-                segment_count_limit=_RETAIN_TOOL_MAX_SEGMENTS,
-                assistant_context=context,
-                model_selected=True,
-            )
+            if "attachments" in args:
+                if not config.multimodal.enabled:
+                    return _tool_json(error=_RETAIN_TOOL_UNAVAILABLE)
+                admission = runtime.admit_multimodal(
+                    content=content, context=context, attachments=args["attachments"]
+                )
+            else:
+                admission = runtime.admit_turn(
+                    session_id=_RETAIN_TOOL_SESSION_ID,
+                    user_content=_RETAIN_TOOL_SOURCE_MARKER,
+                    assistant_content=content,
+                    segment_count_limit=_RETAIN_TOOL_MAX_SEGMENTS,
+                    assistant_context=context,
+                    model_selected=True,
+                )
             emit_event(
                 logger,
                 "better_hindsight.admission",
@@ -1022,6 +1031,37 @@ def _retain_tool_schema() -> dict[str, Any]:
                     "maxLength": _RETAIN_TOOL_MAX_CONTENT_CHARS,
                     "description": "The self-contained durable information to store.",
                 },
+                "attachments": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 16,
+                    "description": (
+                        "Explicit local image/file snapshots. Allowed roots and byte limits apply. "
+                        "Binary bytes cannot be text-redacted; sent to the configured "
+                        "Hindsight model. "
+                        "No URLs; queued locally is not delivered."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+                            "kind": {"type": "string", "enum": ["image", "file"]},
+                            "media_type": {
+                                "type": "string",
+                                "enum": [
+                                    "image/png",
+                                    "image/jpeg",
+                                    "image/webp",
+                                    "image/gif",
+                                    "application/pdf",
+                                    "text/plain",
+                                ],
+                            },
+                        },
+                        "required": ["path", "kind", "media_type"],
+                        "additionalProperties": False,
+                    },
+                },
                 "context": {
                     "type": "string",
                     "minLength": 1,
@@ -1110,10 +1150,12 @@ def _tool_json(**payload: object) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
-def _bounded_reflection_tool_json(text: str, *, max_bytes: int) -> str | None:
+def _bounded_reflection_tool_json(
+    text: str, *, max_bytes: int, attachments: tuple[dict[str, object], ...] = ()
+) -> str | None:
     """Fit one complete reflection envelope inside the serialized outer tool-response bound."""
 
-    context = format_reflection_context(text, max_bytes=max_bytes)
+    context = format_reflection_context(text, max_bytes=max_bytes, attachments=attachments)
     if not context:
         return None
     rendered = _tool_json(context=context, result="ok", trust=RECALL_TRUST_LABEL)
@@ -1125,7 +1167,9 @@ def _bounded_reflection_tool_json(text: str, *, max_bytes: int) -> str | None:
     best: str | None = None
     while low <= high:
         middle = (low + high) // 2
-        candidate_context = format_reflection_context(text, max_bytes=middle)
+        candidate_context = format_reflection_context(
+            text, max_bytes=middle, attachments=attachments
+        )
         if not candidate_context:
             low = middle + 1
             continue

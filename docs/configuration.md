@@ -13,6 +13,21 @@ uses `mental_models.enabled` for reads/status and additionally `mental_models.cr
 creation; it does not depend on `reflect.enabled` or `retain.enabled`. See
 [mental models](mental-models.md) before enabling this bank-wide Hindsight 0.10.0/0.10.2 capability.
 
+## Multimodal snapshots and attachment provenance
+
+All binary capabilities default off. `multimodal.enabled` plus `retain.enabled` allows explicit model
+retain calls with local attachments; enabled policy requires `multimodal.allowed_roots` (up to 16 narrow
+absolute roots). Defaults: `max_attachments=4` (1–16), `max_decoded_bytes=8388608` (1–16777216 total binary
+bytes), `max_encoded_bytes=12582912` (1–25165824 complete UTF-8 snapshot bytes). Existing aggregate outbox
+capacity applies in addition. Credentials are not allowed in this JSON, and binary bytes cannot be
+text-redacted. Restart after policy edits; pending binary rows are bound to the exact enabled policy.
+
+`recall.include_attachments=false` and `reflect.include_attachments=false` are independent provenance
+opt-ins, not caller overrides or automatic downloads. Reflection still needs `reflect.enabled`.
+Exact Hindsight 0.10.2 is required for binary sends and opted-in attachment reads. The default text wire
+contracts on all older supported versions are unchanged. See [multimodal](multimodal.md) for complete
+configuration/tool examples, MIME allowlist, authenticated paths, replay behavior and data exposure.
+
 ## Sources and precedence
 
 `load_config(hermes_home=...)` reads non-secret local settings only from:

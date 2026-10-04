@@ -85,6 +85,38 @@ def _json_records(context: str) -> list[dict[str, object]]:
     return records
 
 
+@pytest.mark.parametrize("reflection", [False, True])
+@pytest.mark.parametrize("truncate", [False, True])
+def test_optional_attachments_do_not_crowd_out_text(reflection: bool, truncate: bool) -> None:
+    from tests.unit.test_multimodal import descriptor
+
+    text = "Usable recalled text. " * (50 if truncate else 1)
+    attachments = tuple(descriptor(f"att_{index}") for index in range(8))
+    budget = 420
+    if reflection:
+        expected = format_reflection_context(text, max_bytes=budget)
+        actual = format_reflection_context(text, max_bytes=budget, attachments=attachments)
+    else:
+        expected = format_recall_context(
+            _response(RecallResult(id="fact", text=text)), max_bytes=budget
+        )
+        response = _response(RecallResult(id="fact", text=text, attachments=attachments))
+        actual, records, selected, truncated = (
+            formatting_module.format_recall_context_with_selected_results_and_provenance(
+                response, max_bytes=budget
+            )
+        )
+        assert records == _json_records(expected)
+        assert selected == response.results
+        assert truncated == [truncate]
+    assert actual == expected
+    assert len(actual.encode("utf-8")) <= budget
+    memory = _json_records(actual)[0]["memory"]
+    assert isinstance(memory, str)
+    assert memory.startswith("Usable recalled text.")
+    assert "attachments" not in _json_records(actual)[0]
+
+
 def test_query_projection_strips_only_complete_recognized_provider_envelopes() -> None:
     legacy_begin = "[BETTER_HINDSIGHT_HISTORICAL_EVIDENCE_BEGIN]"
     legacy_end = "[BETTER_HINDSIGHT_HISTORICAL_EVIDENCE_END]"
