@@ -48,8 +48,9 @@ See [compatibility proof](docs/compatibility.md#exact-hindsight-0102-source-audi
 The prior isolated 0.10.0/0.10.2 proofs used the official mock LLM: they establish synthetic lifecycle
 compatibility, not hosted-LLM quality/cost or a production migration/restore rehearsal. Revalidate the
 intended backend before enabling synthesis; local timeouts and output targets do not cap backend spend.
-The known Semgrep/PyJWT scanner-toolchain audit failure remains visible and nonblocking, separate
-from required source scans and application-runtime audits; this is not an all-green security claim.
+The current development security toolchain pins Semgrep 1.179.0, whose dependency range permits
+patched PyJWT 2.15.x instead of restricting resolution to vulnerable 2.13.x. Scanner-toolchain
+and application-runtime audits remain separate, with no advisory suppressions.
 See [security audit scope](docs/github-security.md#security-domains).
 
 ## Quick start
