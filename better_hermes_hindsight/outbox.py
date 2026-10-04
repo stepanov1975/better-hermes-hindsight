@@ -20,12 +20,12 @@ from typing import Literal, cast
 
 from .config import (
     LEGACY_PAYLOAD_SCHEMA_VERSION,
+    MULTIMODAL_PAYLOAD_SCHEMA,
     OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES,
     PAYLOAD_SCHEMA_VERSION,
     BetterHindsightConfig,
 )
 from .retention import (
-    DOCUMENT_ID_PREFIX,
     RetainedSegment,
     derive_segment_payload_hash,
 )
@@ -306,6 +306,8 @@ class SQLiteOutbox:
     __slots__ = (
         "_closed",
         "_connection",
+        "_config",
+        "_multimodal_destination_fingerprint",
         "_destination_fingerprint",
         "_hermes_home",
         "_legacy_destination_fingerprint",
@@ -328,6 +330,8 @@ class SQLiteOutbox:
         hermes_home: Path,
         profile_lock_identity: ProfileLockIdentity,
     ) -> None:
+        self._config = config
+        self._multimodal_destination_fingerprint = config.multimodal_destination_fingerprint
         self._connection = connection
         self._hermes_home = hermes_home
         self._profile_lock_identity = profile_lock_identity
@@ -539,6 +543,7 @@ class SQLiteOutbox:
                       AND (
                             (destination_fingerprint = ? AND payload_schema = ?)
                          OR (destination_fingerprint = ? AND payload_schema = ?)
+                         OR (destination_fingerprint = ? AND payload_schema = ?)
                       )
                     ORDER BY
                         next_attempt_at,
@@ -554,6 +559,10 @@ class SQLiteOutbox:
                         self._payload_schema,
                         self._legacy_destination_fingerprint,
                         LEGACY_PAYLOAD_SCHEMA_VERSION,
+                        self._multimodal_destination_fingerprint
+                        if self._config.multimodal.enabled and self._config.retain.enabled
+                        else "",
+                        MULTIMODAL_PAYLOAD_SCHEMA,
                     ),
                 ).fetchone()
                 if record is None:
@@ -706,6 +715,7 @@ class SQLiteOutbox:
                       AND (
                             (destination_fingerprint = ? AND payload_schema = ?)
                          OR (destination_fingerprint = ? AND payload_schema = ?)
+                         OR (destination_fingerprint = ? AND payload_schema = ?)
                       )
                     """,
                     (
@@ -713,6 +723,10 @@ class SQLiteOutbox:
                         self._payload_schema,
                         self._legacy_destination_fingerprint,
                         LEGACY_PAYLOAD_SCHEMA_VERSION,
+                        self._multimodal_destination_fingerprint
+                        if self._config.multimodal.enabled and self._config.retain.enabled
+                        else "",
+                        MULTIMODAL_PAYLOAD_SCHEMA,
                     ),
                 ).fetchone()
                 if record is None or record[0] is None:
@@ -835,8 +849,8 @@ class SQLiteOutbox:
             prior = unique.get(segment.document_id)
             if prior is None:
                 unique[segment.document_id] = segment
-            elif _segment_immutable_values(prior, self._destination_fingerprint) == (
-                _segment_immutable_values(segment, self._destination_fingerprint)
+            elif _segment_immutable_values(prior, self._fingerprint(prior)) == (
+                _segment_immutable_values(segment, self._fingerprint(segment))
             ):
                 repeated_count += 1
             else:
@@ -859,11 +873,33 @@ class SQLiteOutbox:
             return None, 0
         return candidates, repeated_count
 
+    def _fingerprint(self, segment: RetainedSegment) -> str:
+        return (
+            self._multimodal_destination_fingerprint
+            if segment.payload_schema == MULTIMODAL_PAYLOAD_SCHEMA
+            else self._destination_fingerprint
+        )
+
     def _valid_segment(self, segment: object) -> bool:
         if not isinstance(segment, RetainedSegment):
             return False
-        if segment.payload_schema != PAYLOAD_SCHEMA_VERSION:
+        if segment.payload_schema not in {PAYLOAD_SCHEMA_VERSION, MULTIMODAL_PAYLOAD_SCHEMA}:
             return False
+        if segment.payload_schema == MULTIMODAL_PAYLOAD_SCHEMA:
+            from .multimodal import decode_envelope
+
+            if not self._config.multimodal.enabled or not self._config.retain.enabled:
+                return False
+            try:
+                decode_envelope(segment.content, self._config)
+                if (
+                    segment.segment_index != 0
+                    or segment.segment_count != 1
+                    or hashlib.sha256(segment.content.encode()).hexdigest() != segment.source_sha256
+                ):
+                    return False
+            except Exception:
+                return False
         if _HASH_PATTERN.fullmatch(segment.payload_hash) is None:
             return False
         if _HASH_PATTERN.fullmatch(segment.source_sha256) is None:
@@ -878,7 +914,12 @@ class SQLiteOutbox:
             return False
         if not isinstance(segment.content, str) or not segment.content:
             return False
-        if len(segment.content.encode("utf-8")) > self._segment_max_bytes:
+        limit = (
+            self._config.multimodal.max_encoded_bytes
+            if segment.payload_schema == MULTIMODAL_PAYLOAD_SCHEMA
+            else self._segment_max_bytes
+        )
+        if len(segment.content.encode("utf-8")) > limit:
             return False
         expected_hash = derive_segment_payload_hash(
             payload_schema=segment.payload_schema,
@@ -889,7 +930,7 @@ class SQLiteOutbox:
         )
         return (
             segment.payload_hash == expected_hash
-            and segment.document_id == DOCUMENT_ID_PREFIX + expected_hash
+            and segment.document_id == segment.payload_schema + ":" + expected_hash
         )
 
     def _admit_in_transaction(
@@ -918,7 +959,7 @@ class SQLiteOutbox:
             if existing is None:
                 new_segments.append(segment)
                 continue
-            if tuple(existing) != _segment_immutable_values(segment, self._destination_fingerprint):
+            if tuple(existing) != _segment_immutable_values(segment, self._fingerprint(segment)):
                 return AdmissionResult(AdmissionStatus.CONFLICT)
             duplicate_count += 1
 
@@ -984,7 +1025,7 @@ class SQLiteOutbox:
                     segment.segment_index,
                     segment.segment_count,
                     segment.content,
-                    self._destination_fingerprint,
+                    self._fingerprint(segment),
                     timestamp,
                     timestamp,
                     timestamp,
@@ -1097,6 +1138,8 @@ def _read_status_snapshot(
                             AND payload_schema = :payload_schema)
                         OR (destination_fingerprint = :legacy_destination
                             AND payload_schema = :legacy_payload_schema)
+                        OR (destination_fingerprint = :multimodal_destination
+                            AND payload_schema = :multimodal_payload_schema)
                     ) THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(CASE
                     WHEN (
@@ -1104,6 +1147,8 @@ def _read_status_snapshot(
                             AND payload_schema = :payload_schema)
                         OR (destination_fingerprint = :legacy_destination
                             AND payload_schema = :legacy_payload_schema)
+                        OR (destination_fingerprint = :multimodal_destination
+                            AND payload_schema = :multimodal_payload_schema)
                     )
                      AND state = 'sending' THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(CASE
@@ -1112,6 +1157,8 @@ def _read_status_snapshot(
                             AND payload_schema = :payload_schema)
                         OR (destination_fingerprint = :legacy_destination
                             AND payload_schema = :legacy_payload_schema)
+                        OR (destination_fingerprint = :multimodal_destination
+                            AND payload_schema = :multimodal_payload_schema)
                     )
                      AND state = 'pending' AND attempt_count > 0 THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(CASE
@@ -1120,6 +1167,8 @@ def _read_status_snapshot(
                             AND payload_schema = :payload_schema)
                         OR (destination_fingerprint = :legacy_destination
                             AND payload_schema = :legacy_payload_schema)
+                        OR (destination_fingerprint = :multimodal_destination
+                            AND payload_schema = :multimodal_payload_schema)
                     )
                      AND state = 'pending' AND attempt_count = 0 THEN 1 ELSE 0 END), 0),
                 COALESCE(SUM(LENGTH(CAST(content AS BLOB)) + :allowance), 0),
@@ -1163,6 +1212,8 @@ def _read_status_snapshot(
                             AND payload_schema = :payload_schema)
                         OR (destination_fingerprint = :legacy_destination
                             AND payload_schema = :legacy_payload_schema)
+                        OR (destination_fingerprint = :multimodal_destination
+                            AND payload_schema = :multimodal_payload_schema)
                     )
                      AND state = 'pending' AND attempt_count > 0
                     THEN next_attempt_at END),
@@ -1177,6 +1228,10 @@ def _read_status_snapshot(
             {
                 "allowance": OUTBOX_ROW_ACCOUNTING_ALLOWANCE_BYTES,
                 "destination": config.destination_fingerprint,
+                "multimodal_destination": config.multimodal_destination_fingerprint
+                if config.multimodal.enabled and config.retain.enabled
+                else "",
+                "multimodal_payload_schema": MULTIMODAL_PAYLOAD_SCHEMA,
                 "legacy_destination": config.legacy_destination_fingerprint,
                 "legacy_payload_schema": LEGACY_PAYLOAD_SCHEMA_VERSION,
                 "payload_schema": config.outbox.payload_schema,
