@@ -27,7 +27,10 @@ tag and repeat the gates on its exact commit. Installation separately requires v
 The default-off mental-model tool exposes list/read/create/status plus separately opt-in refresh
 and Knowledge Page browse/search/read on exact 0.10.2. Operator-only commands maintain definitions,
 refresh policy and deletion, and create pages with exact readback. No existing configuration is
-automatically enabled or synchronized. Creation requires
+automatically enabled or synchronized. Bounded page browse supports offset continuation.
+Immediate failed/cancelled operations are explicit failures; acknowledged refresh IDs survive
+provider deadlines. Legacy pending page bodies remain unwritten, and duplicate-page name
+conflicts are known rejections. Creation requires
 its own opt-in and queued work must be checked, read, and verified. Planning, rewriting, reflection,
 retention, and private evaluation keep their existing defaults; this snapshot enables none of them.
 Content-free ordinary logs and separately opt-in private evaluation remain unchanged. See the

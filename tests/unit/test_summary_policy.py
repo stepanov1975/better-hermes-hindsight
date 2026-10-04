@@ -17,6 +17,8 @@ from better_hermes_hindsight.summary_policy import SummaryPolicy, parse_policy
         {"budget": {}},
         {"refresh_after_consolidation": 1},
         {"refresh_cron": "@daily"},
+        {"refresh_cron": " 0 4 * * *"},
+        {"refresh_cron": "0 4 * * * "},
         {"refresh_cron": "0 0 * * * *"},
         {"refresh_cron": "61 0 * * *"},
         {"refresh_cron": "0 0 * * *", "refresh_after_consolidation": True},

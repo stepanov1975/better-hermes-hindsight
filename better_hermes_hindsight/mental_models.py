@@ -85,7 +85,7 @@ def tool_schema() -> dict[str, Any]:
 def validate_args(args: dict[str, Any]) -> None:
     action = args.get("action")
     keys = {
-        "page_browse": ({"action"}, {"action"}),
+        "page_browse": ({"action"}, {"action", "offset"}),
         "page_search": ({"action", "query"}, {"action", "query"}),
         "page_read": ({"action", "id"}, {"action", "id"}),
         "refresh": ({"action", "id", "reason"}, {"action", "id", "reason"}),
@@ -102,7 +102,7 @@ def validate_args(args: dict[str, Any]) -> None:
     required, allowed = keys[action]
     if not required <= set(args) <= allowed:
         raise ValueError
-    if action == "list":
+    if action in {"list", "page_browse"}:
         offset = args.get("offset", 0)
         if type(offset) is not int or not 0 <= offset <= 100000:
             raise ValueError
@@ -189,7 +189,7 @@ def render(payload: dict[str, object]) -> str:
         payload["truncated"] = True
         while items and len(rendered.encode()) > OUTPUT_MAX_BYTES:
             items.pop()
-            if payload.get("inventory") in {"knowledge_pages_only", "knowledge_pages_and_folders"}:
+            if payload.get("inventory") == "knowledge_pages_only":
                 payload["next_offset"] = None
                 if "returned_hits" in payload:
                     payload["returned_hits"] = len(items)
@@ -216,6 +216,21 @@ def render(payload: dict[str, object]) -> str:
     if len(rendered.encode()) > OUTPUT_MAX_BYTES:
         raise ValueError
     return rendered
+
+
+def submission_result(status_response: str, payload: dict[str, object]) -> str:
+    """Preserve the verified operation state without claiming generated content."""
+    envelope = json.loads(status_response)
+    status = json.loads(
+        next(line for line in envelope["context"].splitlines() if line.startswith("{"))
+    )["status"]
+    payload["status"] = status
+    if status in {"failed", "cancelled"}:
+        payload["result"] = status
+        payload["verification"] = (
+            "Generation did not succeed. Inspect this exact operation and target."
+        )
+    return render(payload)
 
 
 class MentalModels:
@@ -251,7 +266,7 @@ class MentalModels:
 
             pages = KnowledgePages(self.path)
             if action == "page_browse":
-                return await pages.browse(client)
+                return await pages.browse(client, args.get("offset", 0))
             if action == "page_search":
                 return await pages.search(client, redact_sensitive_text(args["query"]))
             result = await pages.read(client, args["id"])
@@ -438,12 +453,13 @@ class MentalModels:
             ),
         }
         try:
-            await self.status(client, model_id, op_id)
+            status_response = await self.status(client, model_id, op_id)
         except Exception:
             return render(self.refresh_unconfirmed[model_id])
         self.refresh_unconfirmed.pop(model_id)
         self.refresh_ambiguities.discard(model_id)
-        return render(
+        return submission_result(
+            status_response,
             {
                 "result": "queued",
                 "id": model_id,
@@ -451,7 +467,7 @@ class MentalModels:
                 "verification": (
                     "Check status once, then read this model and inspect generated content."
                 ),
-            }
+            },
         )
 
     async def create(

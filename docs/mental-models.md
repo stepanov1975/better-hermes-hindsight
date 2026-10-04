@@ -199,7 +199,8 @@ refused, including scopes on disabled recall/reflection.
 
 `creation` changes only future creations, never existing models. `mode` is full/delta, `budget`
 is low/mid/high. `refresh_cron` is a validated five-field cron (UTC); macros and seconds fields
-are refused. Cron and `refresh_after_consolidation=true` are mutually exclusive. Integers must
+and surrounding whitespace are refused rather than normalized. Cron and
+`refresh_after_consolidation=true` are mutually exclusive. Integers must
 not be booleans: interval 0–31536000 seconds, output 256–8192 tokens, recall/observations each
 1–16384 tokens. Automatic triggers run on the **server**, can incur recurring cost even when
 Hermes is stopped, and are not cancelled by local deadlines. The minimum interval is server
@@ -239,10 +240,14 @@ model allowance includes backing models; there is no automatic standalone-to-pag
 Page IDs are `kp-` plus 32 lowercase hexadecimal characters; folder IDs are `kf-` plus 32 hex
 characters (not canonical UUID operation IDs). Always use the exact returned identifier.
 Browse traverses at most 200 nodes / 12 levels, refusing larger/malformed trees; it may truncate
-serialized output at 16 KiB without a continuation. Search is bounded to 10 ranked page hits,
+serialized output at 16 KiB, returning `next_offset` for continuation. Supply that offset
+as `pages browse --offset N` or model-tool `page_browse`'s `offset`; continuation assumes an
+unchanged tree, not a transactionally consistent snapshot. Search is bounded to 10 ranked page hits,
 validates the returned-hit count and finite scores, and **excludes standalone models**. Scores
 are rank-based, not confidence. Read uses stored `body`, never the rendered placeholder markdown;
-`generated_content_present=false` means no generated body. HTTP remains capped at 256 KiB.
+`generated_content_present=false` means no generated body. The exact legacy stored placeholder
+`Generating content...` is projected as empty/unwritten, matching the pinned engine; other
+text is not treated as a placeholder. HTTP remains capped at 256 KiB.
 All projections are redacted, bounded, untrusted generated evidence, not instructions.
 
 Model tool additions (only these argument shapes):
@@ -254,9 +259,11 @@ Model tool additions (only these argument shapes):
 {"action":"page_read","id":"kp-550e8400e29b41d4a716446655440010"}
 ```
 
-Refresh submits once, binds operation status to exact bank/model/task, and returns **queued**,
-never generated success. Check status then read and inspect nonempty content. No operation
-polling/retry loop exists in tools or CLI. Ambiguous submissions require operator reconciliation;
+Refresh submits once and binds operation status to exact bank/model/task. It returns **queued**
+with the observed status for pending/processing/completed work, never generated success.
+Immediate failed/cancelled states are returned explicitly for refresh and operator creation;
+those commands and explicit failed/cancelled status checks exit nonzero. Check status then
+read and inspect nonempty content. No operation polling/retry loop exists in tools or CLI. Ambiguous submissions require operator reconciliation;
 model-runtime reservations prevent a second uncertain refresh in that process. Operator commands
 are finite runtimes: reservations do not survive a subsequent command/process restart. Page
 creation uses server-generated IDs, so reconcile the tree after an uncertain result before
@@ -266,6 +273,10 @@ A validated refresh/page-create acknowledgement retains its exact operation/mode
 that bounded unconfirmed response, including subsequent calls in the same runtime, without
 another write. Reconcile those IDs with explicit status and read commands; an unconfirmed
 acknowledgement does not establish successful generation or verified resource binding.
+Provider deadline cancellation after a validated refresh ACK also preserves known IDs.
+A received page-create HTTP 409 is a definitive name conflict, not an ambiguous write; no
+ambiguity reservation is retained. Other mutation endpoints retain their existing conservative
+409 treatment. No automatic retry is sent.
 
 `test_maintained_summaries.py` exercises real provider/MemoryManager and operator CLI lifecycle
 against synthetic loopback HTTP. The opt-in `test_isolated_hindsight.py` additionally runs exact

@@ -87,7 +87,12 @@ def parse_policy(value: object, *, base: SummaryPolicy | None = None) -> Summary
     if cron is not None:
         from croniter import croniter  # type: ignore[import-untyped]
 
-        if not isinstance(cron, str) or len(cron) > 120 or len(cron.split()) != 5:
+        if (
+            not isinstance(cron, str)
+            or cron != cron.strip()
+            or len(cron) > 120
+            or len(cron.split()) != 5
+        ):
             raise ValueError("Refresh cron requires five fields (UTC).")
         if not croniter.is_valid(cron):
             raise ValueError("Invalid refresh cron.")

@@ -20,6 +20,7 @@ from .mental_models import (
     mapping,
     operation_id,
     render,
+    submission_result,
     text,
     validate_args,
 )
@@ -54,7 +55,7 @@ def register_commands(commands: Any) -> None:
                 parser.add_argument("id")
             if action == "status":
                 parser.add_argument("operation_id")
-            if action == "list":
+            if action in {"list", "browse"}:
                 parser.add_argument("--offset", type=int, default=0)
             if action == "search":
                 parser.add_argument("query")
@@ -171,7 +172,11 @@ def run_operator(config: BetterHindsightConfig, args: dict[str, Any]) -> Managem
             inner = json.loads(
                 next(line for line in payload["context"].splitlines() if line.startswith("{"))
             )
-        failed = "error" in inner or inner.get("result") in {"ambiguous", "unconfirmed"}
+        failed = (
+            "error" in inner
+            or inner.get("result") in {"ambiguous", "unconfirmed", "failed", "cancelled"}
+            or inner.get("status") in {"failed", "cancelled"}
+        )
         return ManagementResult(payload, 3 if failed else 0)
     except (Exception, asyncio.CancelledError):
         # Runtime deadlines may cancel verification after a valid remote acknowledgement.
@@ -295,7 +300,10 @@ async def operator_call(
             )
             if outcome["result"] == "queued":
                 verify_creation(record, policy, redact_sensitive_text(args["name"]))
-                await models.status(client, outcome["id"], outcome["operation_id"])
+                status_response = await models.status(
+                    client, outcome["id"], outcome["operation_id"]
+                )
+                raw = submission_result(status_response, outcome)
             models.creation_unconfirmed = None
             return raw
         return await create_page(models, pages, client, args, policy)
@@ -478,8 +486,19 @@ async def create_page(
             "POST", pages.path + "/pages", body, decoder=decode
         )
     except Exception as error:
-        if isinstance(error, HindsightClientError) and error.status in {422, 429}:
+        if isinstance(error, HindsightClientError) and error.status in {409, 422, 429}:
             models.page_creation_ambiguous = False
+            if error.status == 409:
+                return render(
+                    {
+                        "result": "rejected",
+                        "error": "page_name_conflict",
+                        "verification": (
+                            "No page created. Browse the folder and reuse the "
+                            "existing page or choose a new name."
+                        ),
+                    }
+                )
             raise
         return render(
             {
@@ -506,12 +525,13 @@ async def create_page(
         read = await pages.read(client, page)
         if read["mental_model_id"] != backing:
             raise ValueError
-        await models.status(client, backing, op_id)
+        status_response = await models.status(client, backing, op_id)
     except Exception:
         return render(models.page_creation_unconfirmed)
     models.page_creation_unconfirmed = None
     models.page_creation_ambiguous = False
-    return render(
+    return submission_result(
+        status_response,
         {
             "result": "queued",
             "page_id": page,
@@ -521,5 +541,5 @@ async def create_page(
                 "Creation definition and page binding verified. Check "
                 "status then read body; queued is not generated."
             ),
-        }
+        },
     )

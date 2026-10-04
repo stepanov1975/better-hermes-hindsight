@@ -829,12 +829,19 @@ class ProcessRuntime:
         return self.call(reflect_with_native_timeout, timeout=timeout)
 
     def mental_models(self, args: dict[str, object], *, timeout: float) -> str:
-        from .mental_models import MentalModelClient
+        from .mental_models import MentalModelClient, render
 
         async def operation(client: HindsightClientProtocol) -> str:
             return await self._mental_models.call(cast(MentalModelClient, client), args)
 
-        return self.call(operation, timeout=timeout)
+        try:
+            return self.call(operation, timeout=timeout)
+        except (Exception, asyncio.CancelledError):
+            if args.get("action") == "refresh":
+                known = self._mental_models.refresh_unconfirmed.get(str(args.get("id", "")))
+                if known is not None:
+                    return render(known.copy())
+            raise
 
     def finalize(self) -> bool:
         """Stop all async work before exact outbox, client, then runner closure."""

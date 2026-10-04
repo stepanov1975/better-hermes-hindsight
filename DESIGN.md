@@ -232,7 +232,8 @@ The default-off mental-model tool retains its 0.10.0/0.10.2 pilot and adds separ
 policy defaults, and page creation. No local scheduler, startup reconciliation, folder deletion,
 body editing or automatic page migration is introduced. Policy is operator-owned; model callers
 cannot widen bank/principal/tags or select triggers/budgets. Reads remain generated-untrusted,
-redacted and bounded. Trees are unpaginated and explicitly bounded; page search is distinct from
+redacted and bounded. Backend trees are unpaginated and explicitly bounded; byte-bounded browse
+projections expose offset continuation over an unchanged tree. Page search is distinct from
 standalone model inventory. Refresh validates the existing fixed retrieval/trace policy, submits
 once, then reads bank/model-bound operation identity. Queued/completed acknowledgements are not
 content verification. Edit/delete/page creation require exact readback, including absence and

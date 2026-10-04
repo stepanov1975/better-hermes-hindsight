@@ -83,17 +83,19 @@ class KnowledgePages:
             stack.extend((child, key, depth + 1) for child in reversed(children))
         return result
 
-    async def browse(self, client: MentalModelClient) -> str:
+    async def browse(self, client: MentalModelClient, offset: int = 0) -> str:
         nodes = await self.tree(client)
         return render(
             {
                 "result": "ok",
                 "inventory": "knowledge_pages_and_folders",
-                "items": nodes,
-                "offset": 0,
+                "items": nodes[offset:],
+                "total": len(nodes),
+                "offset": offset,
+                "next_offset": None,
                 "truncated": False,
                 "verification": (
-                    "Unpaginated tree; oversized inventories are refused. "
+                    "Bounded tree; continue with next_offset while inventory is unchanged. "
                     "Standalone models are not pages."
                 ),
             }
@@ -171,6 +173,8 @@ class KnowledgePages:
             body = page.get("body")
             if body is not None and not isinstance(body, str):
                 raise ValueError
+            if body == "Generating content...":
+                body = ""
             return {
                 "result": "ok",
                 "page_id": key,

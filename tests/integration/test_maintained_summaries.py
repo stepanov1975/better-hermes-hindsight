@@ -41,6 +41,8 @@ class Server:
         self.fault = ""
         self.status = "pending"
         self.auto_complete = False
+        self.status_entered = threading.Event()
+        self.status_release = threading.Event()
         state = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -70,6 +72,9 @@ class Server:
                 if path == "/version":
                     self.send({"api_version": state.version})
                 elif "/operations/" in path:
+                    if state.fault == "status_deadline":
+                        state.status_entered.set()
+                        state.status_release.wait(timeout=5)
                     if state.fault == "status_unavailable":
                         self.send({"error": "RAW-PRIVATE-SENTINEL"}, 503)
                         return
@@ -165,6 +170,9 @@ class Server:
                 if state.fault == "reject":
                     self.send({"error": "RAW-PRIVATE-SENTINEL"}, 429)
                     return
+                if state.fault == "page_conflict" and self.path.endswith("/knowledge-base/pages"):
+                    self.send({"detail": "RAW-PRIVATE-SENTINEL"}, 409)
+                    return
                 if self.path.endswith("/refresh"):
                     assert body is None
                     key = self.path.split("/")[-2]
@@ -251,6 +259,7 @@ class Server:
         self.url = f"http://127.0.0.1:{self.http.server_port}"
 
     def close(self) -> None:
+        self.status_release.set()
         self.http.shutdown()
         self.http.server_close()
         self.thread.join(timeout=2)
@@ -933,3 +942,193 @@ def test_standalone_create_cancelled_verification_retains_ack_ids(
     assert code == 0 and reconciled["result"] == "existing"
     assert reconciled["id"] == expected_id
     assert len([r for r in server.requests if r[0] == "POST"]) == 1
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+@pytest.mark.parametrize("action", ["refresh", "create", "page_create"])
+def test_immediate_terminal_generation_state(
+    tmp_path: Path, server: Server, status: str, action: str
+) -> None:
+    config_home(tmp_path, server)
+    server.status = status
+    server.models["fixture"] = fixture_model("fixture")
+    words = (
+        ["summaries", "refresh", "fixture", "--confirm", "fixture"]
+        if action == "refresh"
+        else [
+            "pages" if action == "page_create" else "summaries",
+            "create",
+            "--name",
+            "P",
+            "--source-query",
+            QUESTION,
+            "--confirm",
+        ]
+    )
+    code, result = cli(tmp_path, words)
+    assert code == 3 and result["result"] == result["status"] == status
+    assert result["operation_id"] == OP
+    key = result.get("id", result.get("mental_model_id"))
+    assert isinstance(key, str)
+    assert cli(tmp_path, ["summaries", "status", key, OP])[0] == 3
+    if action == "refresh":
+        manager = host(tmp_path)
+        try:
+            model_result = provider_call(manager, {"action": "refresh", "id": "fixture"})
+            assert model_result["result"] == model_result["status"] == status
+            assert model_result["operation_id"] == OP
+        finally:
+            manager.shutdown_all()
+
+
+@pytest.mark.parametrize("surface", ["provider", "operator"])
+def test_real_refresh_deadline_keeps_ack(tmp_path: Path, server: Server, surface: str) -> None:
+    config_home(tmp_path, server, timeout_seconds=0.5)
+    server.models["fixture"] = fixture_model("fixture")
+    server.fault = "status_deadline"
+    if surface == "operator":
+        code, result = cli(tmp_path, ["summaries", "refresh", "fixture", "--confirm", "fixture"])
+        assert code == 3
+    else:
+        manager = host(tmp_path)
+        try:
+            result = provider_call(manager, {"action": "refresh", "id": "fixture"})
+            assert server.status_entered.is_set()
+            duplicate = provider_call(manager, {"action": "refresh", "id": "fixture"})
+            assert duplicate == result
+        finally:
+            server.status_release.set()
+            manager.shutdown_all()
+    assert server.status_entered.is_set()
+    assert result["result"] == "unconfirmed"
+    assert result["id"] == "fixture" and result["operation_id"] == OP
+    assert len([r for r in server.requests if r[0] == "POST"]) == 1
+
+
+@pytest.mark.parametrize("cron", [" 0 4 * * *", "0 4 * * * ", "\t0 4 * * *\n"])
+@pytest.mark.parametrize("action", ["create", "edit", "page_create"])
+def test_cron_surrounding_whitespace_rejected_before_io(
+    tmp_path: Path, server: Server, cron: str, action: str
+) -> None:
+    config_home(tmp_path, server)
+    words = (
+        ["summaries", "edit", "fixture", "--confirm", "fixture"]
+        if action == "edit"
+        else [
+            "pages" if action == "page_create" else "summaries",
+            "create",
+            "--name",
+            "P",
+            "--source-query",
+            QUESTION,
+            "--confirm",
+        ]
+    )
+    code, result = cli(tmp_path, [*words, "--refresh-cron", cron])
+    assert code == 2 and result["error"] == "arguments_invalid"
+    assert not server.requests
+
+
+@pytest.mark.parametrize(
+    "body,generated",
+    [
+        ("Generating content...", False),
+        ("", False),
+        ("   ", False),
+        ("Generating content... with details", True),
+        (" Generating content... ", True),
+        ("Generated answer", True),
+    ],
+)
+def test_legacy_placeholder_projection(
+    tmp_path: Path, server: Server, body: str, generated: bool
+) -> None:
+    config_home(tmp_path, server)
+    server.models["fixture"] = fixture_model("fixture")
+    server.models["fixture"]["content"] = body
+    server.nodes[PAGE] = {
+        "id": PAGE,
+        "kind": "page",
+        "name": "P",
+        "parent_id": None,
+        "mental_model_id": "fixture",
+        "children": [],
+    }
+    manager = host(tmp_path)
+    try:
+        result = provider_call(manager, {"action": "page_read", "id": PAGE})
+        assert result["generated_content_present"] is generated
+        assert result["content"] == ("" if body == "Generating content..." else body)
+    finally:
+        manager.shutdown_all()
+
+
+def test_page_conflict_is_rejection_and_does_not_reserve(tmp_path: Path, server: Server) -> None:
+    from better_hermes_hindsight.client import HindsightClientProtocol
+    from better_hermes_hindsight.mental_models import MentalModelClient, MentalModels
+    from better_hermes_hindsight.runtime import create_operator_runtime
+    from better_hermes_hindsight.summary_management import operator_call
+
+    config_home(tmp_path, server)
+    server.fault = "page_conflict"
+    words = ["pages", "create", "--name", "P", "--source-query", QUESTION, "--confirm"]
+    code, result = cli(tmp_path, words)
+    assert code == 3 and result["result"] == "rejected"
+    assert result["error"] == "page_name_conflict"
+    assert not server.models and not server.nodes and not server.ops
+    models = MentalModels(load_config(tmp_path))
+    runtime = create_operator_runtime(models.config)
+    args = {"action": "page_create", "name": "P", "source_query": QUESTION, "confirm": True}
+
+    async def operation(client: HindsightClientProtocol) -> str:
+        first = await operator_call(models, cast(MentalModelClient, client), args)
+        assert unwrap(first)["result"] == "rejected"
+        assert models.page_creation_ambiguous is False
+        assert models.page_creation_unconfirmed is None
+        server.fault = ""
+        return await operator_call(models, cast(MentalModelClient, client), args)
+
+    try:
+        assert unwrap(runtime.call(operation, timeout=2))["result"] == "queued"
+    finally:
+        runtime.finalize()
+
+
+@pytest.mark.parametrize("surface", ["provider", "operator"])
+def test_browse_continuation_discovers_entire_bounded_tree(
+    tmp_path: Path, server: Server, surface: str
+) -> None:
+    config_home(tmp_path, server)
+    for n in range(200):
+        key = f"kp-{n:032x}"
+        server.nodes[key] = {
+            "id": key,
+            "kind": "page",
+            "name": "決" * 120,
+            "parent_id": None,
+            "mental_model_id": "fixture",
+            "children": [],
+        }
+    manager = host(tmp_path)
+    offset = 0
+    seen: list[str] = []
+    try:
+        for _ in range(200):
+            if surface == "provider":
+                result = provider_call(manager, {"action": "page_browse", "offset": offset})
+            else:
+                code, result = cli(tmp_path, ["pages", "browse", "--offset", str(offset)])
+                assert code == 0
+            assert result["offset"] == offset and result["total"] == 200
+            seen.extend(item["page_id"] for item in result["items"])
+            next_offset = result["next_offset"]
+            if next_offset is None:
+                break
+            assert result["truncated"] and next_offset == offset + len(result["items"])
+            assert next_offset > offset
+            offset = next_offset
+        assert seen == list(server.nodes)
+        assert len(set(seen)) == 200
+        assert not any(method != "GET" for method, _, _ in server.requests)
+    finally:
+        manager.shutdown_all()
