@@ -1161,7 +1161,17 @@ def test_summary_rename_never_desynchronizes_page_title(
         assert not any(method != "GET" for method, _, _ in server.requests)
         code, edited = cli(
             tmp_path,
-            ["summaries", "edit", "fixture", "--budget", "low", "--confirm", "fixture"],
+            [
+                "summaries",
+                "edit",
+                "fixture",
+                "--name",
+                original_name,
+                "--budget",
+                "low",
+                "--confirm",
+                "fixture",
+            ],
         )
         assert code == 0 and edited["result"] == "definition_verified"
         assert server.models["fixture"]["trigger"]["budget"] == "low"

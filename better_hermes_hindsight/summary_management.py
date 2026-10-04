@@ -322,7 +322,7 @@ async def operator_call(
     if action == "refresh":
         return await models.refresh(client, key)
     if action == "edit":
-        if "name" in args:
+        if "name" in args and redact_sensitive_text(args["name"]) != before.get("name"):
             nodes = await pages.tree(client)
             if any(node["mental_model_id"] == key for node in nodes):
                 return render(
