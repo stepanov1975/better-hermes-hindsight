@@ -322,6 +322,17 @@ async def operator_call(
     if action == "refresh":
         return await models.refresh(client, key)
     if action == "edit":
+        if "name" in args:
+            nodes = await pages.tree(client)
+            if any(node["mental_model_id"] == key for node in nodes):
+                return render(
+                    {
+                        "error": (
+                            "Page-backed summary renames require the Hindsight page interface; "
+                            "no mutation sent. Other definition edits remain supported."
+                        )
+                    }
+                )
         return await edit_definition(models, client, args, before)
     if action != "delete":
         raise ValueError

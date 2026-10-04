@@ -225,6 +225,10 @@ hermes better_hindsight pages search "decisions"
 hermes better_hindsight pages read <page-id>
 ```
 
+Page-backed summary renames are refused without a write: use Hindsight's page interface to
+keep the page title and backing-model name synchronized. Standalone renames and other
+page-backed definition edits remain supported.
+
 Edit PATCHes the **mental-model definition**, preserving unspecified trigger fields and tags,
 then reads the exact target. It does not implicitly refresh or accept body/content editing.
 IDs remain unchanged after editing a question; deterministic reuse refuses a mismatched existing

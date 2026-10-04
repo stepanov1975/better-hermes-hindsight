@@ -28,6 +28,8 @@ The default-off mental-model tool exposes list/read/create/status plus separatel
 and Knowledge Page browse/search/read on exact 0.10.2. Operator-only commands maintain definitions,
 refresh policy and deletion, and create pages with exact readback. No existing configuration is
 automatically enabled or synchronized. Bounded page browse supports offset continuation.
+Page-backed summary renames are refused without a write; use Hindsight's page interface for
+synchronized page/model titles. Standalone renames and other definition edits remain supported.
 Immediate failed/cancelled operations are explicit failures; acknowledged refresh IDs survive
 provider deadlines. Legacy pending page bodies remain unwritten, and duplicate-page name
 conflicts are known rejections. Creation requires

@@ -1132,3 +1132,40 @@ def test_browse_continuation_discovers_entire_bounded_tree(
         assert not any(method != "GET" for method, _, _ in server.requests)
     finally:
         manager.shutdown_all()
+
+
+@pytest.mark.parametrize("page_backed", [False, True])
+def test_summary_rename_never_desynchronizes_page_title(
+    tmp_path: Path, server: Server, page_backed: bool
+) -> None:
+    config_home(tmp_path, server)
+    server.models["fixture"] = fixture_model("fixture")
+    original_name = server.models["fixture"]["name"]
+    if page_backed:
+        server.nodes[PAGE] = {
+            "id": PAGE,
+            "kind": "page",
+            "name": original_name,
+            "parent_id": None,
+            "mental_model_id": "fixture",
+            "children": [],
+        }
+    code, result = cli(
+        tmp_path,
+        ["summaries", "edit", "fixture", "--name", "Changed", "--confirm", "fixture"],
+    )
+    if page_backed:
+        assert code == 3 and "Page-backed summary renames" in result["error"]
+        assert server.models["fixture"]["name"] == original_name
+        assert server.nodes[PAGE]["name"] == original_name
+        assert not any(method != "GET" for method, _, _ in server.requests)
+        code, edited = cli(
+            tmp_path,
+            ["summaries", "edit", "fixture", "--budget", "low", "--confirm", "fixture"],
+        )
+        assert code == 0 and edited["result"] == "definition_verified"
+        assert server.models["fixture"]["trigger"]["budget"] == "low"
+        assert server.nodes[PAGE]["name"] == original_name
+    else:
+        assert code == 0 and result["result"] == "definition_verified"
+        assert server.models["fixture"]["name"] == "Changed"
