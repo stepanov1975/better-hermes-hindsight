@@ -39,6 +39,7 @@ class Server:
         self.ops: dict[str, Any] = {}
         self.requests: list[tuple[str, str, Any]] = []
         self.fault = ""
+        self.rejection_status = 429
         self.status = "pending"
         self.auto_complete = False
         self.status_entered = threading.Event()
@@ -75,6 +76,9 @@ class Server:
                     if state.fault == "status_deadline":
                         state.status_entered.set()
                         state.status_release.wait(timeout=5)
+                    if state.fault == "status_rejected":
+                        self.send({"error": "RAW-PRIVATE-SENTINEL"}, state.rejection_status)
+                        return
                     if state.fault == "status_unavailable":
                         self.send({"error": "RAW-PRIVATE-SENTINEL"}, 503)
                         return
@@ -168,7 +172,7 @@ class Server:
                 body = self.body()
                 state.requests.append(("POST", self.path, body))
                 if state.fault == "reject":
-                    self.send({"error": "RAW-PRIVATE-SENTINEL"}, 429)
+                    self.send({"error": "RAW-PRIVATE-SENTINEL"}, state.rejection_status)
                     return
                 if state.fault == "page_conflict" and self.path.endswith("/knowledge-base/pages"):
                     self.send({"detail": "RAW-PRIVATE-SENTINEL"}, 409)
@@ -1179,3 +1183,263 @@ def test_summary_rename_never_desynchronizes_page_title(
     else:
         assert code == 0 and result["result"] == "definition_verified"
         assert server.models["fixture"]["name"] == "Changed"
+
+
+@pytest.mark.parametrize("status", [422, 429])
+@pytest.mark.parametrize("action", ["create", "page_create", "refresh"])
+def test_cli_definitive_write_rejection_allows_explicit_retry(
+    tmp_path: Path, server: Server, status: int, action: str
+) -> None:
+    config_home(tmp_path, server)
+    server.models["fixture"] = fixture_model("fixture")
+    words = (
+        ["summaries", "refresh", "fixture", "--confirm", "fixture"]
+        if action == "refresh"
+        else [
+            "pages" if action == "page_create" else "summaries",
+            "create",
+            "--name",
+            "P",
+            "--source-query",
+            QUESTION,
+            "--confirm",
+        ]
+    )
+    server.fault = "reject"
+    server.rejection_status = status
+    code, rejected = cli(tmp_path, words)
+    assert code == 3 and rejected["result"] == "rejected"
+    assert rejected["error"] == "summary_write_rejected"
+    assert "explicit attempt" in rejected["verification"]
+    assert not server.nodes and not server.ops
+    assert set(server.models) == {"fixture"}
+    server.fault = ""
+    assert cli(tmp_path, words)[0] == 0
+    assert len([r for r in server.requests if r[0] == "POST"]) == 2
+
+
+@pytest.mark.parametrize("status", [422, 429])
+@pytest.mark.parametrize("action", ["create", "page_create", "refresh"])
+def test_cli_verification_refusal_preserves_ack_not_rejection(
+    tmp_path: Path, server: Server, status: int, action: str
+) -> None:
+    config_home(tmp_path, server)
+    server.models["fixture"] = fixture_model("fixture")
+    server.fault = "status_rejected"
+    server.rejection_status = status
+    words = (
+        ["summaries", "refresh", "fixture", "--confirm", "fixture"]
+        if action == "refresh"
+        else [
+            "pages" if action == "page_create" else "summaries",
+            "create",
+            "--name",
+            "P",
+            "--source-query",
+            QUESTION,
+            "--confirm",
+        ]
+    )
+    code, result = cli(tmp_path, words)
+    assert code == 3 and result["result"] == "unconfirmed"
+    assert result["operation_id"] == OP
+    if action == "page_create":
+        assert result["page_id"] == PAGE and result["mental_model_id"] == "page-backing"
+    else:
+        assert result["id"] == (
+            "fixture" if action == "refresh" else stable_id(load_config(tmp_path), QUESTION)
+        )
+    assert len([r for r in server.requests if r[0] == "POST"]) == 1
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("tags", ["scoped", "api_key=abcd"]),
+        ("keep_trace", True),
+        ("tag_groups", [{"tags": ["private"]}]),
+        ("include_chunks", True),
+        ("response_schema", {"description": "api_key=abcd"}),
+    ],
+)
+def test_cli_readonly_inspection_keeps_mutation_restrictions(
+    tmp_path: Path, server: Server, field: str, value: object
+) -> None:
+    config_home(tmp_path, server)
+    server.models["fixture"] = fixture_model("fixture")
+    if field == "tags":
+        server.models["fixture"][field] = value
+    else:
+        server.models["fixture"]["trigger"][field] = value
+    server.models["fixture"]["trigger"]["backend_private"] = "RAW-PRIVATE-SENTINEL"
+    assert cli(tmp_path, ["summaries", "list"])[0] == 0
+    code, result = cli(tmp_path, ["summaries", "inspect", "fixture"])
+    assert code == 0 and result["id"] == "fixture"
+    assert "abcd" not in json.dumps(result)
+    assert "backend_private" not in result["definition"]["trigger"]
+    if field == "tags":
+        assert result["definition"]["tags"][0] == "scoped"
+    else:
+        assert field in result["definition"]["trigger"]
+    assert (
+        cli(tmp_path, ["summaries", "edit", "fixture", "--budget", "low", "--confirm", "fixture"])[
+            0
+        ]
+        == 3
+    )
+    assert cli(tmp_path, ["summaries", "refresh", "fixture", "--confirm", "fixture"])[0] == 3
+    assert all(method == "GET" for method, _, _ in server.requests)
+
+
+@pytest.mark.parametrize("surface", ["provider", "operator"])
+def test_redacted_page_search_over_bound_has_no_io(
+    tmp_path: Path, server: Server, surface: str
+) -> None:
+    from better_hermes_hindsight.formatting import project_query
+    from better_hermes_hindsight.redaction import redact_sensitive_text
+
+    config_home(tmp_path, server)
+    query = "x" * 1987 + " api_key=abcd"
+    assert len(query) <= 2000 and len(redact_sensitive_text(query)) > 2000
+    assert project_query(query, max_chars=2000, max_tokens=500) == query
+    if surface == "operator":
+        code, result = cli(tmp_path, ["pages", "search", query])
+        assert code == 2 and result["error"] == "arguments_invalid"
+    else:
+        manager = host(tmp_path)
+        try:
+            assert "error" in provider_call(manager, {"action": "page_search", "query": query})
+        finally:
+            manager.shutdown_all()
+    assert server.requests == []
+
+
+@pytest.mark.parametrize("status", ["pending", "processing", "completed", "failed", "cancelled"])
+def test_provider_refresh_reservation_reconciles_only_terminal_status(
+    tmp_path: Path, server: Server, status: str
+) -> None:
+    config_home(tmp_path, server)
+    server.models["fixture"] = fixture_model("fixture")
+    server.fault = "status_unavailable"
+    manager = host(tmp_path)
+    try:
+        first = provider_call(manager, {"action": "refresh", "id": "fixture"})
+        assert first["result"] == "unconfirmed" and first["operation_id"] == OP
+        server.fault = ""
+        server.status = status
+        result = provider_call(manager, {"action": "status", "id": "fixture", "operation_id": OP})
+        assert result["status"] == status
+        refreshed = provider_call(manager, {"action": "refresh", "id": "fixture"})
+        writes = len([r for r in server.requests if r[0] == "POST"])
+        if status in {"pending", "processing"}:
+            assert refreshed == first and writes == 1
+        else:
+            assert writes == 2 and refreshed["operation_id"] == OP
+    finally:
+        manager.shutdown_all()
+
+
+def test_cli_refresh_reads_target_only_once(tmp_path: Path, server: Server) -> None:
+    config_home(tmp_path, server)
+    server.models["fixture"] = fixture_model("fixture")
+    assert cli(tmp_path, ["summaries", "refresh", "fixture", "--confirm", "fixture"])[0] == 0
+    assert (
+        len([r for r in server.requests if r[0] == "GET" and "/mental-models/fixture?" in r[1]])
+        == 1
+    )
+    assert [r[0] for r in server.requests] == ["GET", "GET", "POST", "GET"]
+
+
+@pytest.mark.parametrize("cleanup", ["raises", "false"])
+@pytest.mark.parametrize("action", ["create", "page_create", "refresh", "edit", "delete"])
+@pytest.mark.parametrize("unconfirmed", [False, True])
+def test_cli_cleanup_failure_preserves_mutation_outcome(
+    tmp_path: Path,
+    server: Server,
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup: str,
+    action: str,
+    unconfirmed: bool,
+) -> None:
+    import better_hermes_hindsight.summary_management as management
+
+    config_home(tmp_path, server)
+    server.models["fixture"] = fixture_model("fixture")
+    from better_hermes_hindsight.runtime import ProcessRuntime
+
+    # Real runtime/HTTP work executes; close resources before injecting the cleanup failure.
+    original_finalize = ProcessRuntime.finalize
+    original_run = management.run_operator
+
+    def faulty_finalize(runtime: ProcessRuntime) -> bool:
+        original_finalize(runtime)
+        if cleanup == "raises":
+            raise RuntimeError("RAW-PRIVATE-SENTINEL")
+        return False
+
+    def checked_run(config: Any, args: dict[str, Any]) -> Any:
+        result = original_run(config, args)
+        assert "cleanup_warning" in result.payload
+        assert "RAW-PRIVATE-SENTINEL" not in json.dumps(result.payload)
+        return result
+
+    monkeypatch.setattr(ProcessRuntime, "finalize", faulty_finalize)
+    monkeypatch.setattr(management, "run_operator", checked_run)
+    if unconfirmed:
+        server.fault = {"edit": "patch_noop", "delete": "delete_noop"}.get(
+            action, "status_unavailable"
+        )
+    words = (
+        ["summaries", action, "fixture", "--confirm", "fixture"]
+        if action in {"refresh", "edit", "delete"}
+        else [
+            "pages" if action == "page_create" else "summaries",
+            "create",
+            "--name",
+            "P",
+            "--source-query",
+            QUESTION,
+            "--confirm",
+        ]
+    )
+    if action == "edit":
+        words += ["--budget", "low"]
+    code, result = cli(tmp_path, words)
+    assert code == (3 if unconfirmed else 0)
+    expected = (
+        "unconfirmed"
+        if unconfirmed
+        else {"edit": "definition_verified", "delete": "deleted_verified"}.get(action, "queued")
+    )
+    assert result["result"] == expected
+    if action in {"create", "page_create", "refresh"}:
+        assert result["operation_id"] == OP
+    if action == "page_create":
+        assert result["page_id"] == PAGE and result["mental_model_id"] == "page-backing"
+    elif not unconfirmed or action in {"create", "refresh"}:
+        assert result["id"] == (
+            stable_id(load_config(tmp_path), QUESTION) if action == "create" else "fixture"
+        )
+    assert len([r for r in server.requests if r[0] != "GET"]) == 1
+
+
+@pytest.mark.parametrize("fault", ["operation_binding", "wrong_operation"])
+def test_provider_invalid_terminal_status_cannot_release_refresh(
+    tmp_path: Path, server: Server, fault: str
+) -> None:
+    config_home(tmp_path, server)
+    server.models["fixture"] = fixture_model("fixture")
+    server.fault = "status_unavailable"
+    manager = host(tmp_path)
+    try:
+        first = provider_call(manager, {"action": "refresh", "id": "fixture"})
+        server.fault = fault
+        server.status = "completed"
+        op_id = "550e8400-e29b-41d4-a716-446655440099" if fault == "wrong_operation" else OP
+        assert "error" in provider_call(
+            manager, {"action": "status", "id": "fixture", "operation_id": op_id}
+        )
+        assert provider_call(manager, {"action": "refresh", "id": "fixture"}) == first
+        assert len([r for r in server.requests if r[0] == "POST"]) == 1
+    finally:
+        manager.shutdown_all()

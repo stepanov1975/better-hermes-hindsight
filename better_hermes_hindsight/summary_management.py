@@ -159,6 +159,7 @@ def run_operator(config: BetterHindsightConfig, args: dict[str, Any]) -> Managem
         )
     runtime = create_operator_runtime(config)
     models = MentalModels(config)
+    result: ManagementResult | None = None
     try:
 
         async def operation(client: HindsightClientProtocol) -> str:
@@ -177,7 +178,8 @@ def run_operator(config: BetterHindsightConfig, args: dict[str, Any]) -> Managem
             or inner.get("result") in {"ambiguous", "unconfirmed", "failed", "cancelled"}
             or inner.get("status") in {"failed", "cancelled"}
         )
-        return ManagementResult(payload, 3 if failed else 0)
+        result = ManagementResult(payload, 3 if failed else 0)
+        return result
     except (Exception, asyncio.CancelledError):
         # Runtime deadlines may cancel verification after a valid remote acknowledgement.
         known = None
@@ -188,9 +190,10 @@ def run_operator(config: BetterHindsightConfig, args: dict[str, Any]) -> Managem
         elif args["action"] == "create":
             known = models.creation_unconfirmed
         if known is not None:
-            return ManagementResult(json.loads(render(known)), 3)
+            result = ManagementResult(json.loads(render(known)), 3)
+            return result
         mutation = args["action"] in {"create", "page_create", "edit", "refresh", "delete"}
-        return ManagementResult(
+        result = ManagementResult(
             {
                 "command": command,
                 "result": "unconfirmed" if mutation else "error",
@@ -201,8 +204,17 @@ def run_operator(config: BetterHindsightConfig, args: dict[str, Any]) -> Managem
             },
             3,
         )
+        return result
     finally:
-        runtime.finalize()
+        try:
+            finalized = runtime.finalize()
+        except (Exception, asyncio.CancelledError):
+            finalized = False
+        if not finalized and result is not None:
+            result.payload["cleanup_warning"] = (
+                "Runtime cleanup incomplete; the reported outcome and identities are unchanged. "
+                "Do not retry a mutation because of this warning."
+            )
 
 
 def validate_operator(config: BetterHindsightConfig, args: dict[str, Any]) -> None:
@@ -320,7 +332,7 @@ async def operator_call(
             }
         )
     if action == "refresh":
-        return await models.refresh(client, key)
+        return await models.refresh(client, key, model=before)
     if action == "edit":
         if "name" in args and redact_sensitive_text(args["name"]) != before.get("name"):
             nodes = await pages.tree(client)
@@ -390,12 +402,21 @@ def verify_creation(record: dict[str, Any], policy: SummaryPolicy, name: str) ->
 
 
 def definition(model: dict[str, Any]) -> dict[str, object]:
-    validate_fixed_policy(model)
     policy = mapping(model.get("trigger"))
+
+    def clean(value: object) -> object:
+        if isinstance(value, str):
+            return redact_sensitive_text(value)
+        if isinstance(value, list):
+            return [clean(item) for item in value]
+        if isinstance(value, dict):
+            return {redact_sensitive_text(str(key)): clean(item) for key, item in value.items()}
+        return value
+
     return {
-        "tags": model.get("tags"),
+        "tags": clean(model.get("tags")),
         "max_tokens": model.get("max_tokens"),
-        "trigger": {key: policy.get(key) for key in SummaryPolicy().trigger()},
+        "trigger": {key: clean(policy.get(key)) for key in SummaryPolicy().trigger()},
     }
 
 
@@ -510,7 +531,13 @@ async def create_page(
                         ),
                     }
                 )
-            raise
+            return render(
+                {
+                    "result": "rejected",
+                    "error": "summary_write_rejected",
+                    "verification": "No page created. A later explicit attempt is permitted.",
+                }
+            )
         return render(
             {
                 "result": "ambiguous",

@@ -107,9 +107,10 @@ def validate_args(args: dict[str, Any]) -> None:
         if type(offset) is not int or not 0 <= offset <= 100000:
             raise ValueError
     if action == "page_search":
-        query = text(args["query"], 2000)
-        if project_query(query, max_chars=2000, max_tokens=500) != query:
-            raise ValueError
+        for query in (args["query"], redact_sensitive_text(args["query"])):
+            text(query, 2000)
+            if project_query(query, max_chars=2000, max_tokens=500) != query:
+                raise ValueError
     if action == "page_read":
         from .knowledge_pages import page_id
 
@@ -388,6 +389,14 @@ class MentalModels:
             not in {"pending", "processing", "completed", "failed", "cancelled"}
         ):
             raise ValueError
+        known = self.refresh_unconfirmed.get(model_id)
+        if (
+            status["status"] in {"completed", "failed", "cancelled"}
+            and known is not None
+            and known.get("operation_id") == op_id
+        ):
+            self.refresh_unconfirmed.pop(model_id)
+            self.refresh_ambiguities.discard(model_id)
         # Bank is enforced by the bank-scoped operation route (0.10.0/0.10.2 SQL predicate).
         return render(
             {
@@ -399,10 +408,13 @@ class MentalModels:
             }
         )
 
-    async def refresh(self, client: MentalModelClient, model_id: str) -> str:
+    async def refresh(
+        self, client: MentalModelClient, model_id: str, *, model: dict[str, Any] | None = None
+    ) -> str:
         if model_id in self.refresh_unconfirmed:
             return render(self.refresh_unconfirmed[model_id])
-        model = await self.read(client, model_id)
+        if model is None:
+            model = await self.read(client, model_id)
         from .summary_policy import validate_fixed_policy
 
         validate_fixed_policy(model)
@@ -434,7 +446,16 @@ class MentalModels:
         except Exception as error:
             if isinstance(error, HindsightClientError) and error.status in {422, 429}:
                 self.refresh_ambiguities.discard(model_id)
-                raise
+                return render(
+                    {
+                        "result": "rejected",
+                        "id": model_id,
+                        "error": "summary_write_rejected",
+                        "verification": (
+                            "No refresh submitted. A later explicit attempt is permitted."
+                        ),
+                    }
+                )
             return render(
                 {
                     "result": "ambiguous",
@@ -456,7 +477,7 @@ class MentalModels:
             status_response = await self.status(client, model_id, op_id)
         except Exception:
             return render(self.refresh_unconfirmed[model_id])
-        self.refresh_unconfirmed.pop(model_id)
+        self.refresh_unconfirmed.pop(model_id, None)
         self.refresh_ambiguities.discard(model_id)
         return submission_result(
             status_response,
@@ -536,7 +557,14 @@ class MentalModels:
             # Transport loss, 5xx, and malformed acknowledgements remain ambiguous.
             if isinstance(error, HindsightClientError) and error.status in {422, 429}:
                 self.reservations.discard(model_id)
-                raise
+                return render(
+                    {
+                        "result": "rejected",
+                        "id": model_id,
+                        "error": "summary_write_rejected",
+                        "verification": "No model created. A later explicit attempt is permitted.",
+                    }
+                )
             return render(
                 {
                     "result": "ambiguous",

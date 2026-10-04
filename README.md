@@ -283,7 +283,8 @@ planner keys.
 `better_hindsight_mental_models` adds explicit `list`, `read`, `create`, and `status` actions.
 A direct read reuses an existing generated summary without requesting another reflect synthesis.
 The schema is stable even when disabled; calls require the existing authorized fixed-bank principal.
-No startup/version probe, automatic prefetch, refresh, edit, delete, or scheduler is added.
+No startup/version probe, automatic prefetch, or local scheduler is added. Separately opt-in
+refresh and page reads, plus confirmed operator edit/delete commands, are available on 0.10.2.
 Exact 0.10.2 support preserves the same narrow payload and 500-token projection; other unreviewed
 patch versions remain unsupported. Its changed server-side refresh defaults can change work/cost,
 so validate the intended backend before enabling creation. See the

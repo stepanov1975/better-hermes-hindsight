@@ -1050,12 +1050,16 @@ def _parse_mental_models(value: object) -> MentalModelsConfig:
     pages_enabled = _parse_bool(values.get("pages_enabled", False), "mental_models.pages_enabled")
     if (create_enabled or refresh_enabled or pages_enabled) and not enabled:
         raise _error("mental_models capabilities require mental_models.enabled")
+    try:
+        creation = parse_policy(values.get("creation", {}))
+    except ValueError as error:
+        raise _error(f"mental_models.creation: {error}") from None
     return MentalModelsConfig(
         enabled=enabled,
         create_enabled=create_enabled,
         refresh_enabled=refresh_enabled,
         pages_enabled=pages_enabled,
-        creation=parse_policy(values.get("creation", {})),
+        creation=creation,
         max_models=_parse_positive_int(
             values.get("max_models", 20), "mental_models.max_models", maximum=20
         ),

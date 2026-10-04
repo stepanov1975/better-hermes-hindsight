@@ -926,3 +926,40 @@ def test_invalid_rewrite_preserves_direct_query(
         assert mailbox.consume(source_query="What did we decide?", session_id="session-a") is None
     finally:
         mailbox.deactivate(token=token)
+
+
+@pytest.mark.parametrize(
+    "creation",
+    [
+        {"mode": "invalid"},
+        {"refresh_cron": "@hourly"},
+        {"max_tokens": 128},
+        {"unknown": "RAW-PRIVATE-SENTINEL"},
+        "invalid",
+    ],
+)
+def test_invalid_summary_creation_config_is_fail_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, creation: object
+) -> None:
+    from better_hermes_hindsight.config import ConfigError
+
+    _write_config(tmp_path)
+    path = tmp_path / "better_hindsight" / "config.json"
+    config = json.loads(path.read_text())
+    config["mental_models"] = {"creation": creation}
+    path.write_text(json.dumps(config))
+    with pytest.raises(ConfigError, match="mental_models.creation") as error:
+        load_config(tmp_path, environ={})
+    assert "RAW-PRIVATE-SENTINEL" not in str(error.value)
+    decision = _FakeJev("skip", monkeypatch)
+    rewrite_llm = _FakeLlm({"query": "rewritten"})
+    mailbox = _mailbox(tmp_path)
+    token = mailbox.activate(session_id="session-a")
+    try:
+        RecallPlanner(tmp_path, rewrite_llm).on_pre_llm_call(
+            user_message="What did we decide?", session_id="session-a", turn_id="turn-a"
+        )
+        assert not decision.calls and not rewrite_llm.calls
+        assert mailbox.consume(source_query="What did we decide?", session_id="session-a") is None
+    finally:
+        mailbox.deactivate(token=token)
