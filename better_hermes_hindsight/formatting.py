@@ -330,17 +330,19 @@ def format_recall_context_with_selected_results_and_provenance(
             memory = record["memory"]
             if not isinstance(memory, str):
                 raise TypeError("recall result text is malformed")
-            fingerprint = _memory_fingerprint(record)
-            _raise_if_deadline_reached(deadline)
-            if fingerprint in seen_memories:
-                continue
-            seen_memories.add(fingerprint)
             separator_bytes = 1 if lines else 0
             line = _serialize_without_crowding_text(
                 record,
                 available_line_bytes=max_bytes - fixed_bytes - lines_bytes - separator_bytes,
             )
             _raise_if_deadline_reached(deadline)
+            # Optional handles may have been removed to preserve the text budget.
+            # Deduplicate the resulting evidence, not the discarded provenance.
+            fingerprint = _memory_fingerprint(record)
+            _raise_if_deadline_reached(deadline)
+            if fingerprint in seen_memories:
+                continue
+            seen_memories.add(fingerprint)
             line_bytes = len(line.encode("utf-8"))
             if fixed_bytes + lines_bytes + separator_bytes + line_bytes <= max_bytes:
                 lines.append(line)

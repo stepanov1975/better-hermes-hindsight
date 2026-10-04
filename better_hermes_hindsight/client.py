@@ -1001,10 +1001,12 @@ def _decode_reflect_response(
     if include_attachments and type(based_on) is dict:
         memories = based_on.get("memories")
         if type(memories) is list:
-            for memory in memories[:8]:
+            for memory in memories[:HINDSIGHT_MAX_RECALL_NESTED_ITEMS]:
                 if type(memory) is dict:
                     attachments.extend(
-                        attachment_descriptors(memory.get("attachments"), bank_id=bank_id)
+                        attachment_descriptors(memory.get("attachments"), bank_id=bank_id)[
+                            : 8 - len(attachments)
+                        ]
                     )
                     if len(attachments) >= 8:
                         break

@@ -239,7 +239,9 @@ def attachment_descriptors(value: object, *, bank_id: str) -> tuple[dict[str, ob
         return ()
     result: list[dict[str, object]] = []
     prefix = f"/v1/default/banks/{quote(bank_id, safe='')}/attachments/"
-    for item in value[:8]:
+    from .client import HINDSIGHT_MAX_RECALL_NESTED_ITEMS
+
+    for item in value[:HINDSIGHT_MAX_RECALL_NESTED_ITEMS]:
         if type(item) is not dict:
             continue
         identifier, digest, kind = item.get("id"), item.get("hash"), item.get("kind")
@@ -272,4 +274,6 @@ def attachment_descriptors(value: object, *, bank_id: str) -> tuple[dict[str, ob
         if type(filename) is str and len(filename) <= 200:
             descriptor["filename"] = _safe_filename(filename)
         result.append(descriptor)
+        if len(result) == 8:
+            break
     return tuple(result)

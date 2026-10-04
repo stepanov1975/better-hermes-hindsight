@@ -187,6 +187,38 @@ def test_descriptors_fail_independently_and_are_bounded() -> None:
     assert attachment_descriptors({}, bank_id="test") == ()
 
 
+def test_descriptor_cap_counts_valid_handles_after_malformed_entries() -> None:
+    valid = [descriptor(f"att_{index}") for index in range(12)]
+    malformed = [None, {}, {**descriptor(), "hash": "invalid"}] * 4
+    assert attachment_descriptors([*malformed, *valid], bank_id="test") == tuple(valid[:8])
+
+
+def test_descriptor_scan_respects_existing_nested_input_bound() -> None:
+    from better_hermes_hindsight.client import HINDSIGHT_MAX_RECALL_NESTED_ITEMS
+
+    padding = [None] * (HINDSIGHT_MAX_RECALL_NESTED_ITEMS - 1)
+    assert attachment_descriptors([*padding, descriptor()], bank_id="test") == (descriptor(),)
+    assert attachment_descriptors([*padding, None, descriptor()], bank_id="test") == ()
+
+
+def test_dropped_handles_deduplicate_text_and_leave_room_for_next_memory() -> None:
+    text_only = RecallResponse([RecallResult("a", "caption"), RecallResult("c", "other memory")])
+    budget = len(format_recall_context(text_only, max_bytes=4096).encode())
+    attached = RecallResponse(
+        [
+            RecallResult("a", "caption", attachments=(descriptor("one"),)),
+            RecallResult("b", "caption", attachments=(descriptor("two"),)),
+            RecallResult("c", "other memory"),
+        ]
+    )
+    output = format_recall_context(attached, max_bytes=budget)
+    records = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
+    assert [record["memory"] for record in records] == ["caption", "other memory"]
+    assert all("attachments" not in record for record in records)
+    assert len(output.encode()) <= budget
+    assert output == format_recall_context(text_only, max_bytes=budget)
+
+
 def test_evidence_preserves_distinct_attachment_records_and_frame() -> None:
     records = [
         RecallResult("a", "caption", attachments=(descriptor("one"),)),

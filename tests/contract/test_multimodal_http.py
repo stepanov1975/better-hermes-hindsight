@@ -96,6 +96,33 @@ def test_attachment_recall_and_reflection_exact_wire(tmp_path: Path) -> None:
     assert [call[1] for call in transport.calls].count("/version") == 1
 
 
+@pytest.mark.parametrize("prefix_count", [12, 4095, 4096])
+def test_reflection_collects_valid_handles_after_attachmentless_sources(
+    tmp_path: Path, prefix_count: int
+) -> None:
+    config = load_config(
+        tmp_path,
+        injected={
+            "bank_id": "test",
+            "reflect": {"enabled": True, "include_attachments": True},
+        },
+        environ={},
+    )
+    transport = Transport()
+    client = HindsightClientAdapter(config=config, transport=transport)
+    handles = [descriptor(f"att_{index}") for index in range(10)]
+    memories: list[object] = [
+        {"id": f"text_{index}", "attachments": [None, {"hash": "invalid"}]}
+        for index in range(prefix_count)
+    ]
+    memories.append({"attachments": [None] * 12 + handles})
+    transport.reply = {"text": "Generated answer", "based_on": {"memories": memories}}
+    assert len(json.dumps(transport.reply).encode()) < 1024 * 1024
+    response = asyncio.run(client.reflect("Question"))
+    assert response.text == "Generated answer"
+    assert response.attachments == (tuple(handles[:8]) if prefix_count < 4096 else ())
+
+
 @pytest.mark.parametrize("version", ["0.10.0", "0.9.0", "0.10.3", "unknown"])
 def test_unsupported_multimodal_never_sends_caption(tmp_path: Path, version: str) -> None:
     config = load_config(

@@ -6,6 +6,30 @@ older supported Hindsight versions. Binary delivery and opt-in attachment-aware 
 exact `/version` response of `0.10.2`; unreviewed patch versions are refused, with no caption-only
 fallback. Configure the server with `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base` before startup.
 
+## Server requirements (exact 0.10.2)
+
+Before enabling binary admission, configure the external server's attachment-reading model.
+It must be recognized as vision-capable: by default this is the retain model, or set
+`HINDSIGHT_API_VLM_MODEL` for the separate vision slot used only by attachment-bearing chunks.
+A text-only retain model can remain in use for other chunks. When a genuinely vision-capable model
+is behind a gateway whose catalogue Hindsight cannot recognize, set
+`HINDSIGHT_API_LLM_VISION=true` on the server. This tri-state override bypasses recognition; it
+does not add vision capability to an incapable model. With no override, false or unknown vision
+support causes inline attachment retention to fail with HTTP 422 rather than silently dropping bytes.
+
+Keep `HINDSIGHT_API_RETAIN_BATCH_ENABLED=false` (the server default). Batch retain cannot carry
+inline attachments and also fails with HTTP 422, even though Better requests synchronous retention.
+These are server settings, not Better configuration keys. Verify model/data/cost exposure and these
+gates before admission: `queued_locally` only proves local durability and the sender cannot repair a
+permanent server configuration rejection by retrying.
+
+Verified against the peeled `v0.10.2` commit
+[`5fc4ce20917b916240cef27c212c387a177f115b`](https://github.com/vectorize-io/hindsight/tree/5fc4ce20917b916240cef27c212c387a177f115b):
+[retain requirements](https://github.com/vectorize-io/hindsight/blob/5fc4ce20917b916240cef27c212c387a177f115b/skills/hindsight-docs/references/developer/retain.md#requirements),
+[server configuration](https://github.com/vectorize-io/hindsight/blob/5fc4ce20917b916240cef27c212c387a177f115b/hindsight-api-slim/hindsight_api/config.py), and
+[attachment model/batch validation](https://github.com/vectorize-io/hindsight/blob/5fc4ce20917b916240cef27c212c387a177f115b/hindsight-api-slim/hindsight_api/engine/memory_engine.py).
+No current-`main` behavior is assumed.
+
 ## Enable deliberately
 
 Merge into the existing profile-local `$HERMES_HOME/better_hindsight/config.json`, replacing the

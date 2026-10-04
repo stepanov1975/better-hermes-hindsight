@@ -334,7 +334,13 @@ evidence, not binary bytes, arbitrary chunk metadata or tool-call traces. Downlo
 bank-relative and authenticated, never public URLs. Binary contents cannot be text-redacted and are
 sent to Hindsight's configured model/provider. No URL download or automatic upload retention is added.
 Changing the binary admission policy blocks pending binary rows rather than replaying under new rules.
-See [multimodal configuration, usage and verification limits](docs/multimodal.md).
+Binary delivery also requires a server-recognized vision-capable attachment model: the retain
+model by default, or the separate `HINDSIGHT_API_VLM_MODEL` slot. For a genuinely vision-capable
+model behind an unrecognized gateway, set server `HINDSIGHT_API_LLM_VISION=true`; this override
+does not give a text-only model vision capability. Keep `HINDSIGHT_API_RETAIN_BATCH_ENABLED=false`:
+0.10.2 refuses inline attachments with HTTP 422 when batch retain is enabled or vision support
+is false/unknown. Local `queued_locally` admission does not check these server gates or guarantee
+delivery. See [multimodal server requirements, configuration and verification limits](docs/multimodal.md).
 
 ### Explicit reflection
 
