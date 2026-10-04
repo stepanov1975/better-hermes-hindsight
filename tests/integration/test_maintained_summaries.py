@@ -105,6 +105,11 @@ class Server:
                         }
                     )
                 elif "/mental-models/" in path:
+                    if state.fault == "patch_readback_rejected" and any(
+                        method == "PATCH" for method, _, _ in state.requests
+                    ):
+                        self.send({"error": "RAW-PRIVATE-SENTINEL"}, state.rejection_status)
+                        return
                     if state.fault == "model_readback_unavailable" and key in state.models:
                         self.send({"error": "RAW-PRIVATE-SENTINEL"}, 503)
                         return
@@ -118,7 +123,13 @@ class Server:
                             else model
                         )
                 elif path.endswith("/tree"):
-                    roots = list(state.nodes.values())
+                    nodes = {key: {**node, "children": []} for key, node in state.nodes.items()}
+                    roots = []
+                    for tree_node in nodes.values():
+                        if tree_node["parent_id"] is None:
+                            roots.append(tree_node)
+                        else:
+                            nodes[tree_node["parent_id"]]["children"].append(tree_node)
                     if state.fault == "tree_oversized":
                         roots = roots * 201
                     if state.fault == "tree_schema":
@@ -142,6 +153,14 @@ class Server:
                     ]
                     if state.fault == "search_schema":
                         hits[0]["score"] = float("nan")
+                    if state.fault == "search_pending":
+                        hits[0]["snippet"] = ""
+                    if state.fault == "search_missing_snippet":
+                        del hits[0]["snippet"]
+                    if state.fault == "search_nonstring_snippet":
+                        hits[0]["snippet"] = None
+                    if state.fault == "search_oversized_snippet":
+                        hits[0]["snippet"] = "x" * 100_001
                     self.send({"results": hits, "total": len(hits)})
                 elif "/pages/" in path:
                     if state.fault == "page_readback_unavailable":
@@ -155,7 +174,11 @@ class Server:
                         self.send(
                             {
                                 "id": "wrong" if state.fault == "page_binding" else key,
-                                "name": node["name"],
+                                "name": "Wrong resource name"
+                                if state.fault == "page_resource_name"
+                                else node["name"] + "x"
+                                if state.fault == "page_resource_name_oversized"
+                                else node["name"],
                                 "type": "knowledge-page",
                                 "tags": [],
                                 "body": model["content"],
@@ -217,6 +240,12 @@ class Server:
                         "children": [],
                         "tags": [],
                     }
+                if is_page and state.fault == "page_wrong_parent":
+                    state.nodes[PAGE]["parent_id"] = None if body["parent_id"] else FOLDER
+                if is_page and state.fault == "page_node_name":
+                    state.nodes[PAGE]["name"] = "Wrong node name"
+                if is_page and state.fault == "page_node_name_oversized":
+                    state.nodes[PAGE]["name"] += "x"
                 state.ops["model"] = key
                 if state.fault == "ambiguous":
                     self.send({"error": "RAW-PRIVATE-SENTINEL"}, 500)
@@ -235,6 +264,9 @@ class Server:
                 state.requests.append(("PATCH", self.path, body))
                 key = self.path.rsplit("/", 1)[-1]
                 assert "/mental-models/" in self.path and "/nodes/" not in self.path
+                if state.fault == "reject":
+                    self.send({"error": "RAW-PRIVATE-SENTINEL"}, state.rejection_status)
+                    return
                 if state.fault != "patch_noop":
                     model = state.models[key]
                     for field, value in body.items():
@@ -1186,7 +1218,136 @@ def test_summary_rename_never_desynchronizes_page_title(
 
 
 @pytest.mark.parametrize("status", [422, 429])
-@pytest.mark.parametrize("action", ["create", "page_create", "refresh"])
+def test_edit_verification_rejection_remains_unconfirmed(
+    tmp_path: Path, server: Server, status: int
+) -> None:
+    config_home(tmp_path, server)
+    server.models["fixture"] = fixture_model("fixture")
+    server.fault = "patch_readback_rejected"
+    server.rejection_status = status
+    code, result = cli(
+        tmp_path,
+        ["summaries", "edit", "fixture", "--budget", "low", "--confirm", "fixture"],
+    )
+    assert code == 3 and result["result"] == "unconfirmed"
+    assert server.models["fixture"]["trigger"]["budget"] == "low"
+    assert len([r for r in server.requests if r[0] == "PATCH"]) == 1
+
+
+@pytest.mark.parametrize("parent", [None, FOLDER])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "",
+        "page_wrong_parent",
+        "page_node_name",
+        "page_resource_name",
+        "page_node_name_oversized",
+        "page_resource_name_oversized",
+    ],
+)
+def test_page_create_checks_requested_metadata_before_clearing_ack(
+    tmp_path: Path, server: Server, parent: str | None, fault: str
+) -> None:
+    from better_hermes_hindsight.client import HindsightClientProtocol
+    from better_hermes_hindsight.mental_models import MentalModelClient, MentalModels
+    from better_hermes_hindsight.runtime import create_operator_runtime
+    from better_hermes_hindsight.summary_management import operator_call
+
+    config_home(tmp_path, server)
+    server.nodes[FOLDER] = {
+        "id": FOLDER,
+        "kind": "folder",
+        "name": "Folder",
+        "parent_id": None,
+        "mental_model_id": None,
+        "children": [],
+    }
+    server.fault = fault
+    models = MentalModels(load_config(tmp_path))
+    runtime = create_operator_runtime(models.config)
+    args = {
+        "action": "page_create",
+        "name": "P" * 120 if fault.endswith("oversized") else "P",
+        "source_query": QUESTION,
+        "parent_id": parent,
+        "confirm": True,
+    }
+
+    async def operation(client: HindsightClientProtocol) -> str:
+        first = await operator_call(models, cast(MentalModelClient, client), args)
+        if fault:
+            assert models.page_creation_unconfirmed is not None
+            server.fault = ""
+            second = await operator_call(models, cast(MentalModelClient, client), args)
+            assert unwrap(first) == unwrap(second)
+        else:
+            assert models.page_creation_unconfirmed is None
+        return first
+
+    try:
+        result = unwrap(runtime.call(operation, timeout=2))
+    finally:
+        runtime.finalize()
+    assert result["result"] == ("unconfirmed" if fault else "queued")
+    assert result["page_id"] == PAGE and result["mental_model_id"] == "page-backing"
+    assert result["operation_id"] == OP
+    assert len([r for r in server.requests if r[0] == "POST"]) == 1
+    assert len([r for r in server.requests if r[1].endswith("/tree")]) == 2
+    assert len([r for r in server.requests if r[1].endswith(f"/pages/{PAGE}")]) == (
+        0 if fault.startswith("page_node_name") else 1
+    )
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_model_refresh_requires_explicit_true(
+    tmp_path: Path, server: Server, enabled: bool
+) -> None:
+    config_home(tmp_path, server, refresh_enabled=enabled)
+    server.models["fixture"] = fixture_model("fixture")
+    manager = host(tmp_path)
+    try:
+        result = provider_call(manager, {"action": "refresh", "id": "fixture"})
+        if enabled:
+            assert result["result"] == "queued"
+            assert len([r for r in server.requests if r[0] == "POST"]) == 1
+        else:
+            assert "error" in result and server.requests == []
+    finally:
+        manager.shutdown_all()
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "search_pending",
+        "search_missing_snippet",
+        "search_nonstring_snippet",
+        "search_oversized_snippet",
+    ],
+)
+def test_pending_page_search_accepts_only_bounded_string_snippets(
+    tmp_path: Path, server: Server, fault: str
+) -> None:
+    config_home(tmp_path, server)
+    code, created = cli(
+        tmp_path, ["pages", "create", "--name", "P", "--source-query", QUESTION, "--confirm"]
+    )
+    assert code == 0 and created["result"] == "queued"
+    assert server.models["page-backing"]["content"] == ""
+    server.fault = fault
+    code, result = cli(tmp_path, ["pages", "search", "P"])
+    if fault == "search_pending":
+        assert code == 0 and result["result"] == "ok"
+        assert result["items"][0]["snippet"] == ""
+        assert result["items"][0]["page_id"] == PAGE
+    else:
+        assert code == 3 and "error" in result
+    assert len([r for r in server.requests if r[0] == "POST"]) == 1
+
+
+@pytest.mark.parametrize("status", [422, 429])
+@pytest.mark.parametrize("action", ["create", "page_create", "refresh", "edit"])
 def test_cli_definitive_write_rejection_allows_explicit_retry(
     tmp_path: Path, server: Server, status: int, action: str
 ) -> None:
@@ -1205,6 +1366,9 @@ def test_cli_definitive_write_rejection_allows_explicit_retry(
             "--confirm",
         ]
     )
+    if action == "edit":
+        words = ["summaries", "edit", "fixture", "--budget", "low", "--confirm", "fixture"]
+    original = json.loads(json.dumps(server.models["fixture"]))
     server.fault = "reject"
     server.rejection_status = status
     code, rejected = cli(tmp_path, words)
@@ -1213,9 +1377,11 @@ def test_cli_definitive_write_rejection_allows_explicit_retry(
     assert "explicit attempt" in rejected["verification"]
     assert not server.nodes and not server.ops
     assert set(server.models) == {"fixture"}
+    assert server.models["fixture"] == original
     server.fault = ""
     assert cli(tmp_path, words)[0] == 0
-    assert len([r for r in server.requests if r[0] == "POST"]) == 2
+    method = "PATCH" if action == "edit" else "POST"
+    assert len([r for r in server.requests if r[0] == method]) == 2
 
 
 @pytest.mark.parametrize("status", [422, 429])

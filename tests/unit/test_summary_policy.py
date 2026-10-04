@@ -55,6 +55,12 @@ def test_merge_preserves_operator_defaults() -> None:
     assert SummaryPolicy().trigger()["refresh_cron"] is None
 
 
+def test_refresh_optin_defaults_false(tmp_path: Path) -> None:
+    config = load_config(tmp_path, injected={"mental_models": {"enabled": True}}, environ={})
+    assert config.mental_models.refresh_enabled is False
+    assert config.mental_models.pages_enabled is False
+
+
 @pytest.mark.parametrize("flag", ["refresh_enabled", "pages_enabled"])
 def test_optins_require_reads(tmp_path: Path, flag: str) -> None:
     with pytest.raises(ValueError):

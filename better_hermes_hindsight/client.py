@@ -482,10 +482,13 @@ def _status_outcome(status: int) -> str:
 
 
 def is_available() -> bool:
-    """Return whether both installed runtime dependencies are importable."""
+    """Return whether all installed runtime dependencies are importable."""
 
     try:
-        return all(find_spec(module) is not None for module in ("aiohttp", "aiodns", "tiktoken"))
+        return all(
+            find_spec(module) is not None
+            for module in ("aiohttp", "aiodns", "tiktoken", "croniter")
+        )
     except (ImportError, ValueError):
         return False
 

@@ -442,12 +442,23 @@ async def edit_definition(
     if "max_tokens" in changes:
         body["max_tokens"] = changes["max_tokens"]
     key = args["id"]
-    await client.mental_model_request(
-        "PATCH",
-        f"{models.path}/mental-models/{quote(key, safe='')}",
-        body,
-        decoder=lambda value: models.decode_model(value, key, None),
-    )
+    try:
+        await client.mental_model_request(
+            "PATCH",
+            f"{models.path}/mental-models/{quote(key, safe='')}",
+            body,
+            decoder=lambda value: models.decode_model(value, key, None),
+        )
+    except HindsightClientError as error:
+        if error.status not in {422, 429}:
+            raise
+        return render(
+            {
+                "result": "rejected",
+                "error": "summary_write_rejected",
+                "verification": "No definition changed. A later explicit attempt is permitted.",
+            }
+        )
     after = await models.read(client, key)
     expected_trigger = {**current, **trigger}
     if mapping(after.get("trigger")) != expected_trigger or after.get("tags") != before.get("tags"):
@@ -560,8 +571,12 @@ async def create_page(
     try:
         record = await models.read(client, backing, query=cast(str, body["source_query"]))
         verify_creation(record, policy, cast(str, body["name"]))
-        read = await pages.read(client, page)
-        if read["mental_model_id"] != backing:
+        read = await pages.read(client, page, expected_name=cast(str, body["name"]))
+        if (
+            read["mental_model_id"] != backing
+            or read["parent_id"] != parent
+            or read["name"] != body["name"]
+        ):
             raise ValueError
         status_response = await models.status(client, backing, op_id)
     except Exception:

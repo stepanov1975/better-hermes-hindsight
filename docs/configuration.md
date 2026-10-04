@@ -678,8 +678,9 @@ checks likewise use synthetic content and an explicitly designated bank.
 
 ## Summary maintenance defaults
 
-`mental_models.refresh_enabled=false` separately enables only the model-facing refresh action;
-`mental_models.pages_enabled=false` gates model-facing and operator Knowledge Page operations.
+`mental_models.refresh_enabled` defaults to `false`; set it to `true` to separately enable only
+the model-facing refresh action. `mental_models.pages_enabled` also defaults to `false`; set it
+to `true` to enable model-facing and operator Knowledge Page operations.
 Both require `mental_models.enabled=true`. `mental_models.creation` accepts only `mode`, `budget`,
 `refresh_after_consolidation`, `refresh_cron`, `min_refresh_interval_seconds`, `max_tokens`,
 `recall_max_tokens`, and `observations_max_tokens`; defaults, ranges and complete operator examples

@@ -30,13 +30,19 @@ class KnowledgePages:
     def __init__(self, path: str) -> None:
         self.path = path + "/knowledge-base"
 
-    async def tree(self, client: MentalModelClient) -> list[dict[str, Any]]:
+    async def tree(
+        self, client: MentalModelClient, *, expected_page: tuple[str, str] | None = None
+    ) -> list[dict[str, Any]]:
         return await client.mental_model_request(
-            "GET", self.path + "/tree", decoder=self.decode_tree
+            "GET",
+            self.path + "/tree",
+            decoder=lambda value: self.decode_tree(value, expected_page=expected_page),
         )
 
     @staticmethod
-    def decode_tree(value: object) -> list[dict[str, Any]]:
+    def decode_tree(
+        value: object, *, expected_page: tuple[str, str] | None = None
+    ) -> list[dict[str, Any]]:
         roots = mapping(value).get("roots")
         if not isinstance(roots, list):
             raise ValueError
@@ -51,6 +57,12 @@ class KnowledgePages:
                 raise ValueError("Knowledge tree exceeds bounded inventory.")
             node = mapping(raw)
             key = page_id(node.get("id"))
+            if (
+                expected_page is not None
+                and key == expected_page[0]
+                and node.get("name") != expected_page[1]
+            ):
+                raise ValueError
             if key in seen or node.get("parent_id") != parent:
                 raise ValueError
             seen.add(key)
@@ -128,12 +140,15 @@ class KnowledgePages:
                 ):
                     raise ValueError
                 backing = hit.get("mental_model_id")
+                snippet = hit.get("snippet")
+                if not isinstance(snippet, str) or len(snippet) > 100_000:
+                    raise ValueError
                 items.append(
                     {
                         "page_id": key,
                         "mental_model_id": identifier(backing),
                         "name": safe_text(hit.get("name"), 120),
-                        "snippet": safe_text(hit.get("snippet"), 500),
+                        "snippet": redact_sensitive_text(snippet)[:500],
                         "score": score,
                     }
                 )
@@ -159,8 +174,11 @@ class KnowledgePages:
             decoder=decode,
         )
 
-    async def read(self, client: MentalModelClient, key: str) -> dict[str, object]:
-        nodes = await self.tree(client)
+    async def read(
+        self, client: MentalModelClient, key: str, *, expected_name: str | None = None
+    ) -> dict[str, object]:
+        expected_page = (key, expected_name) if expected_name is not None else None
+        nodes = await self.tree(client, expected_page=expected_page)
         matches = [node for node in nodes if node["page_id"] == key and node["kind"] == "page"]
         if len(matches) != 1:
             raise ValueError
@@ -169,6 +187,8 @@ class KnowledgePages:
         def decode(value: object) -> dict[str, object]:
             page = mapping(value)
             if page.get("id") != key:
+                raise ValueError
+            if expected_name is not None and page.get("name") != expected_name:
                 raise ValueError
             body = page.get("body")
             if body is not None and not isinstance(body, str):
@@ -179,6 +199,7 @@ class KnowledgePages:
                 "result": "ok",
                 "page_id": key,
                 "mental_model_id": node["mental_model_id"],
+                "parent_id": node["parent_id"],
                 "name": safe_text(page.get("name"), 120),
                 "content": redact_sensitive_text(body or ""),
                 "generated_content_present": bool(body and body.strip()),
