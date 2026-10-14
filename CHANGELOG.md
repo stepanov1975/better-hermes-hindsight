@@ -7,6 +7,54 @@ For supported settings and migration guidance, see `docs/configuration.md`.
 
 ## Unreleased
 
+## 0.8.0 - 2026-10-14
+
+Optional source-only snapshot for the standard Hermes Git plugin, collecting the changes since
+`v0.7.1`. No PyPI publication, uploaded wheel/sdist assets, automatic deployment, or changed opt-in
+defaults are included.
+
+### Added
+
+- Explicit opt-in image/file retention and attachment-aware recall/reflection on exact Hindsight
+  **0.10.2**. Authorized local files are snapshotted into the existing durable outbox; retries reuse
+  the committed bytes even if source files change or disappear. Narrow allowed roots, size limits,
+  separate admission/read opt-ins, and the existing principal/bank policy still apply. Binary bytes
+  cannot be text-redacted. The server needs a vision-capable model, `cl100k_base`, and non-batch
+  retention; local admission is not delivery or successful interpretation. See
+  [multimodal requirements and limits](docs/multimodal.md).
+- Maintained-summary and Knowledge Page controls on exact Hindsight **0.10.2**, including separately
+  enabled model-facing refresh and bounded page browse/search/read. Operator-only commands manage
+  definition edits, refresh policy, deletion, and page creation with readback. Optional server-side
+  triggers can incur cost while Hermes is stopped; configured creation policy affects future creations
+  unless an operator explicitly patches an existing definition. Existing configurations are not
+  automatically synchronized or enabled. Generated content remains untrusted; queued or completed
+  work is not content verification. See [summary controls](docs/mental-models.md).
+
+### Fixed
+
+- Reuse Hermes's provider scrub for the bounded planner capsule before Jev decisions, auxiliary
+  rewriting, and input capture, including ordinary text beginning with `data:`. Current/history text
+  shares the host's token learning; older hosts retain Better's existing narrow redactor. This is
+  best-effort credential redaction, not arbitrary-secret detection.
+- Normalize planner reservations independently to match the host's provider-prefetch query, avoiding
+  lost skip/reuse/recall handoffs after host redaction or skill-scaffolding extraction. Preserve
+  consume-once behavior, direct-recall fallback, and applied/unapplied/shadow rewrite semantics.
+
+### Maintenance and validation limits
+
+- Update locked `multidict` to **6.9.1** for **CVE-2026-104874 / GHSA-54p9-h82j-f925**. A plugin lockfile
+  does not upgrade Hermes's selected host environment or replace already imported dependencies;
+  verify the actual runtime and handle any required host update/restart separately.
+- Update CI/auditing tools to `uv` **0.12.18** and Semgrep **1.179.0**, allowing patched PyJWT
+  resolution. Application-runtime and scanner-toolchain audits remain separate; no advisory is suppressed.
+- Keep required Linux CI on the reviewed Hermes commit with Python **3.11–3.13**, and keep the
+  separately scheduled/manual Python **3.14** moving-Hermes and isolated live lanes. Focused v0.22.0
+  planner/handoff checks passed, but known installer/redaction/scanner fixture differences remain in
+  its full suite. This snapshot does not claim an all-green latest-Hermes suite, new live synthesis
+  quality/cost evidence, or a production migration/restore proof. See [compatibility](docs/compatibility.md).
+- Preserve existing text-path support and opt-in policy. New binary and summary/page capabilities
+  remain off by default; enabling backend synthesis still requires deliberate data/cost review.
+
 ## 0.7.1
 
 Optional source-only snapshot for the standard Hermes Git plugin. This release does not publish
