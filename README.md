@@ -7,12 +7,16 @@ Better Hermes Hindsight is an unofficial Hermes memory provider for supported ex
 
 The provider ID is `better_hindsight`, deliberately separate from bundled `hindsight`, so the existing provider and bank remain available for rollback.
 
-## 0.7.1 snapshot
+## 0.8.0 snapshot
 
-This source-only snapshot adds the opt-in mental-model pilot and exact Hindsight 0.10.2 support
-since `v0.7.0`, which already supported 0.10.0. It remains a standard Hermes Git plugin: no
-PyPI publication or uploaded wheel/sdist assets. See [release notes](CHANGELOG.md#071)
-and [immutable rollback](docs/rollback.md#restore-the-prior-better-snapshot). A source version alone
+This source-only snapshot adds explicit opt-in image/file retention with attachment-aware evidence,
+maintained summaries and Knowledge Pages, and planner input-scrubbing/handoff fixes since `v0.7.1`.
+The binary and maintained-summary/page extensions require exact Hindsight 0.10.2 and their documented
+server/policy settings; existing text paths retain their supported versions. It remains a standard
+Hermes Git plugin: no PyPI publication or uploaded wheel/sdist assets. See
+[release notes](CHANGELOG.md#080---2026-10-14), [multimodal requirements](docs/multimodal.md),
+[summary controls](docs/mental-models.md), and
+[immutable rollback](docs/rollback.md#restore-the-prior-better-snapshot). A source version alone
 does not prove that a release has been published or installed; verify the tag and deployed commit.
 
 **Merge is a release action:** a push to `main` that passes the pinned-Hermes CI job automatically
@@ -39,15 +43,23 @@ Content-free ordinary logs and separately opt-in private evaluation remain uncha
 [pilot configuration and limits](#opt-in-mental-model-pilot-hindsight-01000102-only) and
 [private evaluation](#jev-recall-decisions-and-private-evaluation).
 
-The snapshot adds exact Hindsight **0.10.2** support alongside the existing supported versions;
-0.10.0/0.10.2 still require server-side `cl100k_base`. It also fixes new mental-model IDs to fit
-Hindsight's 64-character history limit, so asynchronous generation can finish on both versions.
-Existing overlong IDs are not renamed or deleted; they remain readable and count toward the cap.
-See [compatibility proof](docs/compatibility.md#exact-hindsight-0102-source-audit) and
-[legacy mental-model IDs](docs/mental-models.md#create-status-and-verification) before deploying.
-The prior isolated 0.10.0/0.10.2 proofs used the official mock LLM: they establish synthetic lifecycle
-compatibility, not hosted-LLM quality/cost or a production migration/restore rehearsal. Revalidate the
-intended backend before enabling synthesis; local timeouts and output targets do not cap backend spend.
+The supported text-path versions are unchanged: exact Hindsight **0.8.5, 0.9.1, 0.9.2, 0.10.0,
+and 0.10.2**. Versions 0.10.0/0.10.2 still require server-side `cl100k_base`; binary delivery and
+maintained-summary/Knowledge Page controls are limited to exact 0.10.2. Binary retention additionally
+needs a vision-capable server model and non-batch retention. **Attachment bytes cannot be
+text-redacted** and may be sent to the configured Hindsight model/provider. Local durable admission
+is not remote delivery or successful interpretation. Prior isolated proofs use the official mock LLM:
+they establish synthetic lifecycle behavior, not vision/synthesis quality, hosted-model cost, or a
+production migration/restore rehearsal. Revalidate the intended backend before enabling these options;
+local timeouts and output targets do not cap backend spend. See [multimodal requirements](docs/multimodal.md)
+and [compatibility evidence and limits](docs/compatibility.md).
+
+The planner fixes have focused real-host verification, but the full Hermes v0.22.0 suite still has
+known host-specific installer, redaction-placeholder, and scanner-fixture differences. Green pinned
+CI is not an all-green latest-Hermes claim. The locked `multidict` security update also does not
+upgrade Hermes's selected host environment or replace dependencies already imported by a running
+process; verify actual versions and handle any host update/restart separately.
+
 The current development security toolchain pins Semgrep 1.179.0, whose dependency range permits
 patched PyJWT 2.15.x instead of restricting resolution to vulnerable 2.13.x. Scanner-toolchain
 and application-runtime audits remain separate, with no advisory suppressions.
