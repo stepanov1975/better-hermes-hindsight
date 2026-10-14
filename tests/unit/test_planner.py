@@ -16,6 +16,7 @@ from better_hermes_hindsight.config import (
     PlannerConfig,
     load_config,
 )
+from better_hermes_hindsight.evaluation import EvaluationCapture
 from better_hermes_hindsight.plan_mailbox import InMemoryPlanMailbox, RecallPlan
 from better_hermes_hindsight.planner import RecallPlanner
 from better_hermes_hindsight.shadow_rewrite import drain_shadow_for_tests
@@ -67,6 +68,99 @@ class _FakeJev:
 
 def _mailbox(home: Path) -> InMemoryPlanMailbox:
     return InMemoryPlanMailbox(home)
+
+
+def test_planner_older_host_scrubs_capsule_without_changing_source_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from agent import memory_manager
+
+    monkeypatch.delattr(memory_manager, "_redact_for_provider", raising=False)
+    sample_value = "syntheticPlannerSecret1234567890"
+    current = f"What did we decide? api_key={sample_value}"
+    _write_config(tmp_path)
+    decision = _FakeJev("skip", monkeypatch)
+    llm = _FakeLlm({"query": "Unused"})
+    mailbox = _mailbox(tmp_path)
+    token = mailbox.activate(session_id="session-a")
+    try:
+        RecallPlanner(tmp_path, llm).on_pre_llm_call(
+            user_message=current,
+            conversation_history=[
+                {"role": "assistant", "content": f"Authorization: Bearer {sample_value}"},
+                {"role": "user", "content": current},
+            ],
+            session_id="session-a",
+            turn_id="turn-a",
+        )
+        assert len(decision.calls) == 1
+        assert sample_value not in decision.calls[0]["capsule"]
+        assert json.loads(decision.calls[0]["capsule"])["current_user_message"] != current
+        plan = mailbox.consume(source_query=current, session_id="session-a")
+        assert plan is not None and plan.action == "skip"
+        assert llm.calls == []
+    finally:
+        mailbox.deactivate(token=token)
+
+
+@pytest.mark.parametrize("prefix", ["", "data: "])
+@pytest.mark.parametrize("rewrite", [False, True, "shadow"])
+def test_planner_scrubs_outbound_capsule_before_models_and_capture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rewrite: bool | str, prefix: str
+) -> None:
+    from agent import memory_manager
+
+    scrub = getattr(memory_manager, "_redact_for_provider", None)
+    if scrub is None:
+        pytest.skip("host has no provider egress scrub")
+    sample_value = "syntheticPlannerSecret1234567890"
+    current = f"{prefix}What did we decide about {sample_value}?"
+    history = [
+        {"role": "user", "content": f"{prefix}api_key={sample_value}"},
+        {"role": "assistant", "content": f"Use {sample_value} for the synthetic service."},
+        {"role": "user", "content": current},
+    ]
+    untouched = json.dumps(history)
+    _write_config(tmp_path)
+    path = tmp_path / "better_hindsight/config.json"
+    config = json.loads(path.read_text())
+    config["planner"]["rewrite"] = rewrite
+    path.write_text(json.dumps(config))
+    stages: list[dict[str, object]] = []
+
+    def capture(_self: object, stage: str, **values: object) -> None:
+        if stage == "input":
+            stages.append(values)
+
+    monkeypatch.setattr(EvaluationCapture, "stage", capture)
+    decision = _FakeJev("recall", monkeypatch)
+    llm = _FakeLlm({"query": "Which synthetic policy did we choose?"})
+    mailbox = _mailbox(tmp_path)
+    token = mailbox.activate(session_id="session-a")
+    try:
+        RecallPlanner(tmp_path, llm).on_pre_llm_call(
+            user_message=current,
+            conversation_history=history,
+            session_id="session-a",
+            turn_id="turn-a",
+        )
+        assert drain_shadow_for_tests()
+        assert len(decision.calls) == 1
+        capsule = json.loads(decision.calls[0]["capsule"])
+        assert sample_value not in json.dumps(capsule)
+        assert capsule["current_user_message"] != current
+        assert stages[0]["capsule"] == capsule
+        assert len(llm.calls) == int(rewrite is not False)
+        if llm.calls:
+            assert json.loads(llm.calls[0]["input"][0]["text"]) == capsule
+        assert json.dumps(history) == untouched
+        # History learned this bare token; manager normalization of the current
+        # query alone must not inherit that additional masking.
+        assert scrub(current) == current
+        plan = mailbox.consume(source_query=scrub(current), session_id="session-a")
+        assert plan is not None and plan.action == "recall"
+    finally:
+        mailbox.deactivate(token=token)
 
 
 @pytest.mark.parametrize(

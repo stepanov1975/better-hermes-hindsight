@@ -292,3 +292,180 @@ def test_timestamped_internal_real_host_turn(
     tmp_path: Path, mode: str, kind: str, first_turn: bool
 ) -> None:
     test_real_host_planner_turn_path(tmp_path, "timestamp", mode, kind, first_turn)
+
+
+_HANDOFF_SCRIPT = r"""
+import asyncio
+import json
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+# The same network guard as the real-agent turn proof.
+def audit(event, args):
+    if event in {"socket.connect", "socket.getaddrinfo"}:
+        address = args[1] if event == "socket.connect" else args[0]
+        host = address[0] if isinstance(address, tuple) else address
+        if isinstance(host, str) and host not in {"127.0.0.1", "localhost", "::1"}:
+            raise AssertionError("non-loopback network forbidden")
+sys.addaudithook(audit)
+
+from agent import memory_manager
+from agent.skill_commands import extract_user_instruction_from_skill_message
+import better_hermes_hindsight.planner as planner
+from better_hermes_hindsight.evaluation import drain_evaluation_for_tests
+from better_hermes_hindsight.plan_mailbox import InMemoryPlanMailbox
+from better_hermes_hindsight.provider import BetterHindsightMemoryProvider
+from better_hermes_hindsight.runtime import finalize_process_runtime
+from better_hermes_hindsight.shadow_rewrite import drain_shadow_for_tests
+from tests.fakes.hindsight_server import FakeHindsightServer
+
+home = Path(sys.argv[1])
+action, flavor, mode, rewrite_arg = sys.argv[2:]
+rewrite = {"true": True, "false": False, "shadow": "shadow"}[rewrite_arg]
+sample_value = "syntheticPlannerSecret1234567890"
+query = "What synthetic backup policy did we choose?"
+if flavor in {"secret", "skill"}:
+    query += " api_key=" + sample_value
+elif flavor == "learned":
+    query += " regarding " + sample_value + "?"
+if flavor == "skill":
+    query = ('[IMPORTANT: The user has invoked the "fixture" skill. '
+             'The full skill content is loaded below.]\nSynthetic skill body\n'
+             'The user has provided the following instruction alongside the skill invocation: '
+             + query)
+normalized = extract_user_instruction_from_skill_message(query)
+scrub = getattr(memory_manager, "_redact_for_provider", None)
+source = scrub(normalized) if scrub is not None else normalized
+assert source
+if scrub is not None and flavor in {"secret", "skill"}:
+    assert source != normalized
+if flavor == "learned":
+    assert source == normalized
+
+decisions, rewrites, consumed = [], [], []
+def decide(capsule, *, timeout):
+    decisions.append(json.loads(capsule))
+    return action
+planner.decide_memory = decide
+class Llm:
+    def complete_structured(self, **kwargs):
+        rewrites.append(kwargs)
+        return SimpleNamespace(parsed={"query": "Which synthetic historical backup policy?"})
+original_consume = InMemoryPlanMailbox.consume
+def consume(self, **kwargs):
+    result = original_consume(self, **kwargs)
+    consumed.append((kwargs["source_query"], result))
+    return result
+InMemoryPlanMailbox.consume = consume
+
+async def run():
+    server = FakeHindsightServer(bank_id="fixture-bank", disposable_bank_id="fixture-disposable",
+        error_sentinel="synthetic-error-must-not-leak", expected_api_key=None)
+    await server.start()
+    provider = BetterHindsightMemoryProvider()
+    try:
+        config_dir = home / "better_hindsight"
+        config_dir.mkdir(parents=True)
+        (config_dir / "config.json").write_text(json.dumps({
+            "api_url": server.base_url, "bank_id": "fixture-bank", "single_principal": True,
+            "retain": {"enabled": False}, "recall": {"timeout_seconds": 1.0},
+            "planner": {"mode": mode, "rewrite": rewrite, "timeout_seconds": 1.0},
+            "evaluation": {"enabled": True},
+        }))
+        provider.initialize("fixture-session", hermes_home=home, platform="cli")
+        manager = memory_manager.MemoryManager()
+        manager.add_provider(provider)
+        history = [
+            {"role": "user", "content": "api_key=" + sample_value},
+            {"role": "assistant", "content": "Synthetic backup policy discussion."},
+            {"role": "user", "content": query},
+        ]
+        planner.RecallPlanner(home, Llm()).on_pre_llm_call(
+            user_message=query, conversation_history=history,
+            session_id="fixture-session", turn_id="fixture-turn", is_first_turn=False,
+        )
+        await asyncio.to_thread(manager.prefetch_all, query, session_id="fixture-session")
+        assert await asyncio.to_thread(drain_shadow_for_tests)
+        assert len(consumed) == 1
+        host_query, plan = consumed[0]
+        assert host_query == source
+        assert plan is not None, "manager-scrubbed query lost the exact planner handoff"
+        assert plan.action == action and plan.mode == mode
+        assert len(decisions) == 1
+        assert sample_value not in json.dumps(decisions[0]) or (
+            flavor == "learned" and scrub is None)
+        assert "Synthetic skill body" not in json.dumps(decisions[0])
+        expected_rewrites = int(action == "recall" and rewrite is not False)
+        assert len(rewrites) == expected_rewrites
+        if rewrites:
+            assert json.loads(rewrites[0]["input"][0]["text"]) == decisions[0]
+        expected_recalls = int(mode == "shadow" or action == "recall")
+        assert len(server.records) == expected_recalls
+        if server.records:
+            expected = source
+            if mode == "active" and action == "recall":
+                expected = ("Which synthetic historical backup policy?" if rewrite is True
+                            else source)
+            assert server.records[0].json_body["query"] == expected
+        assert await asyncio.to_thread(drain_evaluation_for_tests)
+        rows = [json.loads(p.read_text()) for p in
+                (home / "better_hindsight/planner_evaluation").glob("*.json")]
+        stages = {row["stage"]: row for row in rows}
+        # Private capture independently applies Better's existing redactor and
+        # may mask host placeholders again; it must not resurrect raw tokens.
+        assert sample_value not in json.dumps(stages["input"]) or (
+            flavor == "learned" and scrub is None)
+        assert {"input", "decision", "handoff", "retrieval"} <= stages.keys()
+        assert len({row["correlation_id"] for row in rows}) == 1
+        return {"action": action, "flavor": flavor, "mode": mode, "rewrite": rewrite_arg,
+                "recalls": len(server.records), "handoff": True,
+                "host": str(Path(memory_manager.__file__).resolve()),
+                "plugin": str(Path(planner.__file__).resolve())}
+    finally:
+        provider.shutdown()
+        assert await asyncio.to_thread(finalize_process_runtime)
+        await server.close()
+
+print(json.dumps(asyncio.run(run()), sort_keys=True))
+"""
+
+
+@pytest.mark.parametrize("action", ["skip", "reuse", "recall"])
+@pytest.mark.parametrize("flavor", ["ordinary", "secret", "skill", "learned"])
+def test_real_manager_exact_scrubbed_planner_handoff(
+    tmp_path: Path, action: str, flavor: str, mode: str = "active", rewrite: str = "true"
+) -> None:
+    home = tmp_path / "hermes-home"
+    completed = subprocess.run(
+        [sys.executable, "-c", _HANDOFF_SCRIPT, str(home), action, flavor, mode, rewrite],
+        cwd=ROOT,
+        env=clean_subprocess_env(
+            tmp_path,
+            hermes_home=home,
+            no_proxy="127.0.0.1,localhost",
+            extra={"PYTHONPATH": str(ROOT)},
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stdout[-2000:] + completed.stderr[-7000:]
+    payload = json.loads(completed.stdout.splitlines()[-1])
+    assert payload["handoff"] is True
+    assert payload["plugin"] == str(ROOT / "better_hermes_hindsight/planner.py")
+    print(json.dumps(payload, sort_keys=True))
+
+
+@pytest.mark.parametrize("mode", ["active", "shadow"])
+@pytest.mark.parametrize("rewrite", ["false", "shadow"])
+def test_real_manager_scrubbed_recall_without_applied_rewrite(
+    tmp_path: Path, mode: str, rewrite: str
+) -> None:
+    test_real_manager_exact_scrubbed_planner_handoff(tmp_path, "recall", "secret", mode, rewrite)
+
+
+@pytest.mark.parametrize("action", ["skip", "reuse"])
+def test_real_manager_scrubbed_shadow_preserves_direct_recall(tmp_path: Path, action: str) -> None:
+    test_real_manager_exact_scrubbed_planner_handoff(tmp_path, action, "secret", "shadow", "shadow")

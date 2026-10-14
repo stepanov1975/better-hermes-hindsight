@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Protocol, cast
 
+from agent import memory_manager
 from agent.memory_provider import is_trivial_prompt
 from agent.skill_commands import extract_user_instruction_from_skill_message
 
@@ -29,6 +30,7 @@ from .plan_mailbox import (
     PlanAction,
     PlanMailboxError,
 )
+from .redaction import redact_sensitive_text
 from .shadow_rewrite import submit_shadow
 from .telemetry import elapsed_milliseconds, emit_event
 
@@ -204,6 +206,37 @@ def _build_capsule(
     }
 
 
+def _scrub_capsule(capsule: dict[str, object]) -> dict[str, object]:
+    scrub = getattr(memory_manager, "_redact_for_provider", None)
+    if scrub is not None:
+        # These are known text fields, not inline media. One temporary leading
+        # space prevents the host's data: exemption while preserving its joint
+        # token learning. Remove only that added space after scrubbing.
+        text_capsule = {
+            "current_user_message": " " + cast(str, capsule["current_user_message"]),
+            "recent_conversation": [
+                {"role": row["role"], "content": " " + row["content"]}
+                for row in cast(list[dict[str, str]], capsule["recent_conversation"])
+            ],
+        }
+        cleaned = cast(dict[str, object], scrub(text_capsule))
+        cleaned["current_user_message"] = cast(str, cleaned["current_user_message"]).removeprefix(
+            " "
+        )
+        for row in cast(list[dict[str, str]], cleaned["recent_conversation"]):
+            row["content"] = row["content"].removeprefix(" ")
+        return cleaned
+    # Older Hermes has no provider egress scrub. Reuse Better's existing narrow
+    # redactor for these known text fields, without changing mailbox identity.
+    return {
+        "current_user_message": redact_sensitive_text(cast(str, capsule["current_user_message"])),
+        "recent_conversation": [
+            {"role": row["role"], "content": redact_sensitive_text(row["content"])}
+            for row in cast(list[dict[str, str]], capsule["recent_conversation"])
+        ],
+    }
+
+
 def _capsule_byte_limit(config: PlannerConfig) -> int:
     max_messages = config.history_max_exchanges * 2
     return (
@@ -303,8 +336,17 @@ class RecallPlanner:
             return
 
         try:
+            # Match the manager's isolated query scrub exactly. A joint capsule
+            # scrub may learn additional historical tokens; those must not alter
+            # this identity. Older hosts pass the extracted query unchanged.
+            scrub = getattr(memory_manager, "_redact_for_provider", None)
+            source_query = cast(str, scrub(current)) if scrub is not None else current
+        except Exception:
+            return
+
+        try:
             if not mailbox.reserve(
-                source_query=current,
+                source_query=source_query,
                 session_id=session,
                 parent_session_id=parent,
                 turn_id=turn_id,
@@ -324,6 +366,7 @@ class RecallPlanner:
         decision: _PlanDecision | None
 
         try:
+            capsule = _scrub_capsule(capsule)
             serialized_capsule = _serialize_capsule(capsule, config.planner)
             capture.stage(
                 "input",
@@ -341,7 +384,7 @@ class RecallPlanner:
                 capture.stage("decision", outcome="internal_message", action="skip", metadata={})
             else:
                 decision = self._jev_plan(
-                    serialized_capsule, current, config.planner, deadline, capture
+                    serialized_capsule, source_query, config.planner, deadline, capture
                 )
             outcome = (
                 "internal_message"
