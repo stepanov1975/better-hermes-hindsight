@@ -184,11 +184,12 @@ when upgrading either project because its behavior continues to evolve.
 The default-off planner uses Jev as its sole decision path via an OpenRouter decision call
 (`~typesafe/jev-latest`, decisions API, not chat completions). It sends a bounded cleaned
 current-message/recent-conversation capsule; this is an additional external data and cost boundary.
-Provide `OPENROUTER_API_KEY` through your normal Hermes secret mechanism. "Cleaned" means
-scaffolding/envelope filtering and bounded ordinary text, **not outbound credential redaction**.
+Provide `OPENROUTER_API_KEY` through your normal Hermes secret mechanism. After scaffolding/envelope
+filtering and bounds, the capsule uses Hermes's provider egress scrub when available; older hosts
+reuse Better's existing narrow redactor. Jev, optional rewriting, and input capture receive that
+scrubbed capsule. This is best-effort redaction, not a guarantee that arbitrary secrets are detected.
 Optional rewriting sends context to the host-selected auxiliary model/provider; Hindsight receives
-the selected projected query. Private-capture redaction and recalled-output redaction do not sanitize
-these outbound inputs. `evaluation.enabled=false` disables local evidence capture, not enabled
+the selected projected query. `evaluation.enabled=false` disables local evidence capture, not enabled
 planner/rewrite requests or their charges. Do not put secrets in conversation inputs. Local deadlines
 and byte/token bounds do not guarantee backend cancellation or cap all model/retry costs.
 
@@ -200,7 +201,7 @@ and byte/token bounds do not guarantee backend cancellation or cap all model/ret
 ```
 
 Active `skip`/`reuse` avoids both rewriting and Hindsight. On `recall`, `rewrite: false` uses
-the original query, `true` can apply a validated rewrite, and `"shadow"` records observations
+the host-normalized current query, `true` can apply a validated rewrite, and `"shadow"` records observations
 without applying the rewritten query. Shadow rewriting publishes the valid gate first, so its
 failure or late result cannot cancel that gate. A nonblocking daemon runs at most one shadow
 rewrite per process, shared across plugin imports; there is no waiting queue. Busy/unavailable
