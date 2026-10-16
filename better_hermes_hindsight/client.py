@@ -738,10 +738,10 @@ class HindsightClientAdapter:
             ),
             decoder=lambda value: _required_exact(_exact_dict(value), "api_version", str),
         )
-        if version != "0.10.2":
+        if version not in {"0.10.2", "1.0.0"}:
             raise HindsightClientError(
                 category,
-                "Better Hindsight multimodal requires Hindsight 0.10.2.",
+                "Better Hindsight multimodal requires Hindsight 0.10.2 or 1.0.0.",
                 reason="schema_invalid",
             )
         self._multimodal_supported = True

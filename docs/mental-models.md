@@ -34,7 +34,7 @@ pilot. Leave it off until proper scope parity is supported.
 
 The stable schema remains advertised before initialization and when disabled, matching the other
 provider tools. Disabled, unauthorized, invalid, or shut-down calls do not perform HTTP requests.
-Only explicit authorized pilot calls check `/version`; exact `api_version="0.10.0"` or `"0.10.2"` is required.
+Only explicit authorized pilot calls check `/version`; exact `api_version="0.10.0"`, `"0.10.2"` or `"1.0.0"` is required.
 Older supported automatic recall/retain behavior is unchanged.
 
 ## One tool, explicit actions
@@ -164,11 +164,11 @@ particularly `hindsight-api-slim/hindsight_api/api/http.py` and
 against [`5fc4ce20917b916240cef27c212c387a177f115b`](https://github.com/vectorize-io/hindsight/tree/5fc4ce20917b916240cef27c212c387a177f115b);
 see the [operation-by-operation audit](compatibility.md#exact-hindsight-0102-source-audit).
 Its initial model content is empty, and its refresh defaults to `mid` iteration budget with
-separate refresh configuration rather than inheriting ad-hoc reflection defaults. On 0.10.2 the payload also explicitly sets `budget=mid`,
+separate refresh configuration rather than inheriting ad-hoc reflection defaults. On 0.10.2/1.0.0 the payload also explicitly sets `budget=mid`,
 `reflect_search_observations_max_tokens=5000`, and
 `reflect_search_observations_include_entities=false`. On 0.10.0 these additive fields are omitted;
-nondefault creation policy requires 0.10.2. Automatic triggers still default off and traces stay off.
-Recheck server-side cost/quality before enabling creation; neither version's output target caps cost.
+nondefault creation policy requires 0.10.2 or 1.0.0. Automatic triggers still default off and traces stay off.
+Recheck server-side cost/quality before enabling creation; none of these versions' output targets caps cost.
 
 `tests/integration/test_mental_models.py` drives the real Hermes `MemoryManager`, Better provider,
 shared async runtime, and bounded HTTP adapter against a synthetic loopback server. It verifies
@@ -181,7 +181,7 @@ request event. Existing HTTP counters and watchdog adapter-contract alerts use t
 
 ## Operator maintenance and Knowledge Pages
 
-New operations require exact Hindsight **0.10.2**. Enable `refresh_enabled` for model-facing
+New operations require exact Hindsight **0.10.2 or 1.0.0**. Enable `refresh_enabled` for model-facing
 refresh and `pages_enabled` for model-facing and operator page access. All flags default false
 and require `enabled=true`. Operator summary edit/refresh/delete requires `enabled` and CLI
 identity authorization plus exact-target confirmation; `refresh_enabled` gates the model tool,
@@ -284,6 +284,6 @@ ambiguity reservation is retained. Other mutation endpoints retain their existin
 
 `test_maintained_summaries.py` exercises real provider/MemoryManager and operator CLI lifecycle
 against synthetic loopback HTTP. The opt-in `test_isolated_hindsight.py` additionally runs exact
-0.10.2 edit/readback, refresh/status/read, page create/browse/search/read, and delete/absence in
+0.10.2/1.0.0 edit/readback, refresh/status/read, page create/browse/search/read, and delete/absence in
 its owned disposable bank. A skipped live gate is not evidence of real backend execution or
 LLM quality/cost. No production enablement or writes are part of this implementation.

@@ -41,8 +41,8 @@ these behaviors through the real installed host where practical.
 
 ## Hindsight compatibility
 
-Better intentionally targets the exact external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, and 0.10.2 HTTP
-contracts. **0.10.0 and 0.10.2 require server-side `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`**; their
+Better intentionally targets the exact external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, 0.10.2, and 1.0.0 HTTP
+contracts. **0.10.0, 0.10.2 and 1.0.0 require server-side `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`**; their
 default `o200k_base` mode is unsupported. The isolated proof below remains a release/deployment gate;
 a version allowlist or short-query canary alone is not proof of tokenizer compatibility. Better
 implements recall, read-only reflection, synchronous retain, bank-config read/patch, and the
@@ -50,10 +50,10 @@ separately opt-in [mental-model pilot](mental-models.md) over `aiohttp`; it does
 on the Hindsight Python SDK. Other Hindsight versions are unsupported until their used operations
 are reviewed and the isolated live proof passes.
 
-Mental-model list/read/create/status is restricted to exact Hindsight **0.10.0 or 0.10.2**, checked via
+Mental-model list/read/create/status is restricted to exact Hindsight **0.10.0, 0.10.2 or 1.0.0**, checked via
 `GET /version` only on explicit authorized pilot calls. It does not change the older supported
 recall/retain paths or add version checks to automatic recall. Loopback tests verify the reviewed
-0.10.0/0.10.2 wire contract, not live backend LLM generation quality or cost.
+0.10.0/0.10.2/1.0.0 wire contract, not live backend LLM generation quality or cost.
 
 These versions expose `POST /v1/default/banks/{bank_id}/reflect` with the narrow fields
 Better uses: `query`, `budget`, `max_tokens`, and optional `tags`/`tags_match`. Their response requires
@@ -63,7 +63,7 @@ contextual policy, mental-model exclusions, and other caller controls. Hindsight
 does not expand model authority.
 
 Deterministic fake-service tests pin this shared wire subset. The explicitly enabled isolated
-live test proves recall and retention; on 0.10.0/0.10.2 it also requires reflection decoding and
+live test proves recall and retention; on 0.10.0/0.10.2/1.0.0 it also requires reflection decoding and
 mental-model list/create/status/read/reuse through the provider. Synthetic mock-LLM success is not
 real-model quality or cost evidence. A deployment enabling either synthesis capability must prove
 its actual isolated LLM configuration; skipped live tests are never backend evidence.
@@ -122,11 +122,13 @@ its existing fail-open behavior and does not preflight server versions or settin
 
 At deployment validation, inspect the running server's configuration for the encoding and query
 ceiling, then use an isolated bank and the exact boundary query above with a verified **500-token**
-server ceiling. Expect a successful recall in compatibility mode and a query-length HTTP 400 in
+server ceiling. On 0.10.0/0.10.2, expect a successful recall in compatibility mode and a query-length HTTP 400 in
 default mode; an empty result set is acceptable, a swallowed fail-open error is not. An above-limit
 raw query (`" tiktoken" * 251`) must still fail with HTTP 400. Success with an unknown or enlarged
 ceiling alone cannot distinguish tokenizers. This one-time operator/integration check avoids adding
-load and latency to every recall or scheduled canary.
+load and latency to every recall or scheduled canary. **1.0.0 is different:** expect HTTP 200
+with truncation, not 400; require the effective-query trace check below and inspect the server
+configuration. Do not apply the older rejection oracle to 1.0.0.
 
 Before declaring a compatible release/deployment, record exact Better and Hermes commits, candidate
 image digest and `/version`, server tokenizer/ceiling, boundary-query HTTP outcomes, and isolated
@@ -190,6 +192,62 @@ production migration/restore rehearsal, or authorization to deploy. Re-run the i
 `BETTER_HINDSIGHT_DEV_EXPECTED_VERSION=0.10.2` for subsequent candidates and retain exact-image
 results separately; deployment still needs the relevant operational gates above.
 
+### Exact Hindsight 1.0.0 contract
+
+The additional exact target is upstream release commit
+[`39c65ffe2f140d0c84cee58566cad8900c5b9908`](https://github.com/vectorize-io/hindsight/tree/39c65ffe2f140d0c84cee58566cad8900c5b9908).
+CI pins the Linux amd64 image manifest
+`sha256:85b5e07e49c00e944db671ffb02855854a7f293a6b7c775c3995ea24bb697870`
+(OCI index `sha256:a88678c038b0e4340822b02a5efc566c56d8176b5bffa731bc433fd37f978e4c`).
+This is an exact-version addition, not a general 1.x allowlist, SDK update, dependency update,
+or Hermes-pin change. No feature is enabled automatically.
+
+The source/API review found the 77 reachable schemas used by Better unchanged, apart from
+additive optional page tag filters which Better does not send. The shared text recall/reflect,
+retain, bank-config, mental-model, attachment and Knowledge Page wire subsets remain valid.
+Explicit feature gates now accept 1.0.0; it takes the modern 0.10.2 creation-policy, summary/page,
+binary and paginated-bank harness branches. The 0.10.0 pilot keeps its legacy payload.
+Unreviewed versions (including 1.0.1, 1.0.0 prereleases and `v1.0.0`) remain refused at these gates.
+Default text recall still makes no version preflight.
+
+Material behavior differences and limits:
+
+- **Tokenizer:** `o200k_base` is still the server default. Keep server
+  `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`, server query ceiling 500, and Better's unchanged
+  packaged local projection (`recall.input_max_tokens=500` by default). Server engine ingress now
+  truncates oversized recall queries rather than returning HTTP 400. Its `len(query) <= ceiling`
+  fast path skips token counting: a short token-dense string can exceed the ceiling unchanged.
+  This is not universal server-side 500-token enforcement. Better's own projection remains bounded.
+- **Live tokenizer oracle:** the isolated 1.0.0 harness sends a locally projected 500-token query,
+  then raw `" tiktoken" * 251` (502 `cl100k_base` tokens and more than 500 characters) with
+  `trace=true`. Require HTTP 200, a results list, and `trace.query.query_text` that is a shorter
+  prefix with exactly 500 locally counted tokens. Inspect only these bounded synthetic counts,
+  never dump the trace. A 200 alone, empty fail-open context, missing trace, wrong token count,
+  enlarged/unknown cap, or short emoji probe does not prove tokenizer policy. Normal calls keep
+  trace off. The older 0.10.0/0.10.2 lanes retain their exact HTTP-400 rejection check.
+- **Retain disconnect:** synchronous retain now cancels on client disconnect. An interrupted call
+  can be uncommitted or committed with its acknowledgement lost. Neither permits local confirmation.
+  Existing destination-bound outbox retries keep the same replace-mode document ID, timestamp and
+  original bytes; no retention architecture change or exactly-once claim is needed. Deterministic
+  loopback/process-kill tests cover both boundaries and restart replay. An outage/restart success
+  is not an actual mid-request disconnect proof against the live server.
+- **Reranker floors:** 1.0.0 rejects `min_scores.reranker` with rank-position rerankers such as
+  TypeSafe. This is provider-conditional, not a blanket incompatibility. Validate the intended
+  provider; explicitly choose a supported pointwise reranker or a suitable `min_scores.final`
+  policy rather than silently changing the configured floor.
+- **Migration/backend:** the added Oracle Text-index migration is a PostgreSQL no-op. This source
+  compatibility change does not rehearse production migration/restore, prove Oracle operation,
+  or authorize a production upgrade/restart.
+
+Deterministic tests preserve older supported versions and refusal branches. The scheduled/manual
+1.0.0 lane must run the complete frozen-candidate isolated gate: retain/restart/replay, useful
+recall, missions/readback, reflection, mental-model generation/read/reuse, modern summary/page
+maintenance, binary byte/provenance readback, ownership and cleanup, plus the tokenizer oracle above.
+Historical scratch-overlay smoke and outage proofs are not final-candidate evidence. Record the
+actual candidate result separately before publication/deployment; a configured CI lane or skipped
+live test is not a pass. Mock-LLM lifecycle success never proves hosted-model quality, vision quality,
+cost ceilings, production migrations, or actual live lost-ack/cancellation convergence.
+
 ## Hermes profile compatibility
 
 Hermes profiles are separate Hermes homes. Better uses the exact `hermes_home` supplied by the host
@@ -233,7 +291,7 @@ CI may follow Hermes `main` and therefore occasionally report an upstream compat
 ## Multimodal feature boundary
 
 Text-only support still spans all listed API versions. The separately opted-in multimodal capability
-requires **exact 0.10.2** (reviewed source `5fc4ce20917b916240cef27c212c387a177f115b`). Version probing
+requires **exact 0.10.2 or 1.0.0** (reviewed source `5fc4ce20917b916240cef27c212c387a177f115b`). Version probing
 occurs only on binary sends or attachment-enabled reads; no startup probe or default text-request
 change is introduced. An older/unknown server cannot receive a caption-only binary fallback.
 `include_attachments` on reflection requests facts and never tool-call traces; recall projects
@@ -241,25 +299,25 @@ attachments already present on fact results/source facts, not retrieved chunk un
 
 Deterministic coverage includes actual provider/runtime fake-service integration and loopback HTTP
 response-loss/process-kill replay of original admitted bytes, document ID and timestamp. The existing
-explicit isolated live harness conditionally adds a 0.10.2 synthetic image/plain-file lifecycle:
+explicit isolated live harness conditionally adds a 0.10.2/1.0.0 synthetic image/plain-file lifecycle:
 chunk extraction policy with exact readback, provider restart after source mutation/deletion, stored
 attachment byte/hash readback through authenticated routes, document/chunk provenance and provider
 recall/reflection. It makes no flattened document-text equality assumption for block inputs. Other
 version lanes keep their text-only proof. The mock LLM proves lifecycle/plumbing, not vision semantic
 quality or arbitrary document/backend compatibility. A skipped local live gate is not a live pass;
-run the current-branch 0.10.2 isolated CI lane before claiming live verification. No production service
+run the current-branch 0.10.2/1.0.0 isolated CI lanes before claiming live verification. No production service
 or data is authorized by these tests. See [multimodal policy and usage](multimodal.md).
 
 ## Supported deployment
 
 The practical target is Linux/POSIX, one configured principal, one static bank, one Better-enabled
-profile per process, one external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, or 0.10.2 service under the tokenizer
+profile per process, one external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, 0.10.2, or 1.0.0 service under the tokenizer
 policy above, and the normal Hermes memory-provider execution path. Other platforms and runtimes are best effort and do not block use in
 the intended environment.
 
 ## Exact 0.10.2 summary maintenance contract
 
-New operator maintenance, refresh and Knowledge Page surfaces require exactly 0.10.2; other
+New operator maintenance, refresh and Knowledge Page surfaces require exactly 0.10.2 or 1.0.0; other
 versions retain existing supported recall/retain and 0.10.0 pilot behavior. Executable-source
 review at `5fc4ce20917b916240cef27c212c387a177f115b` covers `api/http.py` and
 `engine/memory_engine.py`: mental-model PATCH merges only explicitly set trigger fields and does
