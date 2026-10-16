@@ -1,4 +1,4 @@
-"""Explicit Hindsight 0.10.0/0.10.2 mental-model pilot, not a refresh/job framework."""
+"""Explicit Hindsight 0.10.0/0.10.2/1.0.0 mental-model pilot, not a refresh/job framework."""
 
 from __future__ import annotations
 
@@ -41,8 +41,9 @@ def tool_schema() -> dict[str, Any]:
         "name": TOOL_NAME,
         "description": (
             "Explicit opt-in bank-wide mental-model list/read/create/status/refresh and "
-            "Knowledge Page page_browse/page_search/page_read. New operations require 0.10.2 "
-            "and separate operator opt-ins. Page search excludes standalone models. "
+            "Knowledge Page page_browse/page_search/page_read. New operations require "
+            "0.10.2 or 1.0.0 and separate operator opt-ins. "
+            "Page search excludes standalone models. "
             "Refresh queues backend work and costs; it cannot edit definitions or policy. "
             "List first and reuse "
             "an existing model for the topic; only exact normalized questions are deduplicated, "
@@ -163,7 +164,7 @@ def normalized_query(query: str) -> str:
 def stable_id(config: BetterHindsightConfig, query: str) -> str:
     scope = [config.api_url, config.bank_id, normalized_query(query)]
     digest = hashlib.sha256(json.dumps(scope, ensure_ascii=False).encode()).hexdigest()
-    # History persistence in Hindsight 0.10.0/0.10.2 limits IDs to 64 characters.
+    # History persistence in Hindsight 0.10.0/0.10.2/1.0.0 limits IDs to 64 characters.
     # Keep 232 digest bits plus the prefix; the model table alone accepts longer IDs.
     return "bh-mm-" + digest[:58]
 
@@ -252,13 +253,14 @@ class MentalModels:
         version = await client.mental_model_request(
             "GET", "/version", decoder=lambda value: text(mapping(value).get("api_version"), 64)
         )
-        if version not in {"0.10.0", "0.10.2"}:
-            return '{"error":"Mental-model pilot requires Hindsight 0.10.0 or 0.10.2."}'
+        if version not in {"0.10.0", "0.10.2", "1.0.0"}:
+            return '{"error":"Mental-model pilot requires Hindsight 0.10.0, 0.10.2 or 1.0.0."}'
         action = args["action"]
         if action in {"refresh", "page_browse", "page_read", "page_search"}:
-            if version != "0.10.2":
+            if version not in {"0.10.2", "1.0.0"}:
                 return (
-                    '{"error":"Summary maintenance and Knowledge Pages require Hindsight 0.10.2."}'
+                    '{"error":"Summary maintenance and Knowledge Pages require '
+                    'Hindsight 0.10.2 or 1.0.0."}'
                 )
             if action == "refresh":
                 async with self.lock:
@@ -293,7 +295,7 @@ class MentalModels:
         if action == "status":
             return await self.status(client, args["id"], args["operation_id"])
         async with self.lock:
-            return await self.create(client, args, modern=version == "0.10.2")
+            return await self.create(client, args, modern=version in {"0.10.2", "1.0.0"})
 
     def project(self, model: dict[str, Any], *, content: bool = False) -> dict[str, object]:
         if model.get("bank_id") != self.config.bank_id:
@@ -397,7 +399,7 @@ class MentalModels:
         ):
             self.refresh_unconfirmed.pop(model_id)
             self.refresh_ambiguities.discard(model_id)
-        # Bank is enforced by the bank-scoped operation route (0.10.0/0.10.2 SQL predicate).
+        # Bank is enforced by the bank-scoped operation route (0.10.0/0.10.2/1.0.0 SQL predicate).
         return render(
             {
                 "result": "ok",
@@ -497,7 +499,7 @@ class MentalModels:
         from .summary_policy import SummaryPolicy
 
         if not modern and self.config.mental_models.creation != SummaryPolicy():
-            return '{"error":"Configured creation policy requires Hindsight 0.10.2."}'
+            return '{"error":"Configured creation policy requires Hindsight 0.10.2 or 1.0.0."}'
         query = redact_sensitive_text(args["source_query"])
         model_id = stable_id(self.config, query)
         try:

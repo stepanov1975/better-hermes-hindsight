@@ -196,7 +196,7 @@ async def _listed_bank(session: ClientSession, inputs: DevelopmentInputs) -> dic
     Config reads are not a cross-version existence oracle and contain no name;
     /profile is retired in 0.10.0. Mission readback separately uses /config.
     """
-    paginated = inputs.expected_version in {"0.9.2", "0.10.0", "0.10.2"}
+    paginated = inputs.expected_version in {"0.9.2", "0.10.0", "0.10.2", "1.0.0"}
     offset = 0
     total: int | None = None
     banks: dict[str, dict[str, Any]] = {}
@@ -388,16 +388,17 @@ def _assert_live_error_mapping(config: BetterHindsightConfig) -> None:
 def _assert_live_tokenizer_boundary(
     inputs: DevelopmentInputs, config: BetterHindsightConfig
 ) -> None:
-    """Exercise the real REST validator; never patch its tokenizer or reported version.
+    """Check local projection and version-specific server behavior on synthetic input.
 
-    This emoji is two cl100k_base tokens (one in the incompatible o200k_base
-    default). A real 502-token rejection therefore distinguishes the encodings.
-    The provider's actual projection must produce an accepted 500-token query.
+    Older servers reject the 502-token emoji probe; 1.0.0 truncates instead.
+    Its character fast path bypasses counting for short token-dense strings, so
+    use a longer query and inspect only bounded counts from its effective-query
+    trace. HTTP 200 alone cannot prove truncation or matching tokenizer policy.
     """
-    # RecallRequest also requires a normalized word; an emoji-only raw request
-    # fails schema validation (422) before reaching the token-limit validator.
-    raw_query = "word " + "😀" * 251
-    projected = project_query(raw_query, max_chars=2048, max_tokens=500)
+    # RecallRequest requires a normalized word (emoji-only fails with 422).
+    modern = inputs.expected_version == "1.0.0"
+    raw_query = " tiktoken" * 251 if modern else "word " + "😀" * 251
+    projected = project_query(raw_query, max_chars=4096, max_tokens=500)
     assert count_query_tokens(raw_query) == 502
     assert count_query_tokens(projected) == 500
 
@@ -409,14 +410,26 @@ def _assert_live_tokenizer_boundary(
             await client.close()
         # Bypass the provider projection only for this deliberately oversized request.
         url = f"{inputs.api_url}/v1/default/banks/{quote(inputs.bank_id, safe='')}/memories/recall"
+        body: dict[str, Any] = {"query": raw_query, "budget": "low", "max_tokens": 256}
+        if modern:
+            body["trace"] = True  # Synthetic query only; never emit the full trace.
         async with (
             _live_session(inputs) as session,
-            session.post(
-                url,
-                json={"query": raw_query, "budget": "low", "max_tokens": 256},
-                allow_redirects=False,
-            ) as response,
+            session.post(url, json=body, allow_redirects=False) as response,
         ):
+            if modern:
+                assert response.status == 200, "1.0.0 must truncate rather than reject"
+                payload = await response.json()
+                assert isinstance(payload.get("results"), list)
+                trace = payload.get("trace")
+                assert isinstance(trace, dict), "missing effective-query trace"
+                query_info = trace.get("query")
+                assert isinstance(query_info, dict), "missing effective-query metadata"
+                effective = query_info.get("query_text")
+                assert isinstance(effective, str) and 0 < len(effective) < len(raw_query)
+                assert raw_query.startswith(effective) is True
+                assert count_query_tokens(effective) == 500, "unexpected truncated token count"
+                return
             assert response.status == 400, "raw 502-token recall must be rejected"
             payload = await response.json()
             assert payload == {
@@ -686,7 +699,7 @@ def _assert_live_mental_models(provider: Any) -> None:
 
 
 def _assert_live_summary_maintenance(home: Path, provider: Any) -> None:
-    """Exact 0.10.2, owned synthetic bank; operator CLI plus real provider reads."""
+    """Exact 0.10.2/1.0.0, owned synthetic bank; operator CLI plus real provider reads."""
     import contextlib
     import io
     from argparse import ArgumentParser
@@ -816,7 +829,7 @@ def _assert_live_summary_maintenance(home: Path, provider: Any) -> None:
 
 
 def _assert_live_multimodal(inputs: DevelopmentInputs, home: Path) -> None:
-    """Exact 0.10.2 stored bytes/provenance proof, not vision semantic quality.
+    """Exact 0.10.2/1.0.0 stored bytes/provenance proof, not vision semantic quality.
 
     Chunk extraction records attachment edges deterministically, including when CI uses
     its mock LLM. No equality assumption is made about flattened document block text.
@@ -825,7 +838,7 @@ def _assert_live_multimodal(inputs: DevelopmentInputs, home: Path) -> None:
 
     from better_hermes_hindsight.multimodal import attachment_descriptors
 
-    assert inputs.expected_version == "0.10.2"
+    assert inputs.expected_version in {"0.10.2", "1.0.0"}
     source = home / "synthetic-attachments"
     source.mkdir()
     png = base64.b64decode(
@@ -983,7 +996,7 @@ def _run_live_child() -> int:
     try:
         home, config = _prepare_home(inputs)
         _assert_live_error_mapping(config)
-        if inputs.expected_version in {"0.10.0", "0.10.2"}:
+        if inputs.expected_version in {"0.10.0", "0.10.2", "1.0.0"}:
             _assert_live_tokenizer_boundary(inputs, config)
         expected_count = _expected_segment_count((_SHORT_TURN, _LONG_TURN))
         repeated_short_count = _expected_segment_count((_SHORT_TURN,))
@@ -1017,7 +1030,7 @@ def _run_live_child() -> int:
             raise AssertionError("repeated completed turn created an unexpected document count")
 
         _assert_live_mission_round_trip(config)
-        if inputs.expected_version in {"0.10.0", "0.10.2"}:
+        if inputs.expected_version in {"0.10.0", "0.10.2", "1.0.0"}:
             _assert_live_reflect(config)
             reflected = _remote_documents(inputs, None)
             if {key: value.get("original_text") for key, value in reflected.items()} != {
@@ -1039,16 +1052,16 @@ def _run_live_child() -> int:
             (home / "better_hindsight" / "config.json").write_text(
                 json.dumps(pilot_document), encoding="utf-8"
             )
-            if inputs.expected_version == "0.10.2":
+            if inputs.expected_version in {"0.10.2", "1.0.0"}:
                 pilot_document["mental_models"].update(refresh_enabled=True, pages_enabled=True)
                 (home / "better_hindsight" / "config.json").write_text(
                     json.dumps(pilot_document), encoding="utf-8"
                 )
             manager, provider = _start_manager(home)
             _assert_live_mental_models(provider)
-            if inputs.expected_version == "0.10.2":
+            if inputs.expected_version in {"0.10.2", "1.0.0"}:
                 _assert_live_summary_maintenance(home, provider)
-        if inputs.expected_version == "0.10.2":
+        if inputs.expected_version in {"0.10.2", "1.0.0"}:
             _stop_manager(manager, provider)
             manager = provider = None
             _assert_live_multimodal(inputs, home)
@@ -1058,11 +1071,11 @@ def _run_live_child() -> int:
             "status": "ok",
             "version": inputs.expected_version,
         }
-        if inputs.expected_version in {"0.10.0", "0.10.2"}:
+        if inputs.expected_version in {"0.10.0", "0.10.2", "1.0.0"}:
             result.update(
                 tokenizer_boundary="verified", reflect_adapter="verified", mental_models="verified"
             )
-        if inputs.expected_version == "0.10.2":
+        if inputs.expected_version in {"0.10.2", "1.0.0"}:
             result["summary_maintenance"] = "verified"
             result["multimodal"] = "verified"
         print(json.dumps(result, sort_keys=True))
@@ -1116,7 +1129,9 @@ def test_live_proof_is_explicitly_opt_in() -> None:
         _development_inputs({"BETTER_HINDSIGHT_ALLOW_DEV_WRITES": "1"})
 
 
-@pytest.mark.parametrize("expected_version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.2"])
+@pytest.mark.parametrize(
+    "expected_version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.2", "1.0.0"]
+)
 def test_live_proof_preserves_selected_interpreter_symlink(
     tmp_path: Path, expected_version: str
 ) -> None:
@@ -1145,7 +1160,19 @@ def test_live_proof_preserves_selected_interpreter_symlink(
 
 @pytest.mark.parametrize(
     "version",
-    ["0.9.3", "0.10.1", "0.10.3", "0.10.2rc1", "v0.10.2", "0.10.0rc1", "0.11.0", "v0.10.0"],
+    [
+        "1.0.1",
+        "1.0.0rc1",
+        "v1.0.0",
+        "0.9.3",
+        "0.10.1",
+        "0.10.3",
+        "0.10.2rc1",
+        "v0.10.2",
+        "0.10.0rc1",
+        "0.11.0",
+        "v0.10.0",
+    ],
 )
 def test_live_proof_rejects_unsupported_version_before_interpreter_or_network(version: str) -> None:
     with pytest.raises(RuntimeError, match="version is unsupported"):
@@ -1251,11 +1278,11 @@ def test_isolated_hindsight_smoke(tmp_path: Path) -> None:
         assert payload["status"] == "ok"
         assert payload["version"] == inputs.expected_version
         assert payload["documents"] == payload["segments"]
-        if inputs.expected_version in {"0.10.0", "0.10.2"}:
+        if inputs.expected_version in {"0.10.0", "0.10.2", "1.0.0"}:
             assert payload["tokenizer_boundary"] == "verified"
             assert payload["reflect_adapter"] == "verified"
             assert payload["mental_models"] == "verified"
-        if inputs.expected_version == "0.10.2":
+        if inputs.expected_version in {"0.10.2", "1.0.0"}:
             assert payload["summary_maintenance"] == "verified"
             assert payload["multimodal"] == "verified"
     finally:

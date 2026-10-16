@@ -53,7 +53,8 @@ class Transport:
         pass
 
 
-def test_attachment_recall_and_reflection_exact_wire(tmp_path: Path) -> None:
+@pytest.mark.parametrize("version", ["0.10.2", "1.0.0"])
+def test_attachment_recall_and_reflection_exact_wire(tmp_path: Path, version: str) -> None:
     config = load_config(
         tmp_path,
         injected={
@@ -63,7 +64,7 @@ def test_attachment_recall_and_reflection_exact_wire(tmp_path: Path) -> None:
         },
         environ={},
     )
-    transport = Transport()
+    transport = Transport(version)
     client = HindsightClientAdapter(config=config, transport=transport)
     transport.reply = {
         "results": [{"id": "fact", "text": "Caption", "attachments": [descriptor()]}]
@@ -123,7 +124,9 @@ def test_reflection_collects_valid_handles_after_attachmentless_sources(
     assert response.attachments == (tuple(handles[:8]) if prefix_count < 4096 else ())
 
 
-@pytest.mark.parametrize("version", ["0.10.0", "0.9.0", "0.10.3", "unknown"])
+@pytest.mark.parametrize(
+    "version", ["0.10.0", "0.9.0", "0.10.3", "unknown", "1.0.0rc1", "v1.0.0", "1.0.1"]
+)
 def test_unsupported_multimodal_never_sends_caption(tmp_path: Path, version: str) -> None:
     config = load_config(
         tmp_path,
@@ -163,9 +166,12 @@ class Server(ThreadingHTTPServer):
     def __init__(self) -> None:
         super().__init__(("127.0.0.1", 0), Handler)
         self.requests: list[dict[str, Any]] = []
-        self.committed = threading.Event()
+        self.dispatched = threading.Event()
+        self.commit_before_disconnect = True
+        self.documents: dict[str, dict[str, Any]] = {}
         self.release = threading.Event()
         self.confirmed = threading.Event()
+        self.version = "0.10.2"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -174,19 +180,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         assert self.path == "/version"
-        self._reply({"api_version": "0.10.2"})
+        server: Any = self.server
+        self._reply({"api_version": server.version})
 
     def do_POST(self) -> None:
         server: Any = self.server
         assert self.path == "/v1/default/banks/restart/memories"
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         server.requests.append(body)
+        item = body["items"][0]
         if len(server.requests) == 1:
-            # Store complete item but deliberately withhold the response until the process dies.
-            server.committed.set()
+            # Model both server cancellation before commit and a commit with lost ack.
+            # In both cases the real client process disconnects while its row is sending.
+            if server.commit_before_disconnect:
+                server.documents[item["document_id"]] = item
+            server.dispatched.set()
             assert server.release.wait(15)
             self.close_connection = True
             return
+        server.documents[item["document_id"]] = item
         self._reply({"success": True, "bank_id": "restart", "items_count": 1, "async": False})
         server.confirmed.set()
 
@@ -227,12 +239,18 @@ while True: time.sleep(.05)
 """
 
 
-def test_real_model_tool_process_restart_replays_immutable_original_bytes(tmp_path: Path) -> None:
+@pytest.mark.parametrize("version", ["0.10.2", "1.0.0"])
+@pytest.mark.parametrize("commit_before_disconnect", [False, True])
+def test_real_model_tool_process_restart_replays_immutable_original_bytes(
+    tmp_path: Path, version: str, commit_before_disconnect: bool
+) -> None:
     root = Path(__file__).resolve().parents[2]
     image, pdf = tmp_path / "image.png", tmp_path / "manual.pdf"
     image.write_bytes(b"synthetic-png")
     pdf.write_bytes(b"%PDF-1.4 synthetic")
     with loopback() as server:
+        server.version = version
+        server.commit_before_disconnect = commit_before_disconnect
         config_dir = tmp_path / "better_hindsight"
         config_dir.mkdir()
         config_dir.joinpath("config.json").write_text(
@@ -260,7 +278,15 @@ def test_real_model_tool_process_restart_replays_immutable_original_bytes(tmp_pa
             stderr=subprocess.PIPE,
         )
         try:
-            assert server.committed.wait(10), first.poll()
+            assert server.dispatched.wait(10), first.poll()
+            assert len(server.documents) == int(commit_before_disconnect)
+            box = SQLiteOutbox.open(load_config(tmp_path, environ={}))
+            try:
+                sending = box.read_unconfirmed()
+            finally:
+                box.close()
+            assert len(sending) == 1 and sending[0].state == "sending"
+            assert sending[0].document_id == server.requests[0]["items"][0]["document_id"]
         finally:
             first.kill()
             stdout, stderr = first.communicate(timeout=5)
@@ -292,6 +318,9 @@ def test_real_model_tool_process_restart_replays_immutable_original_bytes(tmp_pa
             second.communicate(timeout=5)
         assert len(server.requests) == 2
         assert server.requests[0] == server.requests[1]
+        assert server.documents == {
+            server.requests[1]["items"][0]["document_id"]: server.requests[1]["items"][0]
+        }
         body = server.requests[1]
         assert body["async"] is False
         item = body["items"][0]
@@ -304,7 +333,9 @@ def test_real_model_tool_process_restart_replays_immutable_original_bytes(tmp_pa
         assert item["timestamp"]
 
 
-@pytest.mark.parametrize("version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.3"])
+@pytest.mark.parametrize(
+    "version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.3", "1.0.0rc1", "v1.0.0", "1.0.1"]
+)
 def test_attachment_reads_gate_exact_version_without_changing_default_text(
     tmp_path: Path, version: str
 ) -> None:

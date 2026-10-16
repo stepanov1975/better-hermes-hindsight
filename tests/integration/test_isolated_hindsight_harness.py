@@ -51,7 +51,7 @@ def inputs() -> live.DevelopmentInputs:
     )
 
 
-@pytest.mark.parametrize("version", ["0.10.0", "0.10.2"])
+@pytest.mark.parametrize("version", ["0.10.0", "0.10.2", "1.0.0"])
 def test_live_child_budget_allows_sequential_waits(
     monkeypatch: pytest.MonkeyPatch,
     inputs: live.DevelopmentInputs,
@@ -68,7 +68,7 @@ def test_live_child_budget_allows_sequential_waits(
     def slow_child(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         # Simulate each permitted polling phase using its budget, plus modest
         # startup/HTTP overhead, without sleeping or contacting a real server.
-        phases = 11 if version == "0.10.2" else 5
+        phases = 11 if version in {"0.10.2", "1.0.0"} else 5
         elapsed = phases * live._DRAIN_TIMEOUT_SECONDS + 30.0
         if kwargs["timeout"] < elapsed:
             raise subprocess.TimeoutExpired(args, kwargs["timeout"])
@@ -80,9 +80,9 @@ def test_live_child_budget_allows_sequential_waits(
             "tokenizer_boundary": "verified",
             "reflect_adapter": "verified",
             "mental_models": "verified",
-            **({"multimodal": "verified"} if version == "0.10.2" else {}),
+            **({"multimodal": "verified"} if version in {"0.10.2", "1.0.0"} else {}),
         }
-        if version == "0.10.2":
+        if version in {"0.10.2", "1.0.0"}:
             payload["summary_maintenance"] = "verified"
         return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
 
@@ -97,7 +97,7 @@ def _page(inputs: live.DevelopmentInputs, banks: list[dict[str, Any]]) -> dict[s
     return {"banks": banks, "total": len(banks), "limit": 100, "offset": 0}
 
 
-@pytest.mark.parametrize("version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.2"])
+@pytest.mark.parametrize("version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.2", "1.0.0"])
 def test_bank_creation_and_cleanup_use_exact_listing_ownership(
     monkeypatch: pytest.MonkeyPatch, inputs: live.DevelopmentInputs, version: str
 ) -> None:
@@ -115,7 +115,7 @@ def test_bank_creation_and_cleanup_use_exact_listing_ownership(
             return 200, {"api_version": version}
         if path == "/v1/default/banks":
             query = parse_qs(urlsplit(url).query)
-            if version in {"0.9.2", "0.10.0", "0.10.2"}:
+            if version in {"0.9.2", "0.10.0", "0.10.2", "1.0.0"}:
                 assert query == {"q": [inputs.bank_id], "limit": ["100"], "offset": ["0"]}
             else:
                 assert not query
@@ -137,7 +137,7 @@ def test_bank_creation_and_cleanup_use_exact_listing_ownership(
     assert calls == ["GET", "GET", "PUT", "GET", "GET", "DELETE", "GET"]
 
 
-@pytest.mark.parametrize("version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.2"])
+@pytest.mark.parametrize("version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.2", "1.0.0"])
 def test_existing_foreign_bank_is_neither_overwritten_nor_deleted(
     monkeypatch: pytest.MonkeyPatch, inputs: live.DevelopmentInputs, version: str
 ) -> None:
@@ -183,7 +183,7 @@ def test_create_requires_ownership_readback(
         live._create_disposable_bank(inputs)
 
 
-@pytest.mark.parametrize("version", ["0.9.2", "0.10.0", "0.10.2"])
+@pytest.mark.parametrize("version", ["0.9.2", "0.10.0", "0.10.2", "1.0.0"])
 @pytest.mark.parametrize("present", [False, True])
 def test_paginated_bank_lookup_exhausts_substring_matches(
     monkeypatch: pytest.MonkeyPatch, inputs: live.DevelopmentInputs, version: str, present: bool
@@ -298,8 +298,13 @@ def fake_recall_server() -> Iterator[tuple[str, dict[str, Any]]]:
             assert self.headers["Authorization"] == "Bearer synthetic-live-key"
             status = 200
             payload: dict[str, Any] = {"results": []}
-            assert "word" in query
-            if query == "word " + "😀" * 251:
+            assert "word" in query or "tiktoken" in query
+            if body.get("trace"):
+                effective = " tiktoken" * state.get("effective_repeats", 250)
+                payload["trace"] = {"query": {"query_text": effective}}
+                if state.get("missing_trace"):
+                    payload.pop("trace")
+            elif query == "word " + "😀" * 251:
                 status = state["reject_status"]
                 payload = {
                     "detail": f"Query too long: {state['reject_count']} tokens exceeds maximum of "
@@ -351,3 +356,30 @@ def test_tokenizer_gate_checks_wire_query_and_exact_server_rejection(
             live._assert_live_tokenizer_boundary(inputs, config)
     assert len(state["queries"]) == 2
     assert [count_query_tokens(query) for query in state["queries"]] == [500, 502]
+
+
+@pytest.mark.parametrize("effective_repeats", [250, 251, 249, None])
+def test_100_tokenizer_gate_requires_actual_truncation_not_just_http_success(
+    inputs: live.DevelopmentInputs,
+    tmp_path: Path,
+    fake_recall_server: tuple[str, dict[str, Any]],
+    effective_repeats: int | None,
+) -> None:
+    url, state = fake_recall_server
+    selected = replace(inputs, api_url=url, expected_version="1.0.0")
+    config = load_config(
+        tmp_path,
+        injected=live._profile_document(selected),
+        environ={"HINDSIGHT_API_KEY": selected.api_key},
+    )
+    if effective_repeats is None:
+        state["missing_trace"] = True
+    else:
+        state["effective_repeats"] = effective_repeats
+    if effective_repeats == 250:
+        live._assert_live_tokenizer_boundary(selected, config)
+    else:
+        with pytest.raises(AssertionError):
+            live._assert_live_tokenizer_boundary(selected, config)
+    assert [count_query_tokens(query) for query in state["queries"]] == [500, 502]
+    assert len(state["queries"][-1]) > 500  # Must not hit 1.0.0's character fast path.

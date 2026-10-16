@@ -276,8 +276,8 @@ async def operator_call(
     version = await client.mental_model_request(
         "GET", "/version", decoder=lambda value: text(mapping(value).get("api_version"), 64)
     )
-    if version != "0.10.2":
-        return '{"error":"Operator summary maintenance requires Hindsight 0.10.2."}'
+    if version not in {"0.10.2", "1.0.0"}:
+        return '{"error":"Operator summary maintenance requires Hindsight 0.10.2 or 1.0.0."}'
     pages = KnowledgePages(models.path)
     if action in {"create", "page_create"}:
         policy = parse_policy(args.get("policy", {}), base=models.config.mental_models.creation)

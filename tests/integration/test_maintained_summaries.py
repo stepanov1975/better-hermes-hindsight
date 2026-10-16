@@ -327,9 +327,10 @@ def isolate(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     reset_process_runtime_for_tests()
 
 
-@pytest.fixture
-def server() -> Iterator[Server]:
+@pytest.fixture(params=["0.10.2", "1.0.0"])
+def server(request: pytest.FixtureRequest) -> Iterator[Server]:
     state = Server()
+    state.version = request.param
     try:
         yield state
     finally:

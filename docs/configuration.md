@@ -11,7 +11,7 @@ isolated Hindsight development deployment. Capability is controlled directly by 
 `planner.mode`, `reflect.enabled`, and `retain.enabled`. The separate default-off mental-model pilot
 uses `mental_models.enabled` for reads/status and additionally `mental_models.create_enabled` for
 creation; it does not depend on `reflect.enabled` or `retain.enabled`. See
-[mental models](mental-models.md) before enabling this bank-wide Hindsight 0.10.0/0.10.2 capability.
+[mental models](mental-models.md) before enabling this bank-wide Hindsight 0.10.0/0.10.2/1.0.0 capability.
 
 ## Multimodal snapshots and attachment provenance
 
@@ -24,7 +24,7 @@ text-redacted. Restart after policy edits; pending binary rows are bound to the 
 
 `recall.include_attachments=false` and `reflect.include_attachments=false` are independent provenance
 opt-ins, not caller overrides or automatic downloads. Reflection still needs `reflect.enabled`.
-Exact Hindsight 0.10.2 is required for binary sends and opted-in attachment reads. The default text wire
+Exact Hindsight 0.10.2 or 1.0.0 is required for binary sends and opted-in attachment reads. The default text wire
 contracts on all older supported versions are unchanged. See [multimodal](multimodal.md) for complete
 configuration/tool examples, MIME allowlist, authenticated paths, replay behavior and data exposure.
 
@@ -141,9 +141,11 @@ and invalid ranges are errors rather than silent fallbacks.
 `recall.input_max_chars` is the local pre-tokenization safety bound. `recall.input_max_tokens` is a
 separate input-query limit and defaults to the server's 500-token default. Better always counts
 with its packaged `cl100k_base` encoding and treats special-token-looking literals as ordinary text.
-Hindsight 0.10.0 and 0.10.2 **require server-side `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`** before
+Hindsight 0.10.0, 0.10.2 and 1.0.0 **require server-side `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`** before
 startup to match; setting it only in Hermes does not configure the server. Older supported versions
-use `cl100k_base` by default. See [compatibility](compatibility.md) for verification and limitations.
+use `cl100k_base` by default. On 1.0.0 the server truncates long queries instead of rejecting
+with HTTP 400, but its short-string fast path can bypass counting. Better still projects locally
+to at most 500 tokens by default; do not rely on universal server ceiling enforcement. See [compatibility](compatibility.md) for verification and limitations.
 Keep this value at or below the server's `HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS`. The existing `recall.max_tokens` setting controls the
 response budget; it does not limit query input.
 
@@ -580,7 +582,9 @@ replacing the supported Hindsight 0.8.5/0.9.1/0.9.2 server defaults:
 - `recall.tag_mode`: `any`, `all`, `any_strict`, `all_strict`, or `exact`;
 - `recall.prefer_observations`: boolean;
 - `recall.min_scores`: optional finite non-negative `semantic`, `keyword`, `reranker`, and `final`
-  floors; and
+  floors (Hindsight 1.0.0 rejects `reranker` floors with rank-position providers such as TypeSafe;
+  this is provider-conditional, not a universal incompatibility; use a supported pointwise
+  provider or explicitly choose a validated `final` floor instead); and
 - `recall.include_source_facts` plus `recall.max_source_facts_tokens` from 1 through 1,048,576.
 
 Omitted `retain.observation_scopes` likewise remains `null`, preserving the SDK/server default.

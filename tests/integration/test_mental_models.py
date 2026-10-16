@@ -88,7 +88,7 @@ class Server:
                                     "task_type": state.operation_type,
                                     "mental_model_id": state.operation_model,
                                 }
-                                if state.version == "0.10.2"
+                                if state.version in {"0.10.2", "1.0.0"}
                                 else {}
                             ),
                             "task_payload": {
@@ -180,7 +180,7 @@ def isolate(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     reset_process_runtime_for_tests()
 
 
-@pytest.fixture(params=["0.10.0", "0.10.2"])
+@pytest.fixture(params=["0.10.0", "0.10.2", "1.0.0"])
 def server(request: pytest.FixtureRequest) -> Iterator[Server]:
     value = Server()
     value.version = request.param
@@ -357,7 +357,9 @@ def test_fixed_failures(tmp_path: Path, server: Server, fault: str) -> None:
     assert len(server.requests) == 1
 
 
-@pytest.mark.parametrize("version", ["0.9.2", "0.10.1", "0.10.3", "0.10.2rc1", "v0.10.2"])
+@pytest.mark.parametrize(
+    "version", ["0.9.2", "0.10.1", "0.10.3", "0.10.2rc1", "v0.10.2", "1.0.0rc1", "v1.0.0", "1.0.1"]
+)
 @pytest.mark.parametrize(
     "args",
     [
