@@ -18,8 +18,16 @@ deployment, or changed opt-in defaults are included.
 - Support exact Hindsight **1.0.0** across text recall/retention/reflection, multimodal memory,
   the mental-model pilot, maintained summaries, Knowledge Pages, and the synthetic canary.
   Older supported versions remain supported; arbitrary newer, prerelease, and `v`-prefixed API
-  versions remain refused at explicit feature/canary gates. No runtime dependency or Hermes pin
-  changes are required. See [compatibility](docs/compatibility.md#exact-hindsight-100-contract).
+  versions remain refused at explicit feature/canary gates. Runtime dependency constraints and the
+  Hermes pin are unchanged. See [compatibility](docs/compatibility.md#exact-hindsight-100-contract).
+
+### Security maintenance
+
+- Update locked `aiohttp` from **3.14.3 to 3.14.4** for **GHSA-2g87-pp6c-29x5**,
+  **GHSA-5wr8-gcqf-gqf3**, and **GHSA-494j-54xm-rwp3**, together with locked `yarl`
+  from **1.24.5 to 1.25.1**. Dependency constraints are unchanged. The plugin lockfile does not
+  upgrade Hermes's selected host environment or replace already imported dependencies;
+  verify actual runtime versions and handle host maintenance separately.
 
 ### Requirements and validation limits
 

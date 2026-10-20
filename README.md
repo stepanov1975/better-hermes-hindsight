@@ -12,7 +12,9 @@ The provider ID is `better_hindsight`, deliberately separate from bundled `hinds
 This source-only snapshot adds exact Hindsight **1.0.0** to the reviewed API allowlists, including
 multimodal memory, summary maintenance and Knowledge Pages. Older supported releases remain
 supported; arbitrary newer, prerelease and `v`-prefixed API versions remain refused at explicit
-feature/canary gates. No runtime dependency, Hermes pin, or default changes are included.
+feature/canary gates. Runtime dependency constraints, the Hermes pin, and defaults are unchanged.
+The snapshot updates locked `aiohttp` to **3.14.4** for security fixes and `yarl` to **1.25.1**;
+this does not upgrade Hermes's selected host environment or already imported dependencies.
 It remains a standard Hermes Git plugin: no PyPI publication or uploaded wheel/sdist assets.
 See the [0.9.0 release notes](CHANGELOG.md#090---2026-10-20).
 
