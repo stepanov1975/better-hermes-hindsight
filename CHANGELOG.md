@@ -7,6 +7,34 @@ For supported settings and migration guidance, see `docs/configuration.md`.
 
 ## Unreleased
 
+## 0.9.0 - 2026-10-20
+
+Optional source-only snapshot for the standard Hermes Git plugin, adding backward-compatible
+Hindsight support since `v0.8.0`. No PyPI publication, uploaded wheel/sdist assets, automatic
+deployment, or changed opt-in defaults are included.
+
+### Added
+
+- Support exact Hindsight **1.0.0** across text recall/retention/reflection, multimodal memory,
+  the mental-model pilot, maintained summaries, Knowledge Pages, and the synthetic canary.
+  Older supported versions remain supported; arbitrary newer, prerelease, and `v`-prefixed API
+  versions remain refused at explicit feature/canary gates. No runtime dependency or Hermes pin
+  changes are required. See [compatibility](docs/compatibility.md#exact-hindsight-100-contract).
+
+### Requirements and validation limits
+
+- Keep server `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base` and Better's local 500-token
+  projection. Hindsight 1.0.0 truncates oversized recall queries instead of returning HTTP 400;
+  its character fast path does not universally enforce that ceiling. A successful short-query
+  canary does not prove the tokenizer setting.
+- Preserve all existing opt-ins and data/cost boundaries. Binary retention still requires a
+  vision-capable server model and non-batch retention; attachment bytes cannot be text-redacted.
+  Synthetic mock-LLM lifecycle checks do not establish hosted-model quality/cost, production
+  scale, or migration/restore safety. No production upgrade or restart is included.
+- Keep pinned-Hermes CI separate from the moving-Hermes canary and runtime dependency audits
+  separate from scanner-toolchain audits. Existing moving-host compatibility failures and
+  non-required scanner-toolchain advisory debt are not an all-green validation claim.
+
 ## 0.8.0 - 2026-10-14
 
 Optional source-only snapshot for the standard Hermes Git plugin, collecting the changes since
