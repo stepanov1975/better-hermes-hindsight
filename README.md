@@ -7,12 +7,16 @@ Better Hermes Hindsight is an unofficial Hermes memory provider for supported ex
 
 The provider ID is `better_hindsight`, deliberately separate from bundled `hindsight`, so the existing provider and bank remain available for rollback.
 
-## Hindsight 1.0.0 compatibility (unreleased)
+## 0.9.0 snapshot: Hindsight 1.0.0 compatibility
 
-Current source adds exact Hindsight **1.0.0** to the reviewed API allowlists, including
+This source-only snapshot adds exact Hindsight **1.0.0** to the reviewed API allowlists, including
 multimodal memory, summary maintenance and Knowledge Pages. Older supported releases remain
 supported; arbitrary newer, prerelease and `v`-prefixed API versions remain refused at explicit
-feature/canary gates. No dependency, Hermes pin, default, or package version changes.
+feature/canary gates. Runtime dependency constraints, the Hermes pin, and defaults are unchanged.
+The snapshot updates locked `aiohttp` to **3.14.4** for security fixes and `yarl` to **1.25.1**;
+this does not upgrade Hermes's selected host environment or already imported dependencies.
+It remains a standard Hermes Git plugin: no PyPI publication or uploaded wheel/sdist assets.
+See the [0.9.0 release notes](CHANGELOG.md#090---2026-10-20).
 
 Keep server `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base` and Better's local 500-token
 projection. Unlike older versions, 1.0.0 truncates oversized recall queries rather than
@@ -21,12 +25,12 @@ A successful short-query canary is not tokenizer proof. See the
 [1.0.0 contract and validation limits](docs/compatibility.md#exact-hindsight-100-contract).
 This source change neither upgrades production nor establishes a migration/restore rehearsal.
 
-## 0.8.0 snapshot
+### Included from the 0.8.0 snapshot
 
-This source-only snapshot adds explicit opt-in image/file retention with attachment-aware evidence,
+The 0.8.0 snapshot introduced explicit opt-in image/file retention with attachment-aware evidence,
 maintained summaries and Knowledge Pages, and planner input-scrubbing/handoff fixes since `v0.7.1`.
-The binary and maintained-summary/page extensions require exact Hindsight 0.10.2 and their documented
-server/policy settings; existing text paths retain their supported versions. It remains a standard
+In 0.9.0, the binary and maintained-summary/page extensions support exact Hindsight 0.10.2 or 1.0.0
+with their documented server/policy settings; existing text paths retain their supported versions. It remains a standard
 Hermes Git plugin: no PyPI publication or uploaded wheel/sdist assets. See
 [release notes](CHANGELOG.md#080---2026-10-14), [multimodal requirements](docs/multimodal.md),
 [summary controls](docs/mental-models.md), and
