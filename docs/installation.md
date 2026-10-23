@@ -9,8 +9,8 @@ procedure.
 
 - Hermes installed and working on its required Python (3.14 for current Hermes;
   Better also supports 3.11–3.13 with the reviewed older host);
-- an external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, 0.10.2, or 1.0.0 service;
-- for 0.10.0/0.10.2/1.0.0, **server-side** `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base` before startup;
+- an external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, 0.10.2, 1.0.0, or 1.1.0 service;
+- for 0.10.0/0.10.2/1.0.0/1.1.0, **server-side** `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base` before startup;
   the default `o200k_base` is unsupported (see [compatibility](compatibility.md));
 - `git` available for Hermes's Git-plugin installer.
 

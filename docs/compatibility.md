@@ -39,10 +39,53 @@ discovery, `is_available()`, `initialize()`, current-query prefetch, `recall_sta
 model-tool schema/dispatch, session switching, shutdown, and plugin CLI registration. Tests exercise
 these behaviors through the real installed host where practical.
 
+## Exact Hindsight 1.1.0 contract
+
+The additional exact target is upstream tag `v1.1.0`, peeled release commit
+[`a5a619b5ca59c5c39e0f96be6f7a31fabd136bd5`](https://github.com/vectorize-io/hindsight/tree/a5a619b5ca59c5c39e0f96be6f7a31fabd136bd5).
+Review compares `v1.0.0` with that exact tag, including `hindsight-docs/static/openapi.json`,
+`hindsight-api-slim/hindsight_api/api/http.py`, `engine/memory_engine.py`,
+`engine/reflect/agent.py`, configuration and migration source. This is not general 1.x support.
+CI pins the Linux amd64 manifest `sha256:97e5a1b0fab0ebb2c313976f6ec772b8d858b762230766670633872fc438994a`
+(OCI index `sha256:50311d02b4d5d2b7c5242bd336edf8735df8374eaad496a92f49c83b37d2aa06`).
+
+| Used surface | 1.1.0 semantics and Better behavior |
+| --- | --- |
+| Recall | `prefer_observations` now defaults to null and inherits bank/global `recall_prefer_observations`. Better already sends an explicit boolean, preserving its configured preference. Used response fields remain valid. |
+| Tokenizer | The 1.0.0 truncation and character fast path remain. Require server `cl100k_base`, ceiling 500 and the effective-query trace oracle, not the older HTTP-400 oracle. Local projection is unchanged. |
+| Retain | Synchronous replace-mode, original document ID/timestamp/bytes and strict acknowledgement remain. Null scopes now inherit bank `default_observation_scopes`; `combined` explicitly preserves the old default. New glob scopes are not exposed by Better. Placeholder timestamp years are rejected; Better's actual occurrence timestamps need no change. |
+| Reflection | Used request fields and required `text` response remain. Recall/reflect disconnect handling now cancels the awaiting task as well as cooperative work. This improves cancellation, not a hard guarantee of zero backend cost. Optional decision-model orchestration changes evidence selection and stopping behavior; mock/loopback success is not quality or spend evidence. |
+| Mental models | List/read/create/status and no-body refresh remain valid. List defaults still include page-backed models; Better does not request new `exclude_knowledge_pages`. Optional `is_knowledge_page`/`last_full_refreshed_at` are ignored. IDs remain conservatively bounded for older supported servers despite widened upstream storage. |
+| Summary policy | New independent `full_refresh_cron` and one-shot full-refresh body are not exposed. Default creation leaves the new schedule unset. Refresh/edit refuse an inherited active full-refresh schedule rather than silently adopting unmanageable paid work. Missing/null new schedule remains compatible with older releases. |
+| Knowledge Pages | Existing HTTP-201 create acknowledgement, page/backing-model binding, body/readback, tree/search and cascade contract remain; new filters are not sent. |
+| Bank/config and harness | Mission read/patch/readback and paginated exact-ID/name ownership remain. Additive document listing estimates and matched fields do not establish ownership or delivery. New migrations (including vector indexes/date cleanup and refresh/ID storage) require a separate production migration/restore rehearsal. |
+
+The feature/canary gates accept exact 1.1.0, retain older targets and reject 1.1.1,
+1.1.0 prereleases and `v1.1.0` API responses. Default text recall retains no version preflight.
+The isolated harness runs the modern tokenizer, reflection, mental-model, summary/page and binary
+lifecycle branches for 1.1.0, with exact bank ownership and cleanup. Deterministic fake-service
+regressions are **not live-server evidence**. A configured CI lane or skipped live test is not a
+successful 1.1.0 proof; run the complete isolated exact-image gate before publication/deployment.
+A disposable exact-image run on 2026-10-23 passed all 25 live-harness tests using Python 3.13.12
+and Hermes 0.20.6 (`66666f6e2eca0ae883195a34c66131985ea7dd06`). Its child verified
+12 documents/12 segments, effective 502-to-500-token truncation, retention/restart/replay,
+recall, reflection, mission readback, mental models, summary/pages and attachment bytes/provenance.
+The server used the official mock LLM and offline bundled embedding/reranking models; this does
+not establish hosted-model quality, decision-model behavior, production scale or migration safety.
+Unauthenticated and wrong-key bank reads both returned 401. Afterward the bank list was empty
+and the owned containers, network and volume were removed.
+
+No production upgrade, restart, migration, SDK update, direct runtime dependency constraint change
+or Hermes-pin change is included. Separate security maintenance updates locked `certifi` from
+2026.7.22 to 2026.10.19 and CI/audit tooling `uv` from 0.13.0 to 0.13.4. The lockfile does not
+upgrade Hermes's selected host environment. Runtime and uv-toolchain audits pass; the separate
+scanner-toolchain audit remains blocked by Semgrep's incompatible `mcp` and `opentelemetry-api`
+pins, without suppressions.
+
 ## Hindsight compatibility
 
-Better intentionally targets the exact external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, 0.10.2, and 1.0.0 HTTP
-contracts. **0.10.0, 0.10.2 and 1.0.0 require server-side `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`**; their
+Better intentionally targets the exact external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, 0.10.2, 1.0.0, and 1.1.0 HTTP
+contracts. **0.10.0, 0.10.2, 1.0.0 and 1.1.0 require server-side `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`**; their
 default `o200k_base` mode is unsupported. The isolated proof below remains a release/deployment gate;
 a version allowlist or short-query canary alone is not proof of tokenizer compatibility. Better
 implements recall, read-only reflection, synchronous retain, bank-config read/patch, and the
@@ -50,7 +93,7 @@ separately opt-in [mental-model pilot](mental-models.md) over `aiohttp`; it does
 on the Hindsight Python SDK. Other Hindsight versions are unsupported until their used operations
 are reviewed and the isolated live proof passes.
 
-Mental-model list/read/create/status is restricted to exact Hindsight **0.10.0, 0.10.2 or 1.0.0**, checked via
+Mental-model list/read/create/status is restricted to exact Hindsight **0.10.0, 0.10.2, 1.0.0 or 1.1.0**, checked via
 `GET /version` only on explicit authorized pilot calls. It does not change the older supported
 recall/retain paths or add version checks to automatic recall. Loopback tests verify the reviewed
 0.10.0/0.10.2/1.0.0 wire contract, not live backend LLM generation quality or cost.
@@ -291,7 +334,10 @@ CI may follow Hermes `main` and therefore occasionally report an upstream compat
 ## Multimodal feature boundary
 
 Text-only support still spans all listed API versions. The separately opted-in multimodal capability
-requires **exact 0.10.2 or 1.0.0** (reviewed source `5fc4ce20917b916240cef27c212c387a177f115b`). Version probing
+requires **exact 0.10.2, 1.0.0 or 1.1.0**. Reviewed sources are the
+[0.10.2 release](#exact-hindsight-0102-source-audit),
+[1.0.0 release](#exact-hindsight-100-contract), and
+[1.1.0 release](#exact-hindsight-110-contract), with exact source identities above. Version probing
 occurs only on binary sends or attachment-enabled reads; no startup probe or default text-request
 change is introduced. An older/unknown server cannot receive a caption-only binary fallback.
 `include_attachments` on reflection requests facts and never tool-call traces; recall projects
@@ -299,25 +345,26 @@ attachments already present on fact results/source facts, not retrieved chunk un
 
 Deterministic coverage includes actual provider/runtime fake-service integration and loopback HTTP
 response-loss/process-kill replay of original admitted bytes, document ID and timestamp. The existing
-explicit isolated live harness conditionally adds a 0.10.2/1.0.0 synthetic image/plain-file lifecycle:
+explicit isolated live harness conditionally adds a 0.10.2/1.0.0/1.1.0 synthetic image/plain-file lifecycle:
 chunk extraction policy with exact readback, provider restart after source mutation/deletion, stored
 attachment byte/hash readback through authenticated routes, document/chunk provenance and provider
 recall/reflection. It makes no flattened document-text equality assumption for block inputs. Other
 version lanes keep their text-only proof. The mock LLM proves lifecycle/plumbing, not vision semantic
 quality or arbitrary document/backend compatibility. A skipped local live gate is not a live pass;
-run the current-branch 0.10.2/1.0.0 isolated CI lanes before claiming live verification. No production service
+run the current-branch 0.10.2/1.0.0/1.1.0 isolated lanes and record each exact-image result before
+claiming live verification. The 1.1.0 proof and its limits are recorded above. No production service
 or data is authorized by these tests. See [multimodal policy and usage](multimodal.md).
 
 ## Supported deployment
 
 The practical target is Linux/POSIX, one configured principal, one static bank, one Better-enabled
-profile per process, one external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, 0.10.2, or 1.0.0 service under the tokenizer
+profile per process, one external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, 0.10.2, 1.0.0, or 1.1.0 service under the tokenizer
 policy above, and the normal Hermes memory-provider execution path. Other platforms and runtimes are best effort and do not block use in
 the intended environment.
 
 ## Exact 0.10.2 summary maintenance contract
 
-New operator maintenance, refresh and Knowledge Page surfaces require exactly 0.10.2 or 1.0.0; other
+New operator maintenance, refresh and Knowledge Page surfaces require exactly 0.10.2, 1.0.0 or 1.1.0; other
 versions retain existing supported recall/retain and 0.10.0 pilot behavior. Executable-source
 review at `5fc4ce20917b916240cef27c212c387a177f115b` covers `api/http.py` and
 `engine/memory_engine.py`: mental-model PATCH merges only explicitly set trigger fields and does

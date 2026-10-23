@@ -7,6 +7,32 @@ Better Hermes Hindsight is an unofficial Hermes memory provider for supported ex
 
 The provider ID is `better_hindsight`, deliberately separate from bundled `hindsight`, so the existing provider and bank remain available for rollback.
 
+## Development: exact Hindsight 1.1.0 compatibility
+
+The development tree adds exact **1.1.0** to all existing text, multimodal,
+mental-model and Knowledge Page gates, preserving older supported versions. Keep
+server `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base` and the local 500-token
+projection. Unreviewed 1.x versions, prereleases and `v`-prefixed API responses
+remain refused at explicit gates; automatic text recall still has no version preflight.
+
+In 1.1.0, omitted/null retention scopes inherit the bank's new
+`default_observation_scopes`; set `retain.observation_scopes="combined"` to preserve
+the older default independently of bank configuration. Explicit recall preferences
+remain authoritative. Better does not manage the new independent
+`full_refresh_cron`: summaries with that schedule are refused for refresh/edit.
+New decision-model, generation and consolidation behavior must be validated against
+the intended backend. The disposable exact-image 1.1.0 proof passed **25 tests**,
+including retention/replay, recall, reflection, tokenizer, summaries/pages and binary
+provenance, using the official mock LLM and offline local embedding/reranking models.
+This is not hosted-model quality, decision-model or production migration proof.
+Direct runtime dependency constraints and the Hermes pin are unchanged. Security maintenance
+updates locked `certifi` **2026.7.22 → 2026.10.19** and CI/audit tooling `uv` **0.13.0 → 0.13.4**;
+this does not upgrade Hermes's selected host environment. Runtime and uv-toolchain audits pass,
+but the separate scanner-toolchain audit remains blocked by Semgrep's incompatible `mcp` and
+`opentelemetry-api` pins; no audit is suppressed.
+No version bump, production update or plugin installation is included. See the
+[1.1.0 contract](docs/compatibility.md#exact-hindsight-110-contract).
+
 ## 0.9.0 snapshot: Hindsight 1.0.0 compatibility
 
 This source-only snapshot adds exact Hindsight **1.0.0** to the reviewed API allowlists, including
@@ -29,7 +55,7 @@ This source change neither upgrades production nor establishes a migration/resto
 
 The 0.8.0 snapshot introduced explicit opt-in image/file retention with attachment-aware evidence,
 maintained summaries and Knowledge Pages, and planner input-scrubbing/handoff fixes since `v0.7.1`.
-In 0.9.0, the binary and maintained-summary/page extensions support exact Hindsight 0.10.2 or 1.0.0
+In 0.9.0, the binary and maintained-summary/page extensions supported exact Hindsight 0.10.2 or 1.0.0
 with their documented server/policy settings; existing text paths retain their supported versions. It remains a standard
 Hermes Git plugin: no PyPI publication or uploaded wheel/sdist assets. See
 [release notes](CHANGELOG.md#080---2026-10-14), [multimodal requirements](docs/multimodal.md),
@@ -47,7 +73,7 @@ tag and repeat the gates on its exact commit. Installation separately requires v
 ### Behavior and validation limits
 
 The default-off mental-model tool exposes list/read/create/status plus separately opt-in refresh
-and Knowledge Page browse/search/read on exact 0.10.2 or 1.0.0. Operator-only commands maintain definitions,
+and Knowledge Page browse/search/read on exact 0.10.2, 1.0.0 or 1.1.0. Operator-only commands maintain definitions,
 refresh policy and deletion, and create pages with exact readback. No existing configuration is
 automatically enabled or synchronized. Bounded page browse supports offset continuation.
 Page-backed summary renames are refused without a write; use Hindsight's page interface for
@@ -58,12 +84,12 @@ conflicts are known rejections. Creation requires
 its own opt-in and queued work must be checked, read, and verified. Planning, rewriting, reflection,
 retention, and private evaluation keep their existing defaults; this snapshot enables none of them.
 Content-free ordinary logs and separately opt-in private evaluation remain unchanged. See the
-[pilot configuration and limits](#opt-in-mental-model-pilot-hindsight-01000102100-only) and
+[pilot configuration and limits](#opt-in-mental-model-pilot-hindsight-01000102100110-only) and
 [private evaluation](#jev-recall-decisions-and-private-evaluation).
 
 The supported text-path versions are exact Hindsight **0.8.5, 0.9.1, 0.9.2, 0.10.0,
-0.10.2, and 1.0.0**. Versions 0.10.0/0.10.2/1.0.0 require server-side `cl100k_base`; binary delivery and
-maintained-summary/Knowledge Page controls are limited to exact 0.10.2 or 1.0.0. Binary retention additionally
+0.10.2, 1.0.0, and 1.1.0**. Versions 0.10.0/0.10.2/1.0.0/1.1.0 require server-side `cl100k_base`; binary delivery and
+maintained-summary/Knowledge Page controls are limited to exact 0.10.2, 1.0.0 or 1.1.0. Binary retention additionally
 needs a vision-capable server model and non-batch retention. **Attachment bytes cannot be
 text-redacted** and may be sent to the configured Hindsight model/provider. Local durable admission
 is not remote delivery or successful interpretation. Prior isolated proofs use the official mock LLM:
@@ -85,8 +111,8 @@ See [security audit scope](docs/github-security.md#security-domains).
 
 ## Quick start
 
-You need a working Hermes installation and an external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, 0.10.2, or 1.0.0 service.
-**Hindsight 0.10.0, 0.10.2 and 1.0.0 require server-side `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`;
+You need a working Hermes installation and an external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, 0.10.2, 1.0.0, or 1.1.0 service.
+**Hindsight 0.10.0, 0.10.2, 1.0.0 and 1.1.0 require server-side `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`;
 their default tokenizer is incompatible.** See [compatibility and validation status](docs/compatibility.md).
 
 ```bash
@@ -186,7 +212,7 @@ or retrieval quality.
 
 | Area | Better Hindsight | Bundled Hermes Hindsight |
 | --- | --- | --- |
-| Installation target | Standard Git plugin for a supported external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, 0.10.2, or 1.0.0 service | Included with Hermes; interactive setup supports Hindsight Cloud, a local embedded service, or an external service |
+| Installation target | Standard Git plugin for a supported external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, 0.10.2, 1.0.0, or 1.1.0 service | Included with Hermes; interactive setup supports Hindsight Cloud, a local embedded service, or an external service |
 | Automatic recall | Synchronous current-turn recall under character, token, response-size, and total-time bounds. Optional `pre_llm_call` planning bypasses the first turn, then uses bounded recent conversation context to skip/reuse or issue one self-contained rewritten query. | Background previous-query recall by default; optional synchronous current-query recall |
 | Recalled context | Complete byte-bounded JSONL records with recalled text and available time metadata; redacted and explicitly framed in a provider-neutral envelope as stale, untrusted evidence. Explicit recall results also retain the available type. | Formatted memory text or a reflect synthesis with configurable preamble, token budget, types, and tags |
 | Automatic retention | Opt-in; authorized, eligible turns are admitted all-or-none to a bounded private SQLite rollback-journal outbox before asynchronous delivery | Enabled by default; completed turns enter a process-local FIFO writer and then optional server-side async processing |
@@ -310,13 +336,13 @@ planner decisions to SQLite. The runtime deliberately leaves that legacy path un
 process using the profile, remove the configured database and sidecars offline, then remove the obsolete
 planner keys.
 
-### Opt-in mental-model pilot (Hindsight 0.10.0/0.10.2/1.0.0 only)
+### Opt-in mental-model pilot (Hindsight 0.10.0/0.10.2/1.0.0/1.1.0 only)
 
 `better_hindsight_mental_models` adds explicit `list`, `read`, `create`, and `status` actions.
 A direct read reuses an existing generated summary without requesting another reflect synthesis.
 The schema is stable even when disabled; calls require the existing authorized fixed-bank principal.
 No startup/version probe, automatic prefetch, or local scheduler is added. Separately opt-in
-refresh and page reads, plus confirmed operator edit/delete commands, are available on 0.10.2 and 1.0.0.
+refresh and page reads, plus confirmed operator edit/delete commands, are available on 0.10.2, 1.0.0 and 1.1.0.
 Exact 0.10.2 support preserves the same narrow payload and 500-token projection; other unreviewed
 patch versions remain unsupported. Its changed server-side refresh defaults can change work/cost,
 so validate the intended backend before enabling creation. See the
@@ -336,7 +362,7 @@ Merge this optional section into `$HERMES_HOME/better_hindsight/config.json`:
 ```
 
 All capability gates (`enabled`, `create_enabled`, `refresh_enabled`, `pages_enabled`) default to
-**false**. New refresh/page operations and operator maintenance require exact 0.10.2 or 1.0.0; old pilot
+**false**. New refresh/page operations and operator maintenance require exact 0.10.2, 1.0.0 or 1.1.0; old pilot
 list/read/create/status remain available on 0.10.0. Page search excludes standalone summaries.
 See [summary maintenance and page commands](docs/mental-models.md#operator-maintenance-and-knowledge-pages)
 for edit/delete confirmation, page creation, and policy examples. Set `create_enabled` to true separately only after
@@ -365,7 +391,7 @@ including explicit empty tags, rather than silently widening them to bank-wide r
 See [mental-model configuration and usage](docs/mental-models.md) for the exact bounds,
 wire contract, recovery limitations, and synthetic-only verification scope.
 
-### Explicit multimodal durable memory (0.10.2/1.0.0 only)
+### Explicit multimodal durable memory (0.10.2/1.0.0/1.1.0 only)
 
 `better_hindsight_retain` now accepts optional local image/file attachments, but binary admission is
 **default off** and requires both `retain.enabled` and `multimodal.enabled`, explicit narrow absolute
@@ -375,7 +401,7 @@ source deletion, process restart and ambiguous remote writes. The sender never r
 `queued_locally` is not remote delivery. Text-only behavior and v1/v2 replay remain unchanged.
 
 `recall.include_attachments` and `reflect.include_attachments` independently default to **false**.
-When enabled on exact Hindsight 0.10.2 or 1.0.0 they expose bounded validated fact provenance inside untrusted
+When enabled on exact Hindsight 0.10.2, 1.0.0 or 1.1.0 they expose bounded validated fact provenance inside untrusted
 evidence, not binary bytes, arbitrary chunk metadata or tool-call traces. Download routes are
 bank-relative and authenticated, never public URLs. Binary contents cannot be text-redacted and are
 sent to Hindsight's configured model/provider. No URL download or automatic upload retention is added.
@@ -384,7 +410,7 @@ Binary delivery also requires a server-recognized vision-capable attachment mode
 model by default, or the separate `HINDSIGHT_API_VLM_MODEL` slot. For a genuinely vision-capable
 model behind an unrecognized gateway, set server `HINDSIGHT_API_LLM_VISION=true`; this override
 does not give a text-only model vision capability. Keep `HINDSIGHT_API_RETAIN_BATCH_ENABLED=false`:
-0.10.2/1.0.0 refuse inline attachments with HTTP 422 when batch retain is enabled or vision support
+0.10.2/1.0.0/1.1.0 refuse inline attachments with HTTP 422 when batch retain is enabled or vision support
 is false/unknown. Local `queued_locally` admission does not check these server gates or guarantee
 delivery. See [multimodal server requirements, configuration and verification limits](docs/multimodal.md).
 
@@ -396,7 +422,7 @@ only a redacted synthesis inside the same untrusted recalled-memory-evidence env
 as stale, untrusted generated evidence. Its configured output cap counts the complete serialized UTF-8
 tool response. It does not
 return Hindsight traces, full source payloads, usage details, or policy controls. The separately
-opted-in 0.10.2/1.0.0 attachment descriptors are the bounded provenance exception. Better's timeout and byte
+opted-in 0.10.2/1.0.0/1.1.0 attachment descriptors are the bounded provenance exception. Better's timeout and byte
 limits bound the local Hermes call and returned context; Hindsight's agentic LLM work and provider cost
 also require appropriate server-side iteration, context, wall-time, and completion-token limits. A
 local timeout does not guarantee that backend model work is cancelled or that incurred cost is
@@ -412,7 +438,7 @@ Retries use a stable document ID and `update_mode="replace"`. A timed-out write 
 - the current intended Hermes checkout;
 - at most one Better-enabled profile per Hermes process;
 - Python 3.11–3.14 on Linux (current Hermes requires 3.14; older pinned Hermes covers 3.11–3.13);
-- an external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, 0.10.2, or 1.0.0 server;
+- an external Hindsight 0.8.5, 0.9.1, 0.9.2, 0.10.0, 0.10.2, 1.0.0, or 1.1.0 server;
 - `aiohttp>=3.14.1,<4`, `aiodns>=4.0.4,<5`, `tiktoken>=0.12,<0.15`, and `croniter>=6,<7`, which the plugin declares through Hermes's
   standard memory-plugin dependency mechanism.
 

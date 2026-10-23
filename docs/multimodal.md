@@ -1,12 +1,12 @@
-# Multimodal durable memory (Hindsight 0.10.2/1.0.0 only)
+# Multimodal durable memory (Hindsight 0.10.2/1.0.0/1.1.0 only)
 
 This is explicit agent-selected memory, not automatic upload or transcript attachment retention.
 All new capabilities default off. Text-only retention and recall keep their existing contracts on
 older supported Hindsight versions. Binary delivery and opt-in attachment-aware reads require an
-exact `/version` response of `0.10.2` or `1.0.0`; unreviewed patch versions are refused, with no caption-only
+exact `/version` response of `0.10.2`, `1.0.0` or `1.1.0`; unreviewed patch versions are refused, with no caption-only
 fallback. Configure the server with `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base` before startup.
 
-## Server requirements (exact 0.10.2/1.0.0)
+## Server requirements (exact 0.10.2/1.0.0/1.1.0)
 
 Before enabling binary admission, configure the external server's attachment-reading model.
 It must be recognized as vision-capable: by default this is the retain model, or set
@@ -146,7 +146,7 @@ or unauthenticated download. Returned history and generated reflection remain un
 Deterministic tests exercise the real provider/runtime with fake HTTP responses, local admission
 without network work, atomic validation, encoded queue capacity, provenance versus chunk metadata,
 and a loopback HTTP process-kill/response-loss replay with byte-identical original image/file blocks.
-The isolated live harness conditionally extends its exact 0.10.2/1.0.0 disposable synthetic bank: deterministic
+The isolated live harness conditionally extends its exact 0.10.2/1.0.0/1.1.0 disposable synthetic bank: deterministic
 chunk extraction, provider admission/restart after source mutation/deletion, authenticated byte
 readback, document/chunk provenance, and provider recall/reflection. Older live lanes stay text-only.
 This path supports the CI mock LLM and does **not** establish vision semantic quality. Run it only with

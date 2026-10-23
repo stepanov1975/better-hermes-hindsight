@@ -134,7 +134,7 @@ iteration, context, wall-time, and completion-token limits.
 The default-off `better_hindsight_mental_models` schema exposes only list/read/create/status.
 It shares existing provider principal authorization, fixed destination, runtime deadline, and HTTP
 transport. Reads/status and creation have separate opt-ins; scoped recall/reflect configuration is
-refused because the 0.10.0/0.10.2/1.0.0 direct-ID/list contracts do not preserve those tag boundaries. A version
+refused because the 0.10.0/0.10.2/1.0.0/1.1.0 direct-ID/list contracts do not preserve those tag boundaries. A version
 check occurs only on explicit pilot calls, never automatic recall.
 
 `mental_models.py` projects bounded metadata/content inside untrusted evidence framing, with no
@@ -156,7 +156,7 @@ admission. Ordered base64 blocks, hashes, safe file basename, context and fixed 
 source paths are not metadata, and the sender never reopens source files. One transaction admits all
 blocks or none. Existing text v1/v2 identity, capacity, sender locking and replay remain compatible.
 
-An explicit binary send and opt-in attachment-aware recall/reflection probe exact Hindsight 0.10.2 or 1.0.0,
+An explicit binary send and opt-in attachment-aware recall/reflection probe exact Hindsight 0.10.2, 1.0.0 or 1.1.0,
 never on startup or default text reads. Older/unknown APIs receive no lossy caption-only fallback.
 Synchronous replace-mode retries preserve the original ID/timestamp/bytes after ambiguous responses,
 without claiming exactly-once delivery. Changed or disabled binary policy blocks pending binary rows.
@@ -210,7 +210,7 @@ Durability begins only after admission commits. A network timeout may be ambiguo
 - API credentials come from the environment and are not part of destination fingerprints or persisted payload metadata.
 - Reflection is explicit, default-off, fixed to the configured destination/policy, and returned only as
   untrusted generated evidence; full source records, traces, directives, and usage metadata are not
-  exposed to the model. Separately opted-in 0.10.2/1.0.0 attachment handles are bounded provenance only.
+  exposed to the model. Separately opted-in 0.10.2/1.0.0/1.1.0 attachment handles are bounded provenance only.
 - Outbox rows bind to a credential-free fingerprint of endpoint, bank, schema, tags, and observation scopes.
 - Rows for another destination remain blocked until an operator deliberately restores the old configuration or performs a separately reviewed recovery.
 - Status is passive: it uses SQLite read-only URI opens, performs no application-owned schema
@@ -229,7 +229,7 @@ diagnostics. One process owns one exact Better configuration and runtime; anothe
 profile in that process fails open rather than crossing the profile boundary. The root entry point and
 `better_hermes_hindsight` implementation package are installed together by `hermes plugins install`;
 no second package installation or runtime environment is part of deployment. Better implements its
-narrow Hindsight 0.8.5/0.9.1/0.9.2/0.10.0/0.10.2/1.0.0 wire contract (0.10.0, 0.10.2 and 1.0.0 require server
+narrow Hindsight 0.8.5/0.9.1/0.9.2/0.10.0/0.10.2/1.0.0/1.1.0 wire contract (0.10.0, 0.10.2, 1.0.0 and 1.1.0 require server
 `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`) over `aiohttp` with cancellable `aiodns`
 resolution, uses `tiktoken` for bounded recall
 and reflection query projection, and does not import the Hindsight Python SDK, so the untouched bundled
@@ -249,8 +249,8 @@ product. They do not block use in the intended environment.
 
 ## Explicit maintained summaries and Knowledge Pages
 
-The default-off mental-model tool retains its 0.10.0/0.10.2/1.0.0 pilot and adds separately gated
-0.10.2/1.0.0 refresh and page reads. A narrow operator adapter owns definition PATCH/confirmed DELETE,
+The default-off mental-model tool retains its 0.10.0/0.10.2/1.0.0/1.1.0 pilot and adds separately gated
+0.10.2/1.0.0/1.1.0 refresh and page reads. A narrow operator adapter owns definition PATCH/confirmed DELETE,
 policy defaults, and page creation. No local scheduler, startup reconciliation, folder deletion,
 body editing or automatic page migration is introduced. Policy is operator-owned; model callers
 cannot widen bank/principal/tags or select triggers/budgets. Reads remain generated-untrusted,

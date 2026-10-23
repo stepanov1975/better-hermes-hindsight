@@ -11,7 +11,7 @@ isolated Hindsight development deployment. Capability is controlled directly by 
 `planner.mode`, `reflect.enabled`, and `retain.enabled`. The separate default-off mental-model pilot
 uses `mental_models.enabled` for reads/status and additionally `mental_models.create_enabled` for
 creation; it does not depend on `reflect.enabled` or `retain.enabled`. See
-[mental models](mental-models.md) before enabling this bank-wide Hindsight 0.10.0/0.10.2/1.0.0 capability.
+[mental models](mental-models.md) before enabling this bank-wide Hindsight 0.10.0/0.10.2/1.0.0/1.1.0 capability.
 
 ## Multimodal snapshots and attachment provenance
 
@@ -24,7 +24,7 @@ text-redacted. Restart after policy edits; pending binary rows are bound to the 
 
 `recall.include_attachments=false` and `reflect.include_attachments=false` are independent provenance
 opt-ins, not caller overrides or automatic downloads. Reflection still needs `reflect.enabled`.
-Exact Hindsight 0.10.2 or 1.0.0 is required for binary sends and opted-in attachment reads. The default text wire
+Exact Hindsight 0.10.2, 1.0.0 or 1.1.0 is required for binary sends and opted-in attachment reads. The default text wire
 contracts on all older supported versions are unchanged. See [multimodal](multimodal.md) for complete
 configuration/tool examples, MIME allowlist, authenticated paths, replay behavior and data exposure.
 
@@ -141,9 +141,9 @@ and invalid ranges are errors rather than silent fallbacks.
 `recall.input_max_chars` is the local pre-tokenization safety bound. `recall.input_max_tokens` is a
 separate input-query limit and defaults to the server's 500-token default. Better always counts
 with its packaged `cl100k_base` encoding and treats special-token-looking literals as ordinary text.
-Hindsight 0.10.0, 0.10.2 and 1.0.0 **require server-side `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`** before
+Hindsight 0.10.0, 0.10.2, 1.0.0 and 1.1.0 **require server-side `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base`** before
 startup to match; setting it only in Hermes does not configure the server. Older supported versions
-use `cl100k_base` by default. On 1.0.0 the server truncates long queries instead of rejecting
+use `cl100k_base` by default. On 1.0.0/1.1.0 the server truncates long queries instead of rejecting
 with HTTP 400, but its short-string fast path can bypass counting. Better still projects locally
 to at most 500 tokens by default; do not rely on universal server ceiling enforcement. See [compatibility](compatibility.md) for verification and limitations.
 Keep this value at or below the server's `HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS`. The existing `recall.max_tokens` setting controls the
@@ -454,7 +454,7 @@ timeout does not guarantee backend model cancellation or refund work/cost alread
 | `retain.enabled` | `false` | Boolean; explicit opt-in only |
 | `retain.timeout_seconds` | `60.0` | Greater than zero, at most 300 seconds |
 | `retain.segment_max_bytes` | `65536` | 1 through 16,777,216 bytes; when retention is enabled it must fit the event wrapper required by the configured tags and row limit, and with the code-owned 1,024-byte row allowance it must not exceed `outbox.max_pending_bytes` |
-| `retain.observation_scopes` | `null` | `null`, `combined`, `shared`, or `[[]]` |
+| `retain.observation_scopes` | `null` | `null`, `combined`, `shared`, or `[[]]`; on 1.1.0, `null` inherits server `default_observation_scopes`. Set `combined` explicitly to preserve the older default independently of bank policy. |
 | `retain.tags` | `[]` | At most 64 unique non-empty Unicode-scalar tags, each at most 256 characters |
 | mission texts | `null` | Distinct optional non-empty `retain_mission` and `observations_mission` fields |
 | `outbox.path` | `better_hindsight/outbox.sqlite3` | Must resolve inside `hermes_home` |
