@@ -7,6 +7,15 @@ For supported settings and migration guidance, see `docs/configuration.md`.
 
 ## Unreleased
 
+- Add exact Hindsight **1.1.0** to text/canary, multimodal, mental-model and summary/page
+  gates, with a digest-pinned isolated CI lane and backward-compatible behavioral regressions.
+  Require server `cl100k_base` and the existing 1.0-style tokenizer trace oracle.
+- Document 1.1.0's bank-default retention scopes, explicit recall-preference behavior,
+  decision-model and cancellation changes. Refuse refresh/edit of summaries carrying the new
+  unsupported independent `full_refresh_cron`. No opt-ins, dependencies, package version or
+  production installation change. Source/fake tests do not establish live-server compatibility;
+  see [the exact contract and proof limits](docs/compatibility.md#exact-hindsight-110-contract).
+
 ## 0.9.0 - 2026-10-20
 
 Optional source-only snapshot for the standard Hermes Git plugin, adding backward-compatible

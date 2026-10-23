@@ -196,7 +196,7 @@ async def _listed_bank(session: ClientSession, inputs: DevelopmentInputs) -> dic
     Config reads are not a cross-version existence oracle and contain no name;
     /profile is retired in 0.10.0. Mission readback separately uses /config.
     """
-    paginated = inputs.expected_version in {"0.9.2", "0.10.0", "0.10.2", "1.0.0"}
+    paginated = inputs.expected_version in {"0.9.2", "0.10.0", "0.10.2", "1.0.0", "1.1.0"}
     offset = 0
     total: int | None = None
     banks: dict[str, dict[str, Any]] = {}
@@ -396,7 +396,7 @@ def _assert_live_tokenizer_boundary(
     trace. HTTP 200 alone cannot prove truncation or matching tokenizer policy.
     """
     # RecallRequest requires a normalized word (emoji-only fails with 422).
-    modern = inputs.expected_version == "1.0.0"
+    modern = inputs.expected_version in {"1.0.0", "1.1.0"}
     raw_query = " tiktoken" * 251 if modern else "word " + "😀" * 251
     projected = project_query(raw_query, max_chars=4096, max_tokens=500)
     assert count_query_tokens(raw_query) == 502
@@ -418,7 +418,7 @@ def _assert_live_tokenizer_boundary(
             session.post(url, json=body, allow_redirects=False) as response,
         ):
             if modern:
-                assert response.status == 200, "1.0.0 must truncate rather than reject"
+                assert response.status == 200, "1.0.0/1.1.0 must truncate rather than reject"
                 payload = await response.json()
                 assert isinstance(payload.get("results"), list)
                 trace = payload.get("trace")
@@ -838,7 +838,7 @@ def _assert_live_multimodal(inputs: DevelopmentInputs, home: Path) -> None:
 
     from better_hermes_hindsight.multimodal import attachment_descriptors
 
-    assert inputs.expected_version in {"0.10.2", "1.0.0"}
+    assert inputs.expected_version in {"0.10.2", "1.0.0", "1.1.0"}
     source = home / "synthetic-attachments"
     source.mkdir()
     png = base64.b64decode(
@@ -996,7 +996,7 @@ def _run_live_child() -> int:
     try:
         home, config = _prepare_home(inputs)
         _assert_live_error_mapping(config)
-        if inputs.expected_version in {"0.10.0", "0.10.2", "1.0.0"}:
+        if inputs.expected_version in {"0.10.0", "0.10.2", "1.0.0", "1.1.0"}:
             _assert_live_tokenizer_boundary(inputs, config)
         expected_count = _expected_segment_count((_SHORT_TURN, _LONG_TURN))
         repeated_short_count = _expected_segment_count((_SHORT_TURN,))
@@ -1030,7 +1030,7 @@ def _run_live_child() -> int:
             raise AssertionError("repeated completed turn created an unexpected document count")
 
         _assert_live_mission_round_trip(config)
-        if inputs.expected_version in {"0.10.0", "0.10.2", "1.0.0"}:
+        if inputs.expected_version in {"0.10.0", "0.10.2", "1.0.0", "1.1.0"}:
             _assert_live_reflect(config)
             reflected = _remote_documents(inputs, None)
             if {key: value.get("original_text") for key, value in reflected.items()} != {
@@ -1052,16 +1052,16 @@ def _run_live_child() -> int:
             (home / "better_hindsight" / "config.json").write_text(
                 json.dumps(pilot_document), encoding="utf-8"
             )
-            if inputs.expected_version in {"0.10.2", "1.0.0"}:
+            if inputs.expected_version in {"0.10.2", "1.0.0", "1.1.0"}:
                 pilot_document["mental_models"].update(refresh_enabled=True, pages_enabled=True)
                 (home / "better_hindsight" / "config.json").write_text(
                     json.dumps(pilot_document), encoding="utf-8"
                 )
             manager, provider = _start_manager(home)
             _assert_live_mental_models(provider)
-            if inputs.expected_version in {"0.10.2", "1.0.0"}:
+            if inputs.expected_version in {"0.10.2", "1.0.0", "1.1.0"}:
                 _assert_live_summary_maintenance(home, provider)
-        if inputs.expected_version in {"0.10.2", "1.0.0"}:
+        if inputs.expected_version in {"0.10.2", "1.0.0", "1.1.0"}:
             _stop_manager(manager, provider)
             manager = provider = None
             _assert_live_multimodal(inputs, home)
@@ -1071,11 +1071,11 @@ def _run_live_child() -> int:
             "status": "ok",
             "version": inputs.expected_version,
         }
-        if inputs.expected_version in {"0.10.0", "0.10.2", "1.0.0"}:
+        if inputs.expected_version in {"0.10.0", "0.10.2", "1.0.0", "1.1.0"}:
             result.update(
                 tokenizer_boundary="verified", reflect_adapter="verified", mental_models="verified"
             )
-        if inputs.expected_version in {"0.10.2", "1.0.0"}:
+        if inputs.expected_version in {"0.10.2", "1.0.0", "1.1.0"}:
             result["summary_maintenance"] = "verified"
             result["multimodal"] = "verified"
         print(json.dumps(result, sort_keys=True))
@@ -1130,7 +1130,7 @@ def test_live_proof_is_explicitly_opt_in() -> None:
 
 
 @pytest.mark.parametrize(
-    "expected_version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.2", "1.0.0"]
+    "expected_version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.2", "1.0.0", "1.1.0"]
 )
 def test_live_proof_preserves_selected_interpreter_symlink(
     tmp_path: Path, expected_version: str
@@ -1162,6 +1162,9 @@ def test_live_proof_preserves_selected_interpreter_symlink(
     "version",
     [
         "1.0.1",
+        "1.1.1",
+        "1.1.0rc1",
+        "v1.1.0",
         "1.0.0rc1",
         "v1.0.0",
         "0.9.3",
@@ -1278,11 +1281,11 @@ def test_isolated_hindsight_smoke(tmp_path: Path) -> None:
         assert payload["status"] == "ok"
         assert payload["version"] == inputs.expected_version
         assert payload["documents"] == payload["segments"]
-        if inputs.expected_version in {"0.10.0", "0.10.2", "1.0.0"}:
+        if inputs.expected_version in {"0.10.0", "0.10.2", "1.0.0", "1.1.0"}:
             assert payload["tokenizer_boundary"] == "verified"
             assert payload["reflect_adapter"] == "verified"
             assert payload["mental_models"] == "verified"
-        if inputs.expected_version in {"0.10.2", "1.0.0"}:
+        if inputs.expected_version in {"0.10.2", "1.0.0", "1.1.0"}:
             assert payload["summary_maintenance"] == "verified"
             assert payload["multimodal"] == "verified"
     finally:
