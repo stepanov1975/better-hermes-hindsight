@@ -25,6 +25,11 @@ the intended backend. The disposable exact-image 1.1.0 proof passed **25 tests**
 including retention/replay, recall, reflection, tokenizer, summaries/pages and binary
 provenance, using the official mock LLM and offline local embedding/reranking models.
 This is not hosted-model quality, decision-model or production migration proof.
+Direct runtime dependency constraints and the Hermes pin are unchanged. Security maintenance
+updates locked `certifi` **2026.7.22 → 2026.10.19** and CI/audit tooling `uv` **0.13.0 → 0.13.4**;
+this does not upgrade Hermes's selected host environment. Runtime and uv-toolchain audits pass,
+but the separate scanner-toolchain audit remains blocked by Semgrep's incompatible `mcp` and
+`opentelemetry-api` pins; no audit is suppressed.
 No version bump, production update or plugin installation is included. See the
 [1.1.0 contract](docs/compatibility.md#exact-hindsight-110-contract).
 

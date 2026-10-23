@@ -75,7 +75,12 @@ not establish hosted-model quality, decision-model behavior, production scale or
 Unauthenticated and wrong-key bank reads both returned 401. Afterward the bank list was empty
 and the owned containers, network and volume were removed.
 
-No production upgrade, restart, migration, SDK/dependency update or Hermes-pin change is included.
+No production upgrade, restart, migration, SDK update, direct runtime dependency constraint change
+or Hermes-pin change is included. Separate security maintenance updates locked `certifi` from
+2026.7.22 to 2026.10.19 and CI/audit tooling `uv` from 0.13.0 to 0.13.4. The lockfile does not
+upgrade Hermes's selected host environment. Runtime and uv-toolchain audits pass; the separate
+scanner-toolchain audit remains blocked by Semgrep's incompatible `mcp` and `opentelemetry-api`
+pins, without suppressions.
 
 ## Hindsight compatibility
 
@@ -329,7 +334,10 @@ CI may follow Hermes `main` and therefore occasionally report an upstream compat
 ## Multimodal feature boundary
 
 Text-only support still spans all listed API versions. The separately opted-in multimodal capability
-requires **exact 0.10.2, 1.0.0 or 1.1.0** (reviewed source `5fc4ce20917b916240cef27c212c387a177f115b`). Version probing
+requires **exact 0.10.2, 1.0.0 or 1.1.0**. Reviewed sources are the
+[0.10.2 release](#exact-hindsight-0102-source-audit),
+[1.0.0 release](#exact-hindsight-100-contract), and
+[1.1.0 release](#exact-hindsight-110-contract), with exact source identities above. Version probing
 occurs only on binary sends or attachment-enabled reads; no startup probe or default text-request
 change is introduced. An older/unknown server cannot receive a caption-only binary fallback.
 `include_attachments` on reflection requests facts and never tool-call traces; recall projects
@@ -337,13 +345,14 @@ attachments already present on fact results/source facts, not retrieved chunk un
 
 Deterministic coverage includes actual provider/runtime fake-service integration and loopback HTTP
 response-loss/process-kill replay of original admitted bytes, document ID and timestamp. The existing
-explicit isolated live harness conditionally adds a 0.10.2/1.0.0 synthetic image/plain-file lifecycle:
+explicit isolated live harness conditionally adds a 0.10.2/1.0.0/1.1.0 synthetic image/plain-file lifecycle:
 chunk extraction policy with exact readback, provider restart after source mutation/deletion, stored
 attachment byte/hash readback through authenticated routes, document/chunk provenance and provider
 recall/reflection. It makes no flattened document-text equality assumption for block inputs. Other
 version lanes keep their text-only proof. The mock LLM proves lifecycle/plumbing, not vision semantic
 quality or arbitrary document/backend compatibility. A skipped local live gate is not a live pass;
-run the current-branch 0.10.2/1.0.0 isolated CI lanes before claiming live verification. No production service
+run the current-branch 0.10.2/1.0.0/1.1.0 isolated lanes and record each exact-image result before
+claiming live verification. The 1.1.0 proof and its limits are recorded above. No production service
 or data is authorized by these tests. See [multimodal policy and usage](multimodal.md).
 
 ## Supported deployment

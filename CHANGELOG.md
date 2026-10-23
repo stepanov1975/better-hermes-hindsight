@@ -12,9 +12,13 @@ For supported settings and migration guidance, see `docs/configuration.md`.
   Require server `cl100k_base` and the existing 1.0-style tokenizer trace oracle.
 - Document 1.1.0's bank-default retention scopes, explicit recall-preference behavior,
   decision-model and cancellation changes. Refuse refresh/edit of summaries carrying the new
-  unsupported independent `full_refresh_cron`. No opt-ins, dependencies, package version or
-  production installation change. Source/fake tests do not establish live-server compatibility;
+  unsupported independent `full_refresh_cron`. No opt-in, direct runtime dependency constraint,
+  Hermes-pin, package-version or production installation change. Source/fake tests do not establish live-server compatibility;
   see [the exact contract and proof limits](docs/compatibility.md#exact-hindsight-110-contract).
+- Update locked `certifi` from **2026.7.22 to 2026.10.19** and CI/audit tooling `uv` from
+  **0.13.0 to 0.13.4** for security fixes. This does not upgrade Hermes's selected host environment.
+  Runtime and uv-toolchain audits pass; the separate scanner-toolchain audit remains blocked by
+  Semgrep's incompatible `mcp` and `opentelemetry-api` pins. No audit is suppressed.
 
 ## 0.9.0 - 2026-10-20
 
