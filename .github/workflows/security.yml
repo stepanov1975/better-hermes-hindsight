@@ -115,7 +115,20 @@ jobs:
       - name: Audit toolchain dependencies
         env:
           MANIFEST: ${{ matrix.manifest }}
-        run: pip-audit --progress-spinner off -r "${MANIFEST}"
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ "${MANIFEST}" == "requirements-security.txt" ]]; then
+            # Scanner-only exceptions; rationale/removal conditions: docs/github-security.md.
+            args+=(
+              --ignore-vuln CVE-2026-59951
+              --ignore-vuln CVE-2026-116684
+              --ignore-vuln CVE-2026-116685
+              --ignore-vuln CVE-2026-116686
+              --ignore-vuln CVE-2026-114603
+            )
+          fi
+          exec pip-audit --progress-spinner off "${args[@]}" -r "${MANIFEST}"
 
   runtime-audit:
     name: Runtime dependency audit / Python ${{ matrix.python-version }}

@@ -7,6 +7,18 @@ Better Hermes Hindsight is an unofficial Hermes memory provider for supported ex
 
 The provider ID is `better_hindsight`, deliberately separate from bundled `hindsight`, so the existing provider and bank remain available for rollback.
 
+## 0.10.1 snapshot: narrowly scoped scanner-audit exceptions
+
+This source-only follow-up adds **five approved scanner-manifest-only non-applicability
+exceptions** for Semgrep's unused MCP client/server paths and disabled tracing propagation. They apply
+only when auditing `requirements-security.txt`; runtime dependencies, all other manifests,
+unrelated advisories and audit errors remain strict. The affected scanner dependencies are not
+patched. Exact IDs, rationale and removal conditions are in
+[security audit scope](docs/github-security.md#security-domains).
+
+Hermes compatibility, Hindsight support, provider behavior, feature defaults and live installations
+are unchanged from 0.10.0. See [release notes](CHANGELOG.md#0101---2026-11-13).
+
 ## 0.10.0 snapshot: Hermes v0.23.0 and Hindsight 1.1.0
 
 This source-only snapshot updates real-host integration tests for **Hermes v0.23.0** and
@@ -111,7 +123,8 @@ Hermes's selected host environment or replace dependencies already imported by a
 verify actual versions and handle any host update/restart separately.
 
 The development security toolchain pins Semgrep 1.181.0 and zizmor 1.31.1. Scanner-toolchain
-and application-runtime audits remain separate, with no advisory suppressions.
+and application-runtime audits remain separate. Exactly five approved non-applicability exclusions
+apply only to the scanner manifest; every other manifest and advisory remains strict.
 See [security audit scope](docs/github-security.md#security-domains).
 
 ## Quick start

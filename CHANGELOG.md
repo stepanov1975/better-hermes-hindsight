@@ -7,6 +7,20 @@ For supported settings and migration guidance, see `docs/configuration.md`.
 
 ## Unreleased
 
+## 0.10.1 - 2026-11-13
+
+Source-only CI policy follow-up; runtime dependencies, provider behavior and feature defaults are
+unchanged. No deployment or gateway restart is included.
+
+- Apply five explicitly approved non-applicability exceptions **only** to the
+  `requirements-security.txt` dependency audit: Semgrep's unused MCP client/server paths and disabled
+  tracing context propagation. Document exact advisory IDs, affected pins and removal conditions.
+- Keep every other manifest, frozen application-runtime export, unrelated advisory and audit
+  execution error strict. Regression tests execute the actual workflow shell recipe, proving
+  exception scoping and nonzero failure propagation.
+- The exceptions do not patch Semgrep's MCP/OpenTelemetry dependencies. Remove them after a
+  compatible upstream fix or before changing the scanner command to expose the affected paths.
+
 ## 0.10.0 - 2026-11-13
 
 Source-only snapshot for the standard Hermes Git plugin; no PyPI publication, uploaded package
