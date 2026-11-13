@@ -277,6 +277,9 @@ def test_canary_dns_wait_does_not_escape_total_deadline(
         "1.0.0rc1",
         "v1.0.0",
         "1.0.1",
+        "1.1.1",
+        "1.1.0rc1",
+        "v1.1.0",
         "v0.10.2",
         "0.10.0rc1",
         "0.11.0",
@@ -396,7 +399,9 @@ def _assert_private_absent(result: dict[str, object]) -> None:
     assert not any(tag in rendered for tag in _Handler.tags)
 
 
-@pytest.mark.parametrize("api_version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.2", "1.0.0"])
+@pytest.mark.parametrize(
+    "api_version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.2", "1.0.0", "1.1.0"]
+)
 def test_canary_uses_exact_protocol_proves_owned_recall_and_validates_cleanup(
     api_version: str,
 ) -> None:
