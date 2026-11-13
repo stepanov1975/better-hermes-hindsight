@@ -142,10 +142,18 @@ sessions:
         # actual lookup site on either host without manufacturing missing attributes.
         tools_module = "run_agent" if hasattr(run_agent, "get_tool_definitions") else "model_tools"
 
+        # Hermes split Ollama initialization into its own module in v0.23.
+        # Patch the real lookup site, retaining the older host's inline lookup.
+        agent_init = importlib.import_module("agent.agent_init")
+        ollama_module = (
+            agent_init
+            if hasattr(agent_init, "query_ollama_num_ctx")
+            else importlib.import_module("agent.agent_init_ollama")
+        )
         # The fake model has a fixed context window and is not an Ollama server.
         # Otherwise host initialization probes port 9 outside the recall deadline.
         with (
-            patch("agent.agent_init.query_ollama_num_ctx", return_value=None),
+            patch.object(ollama_module, "query_ollama_num_ctx", return_value=None),
             patch(f"{tools_module}.get_tool_definitions", return_value=[]),
             patch(f"{tools_module}.check_toolset_requirements", return_value={}),
             patch.object(AIAgent, "_create_openai_client"),

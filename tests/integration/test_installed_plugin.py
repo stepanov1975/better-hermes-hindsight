@@ -80,6 +80,7 @@ def _plugin_repository(tmp_path: Path) -> Path:
     shutil.copytree(
         ROOT / "better_hermes_hindsight",
         source / "better_hermes_hindsight",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
     _run(["git", "init", "--quiet"], cwd=source)
     _run(["git", "config", "user.name", "Task 5 fixture"], cwd=source)
@@ -166,6 +167,15 @@ def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
         environ=environ,
     )
 
+    # Modern Hermes selects memory providers separately from standalone hooks:
+    # install --enable may select only memory.provider. Explicit enable admits
+    # the optional planner companion without overwriting other plugin selections.
+    _run(
+        [sys.executable, "-m", "hermes_cli.main", "plugins", "enable", "better_hindsight"],
+        cwd=tmp_path,
+        environ=environ,
+    )
+
     installed = home / "plugins/better_hindsight"
     assert installed.is_dir()
     assert all((installed / name).is_file() for name in ROOT_PLUGIN_FILES)
@@ -179,7 +189,9 @@ def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
 
     installed_config = yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
     assert installed_config["memory"]["provider"] == "better_hindsight"
-    assert "better_hindsight" in installed_config["plugins"]["enabled"]
+    # Memory providers activate through memory.provider on current Hermes, not
+    # necessarily plugins.enabled. Selection must not leave the provider disabled.
+    assert "better_hindsight" not in installed_config.get("plugins", {}).get("disabled", [])
 
     probe = _run(
         [
@@ -188,12 +200,15 @@ def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
             (
                 "import json, sys; "
                 "from plugins.memory import discover_plugin_cli_commands, load_memory_provider; "
+                "from hermes_cli.plugins import get_plugin_auxiliary_tasks; "
                 "provider = load_memory_provider('better_hindsight'); "
                 "commands = discover_plugin_cli_commands(); "
                 "print(json.dumps({'provider_name': provider.name, "
                 "'provider_type': type(provider).__name__, "
                 "'provider_file': sys.modules[type(provider).__module__].__file__, "
                 "'top_level_loaded': 'better_hermes_hindsight' in sys.modules, "
+                "'planner_registered': any(task.get('key') == 'better_hindsight_recall_planner' "
+                "for task in get_plugin_auxiliary_tasks()), "
                 "'commands': [item['name'] for item in commands]}, sort_keys=True))"
             ),
         ],
@@ -207,13 +222,26 @@ def test_released_hermes_installs_loads_discovers_cli_and_removes_plugin(
         "provider_name": "better_hindsight",
         "provider_type": "BetterHindsightMemoryProvider",
         "top_level_loaded": False,
+        "planner_registered": True,
     }
 
     (source / "update-marker.txt").write_text("updated\n", encoding="utf-8")
     _git("add", "update-marker.txt", cwd=source)
     _git("commit", "-m", "update fixture", cwd=source)
     _run(
-        [sys.executable, "-m", "hermes_cli.main", "plugins", "update", "better_hindsight"],
+        [
+            sys.executable,
+            "-c",
+            # The bundled tokenizer is deliberately large. Accept the real
+            # scanner's caution interactively, exactly as at initial install.
+            "import builtins, sys; "
+            "sys.stdin.isatty = sys.stdout.isatty = lambda: True; "
+            "builtins.input = lambda prompt='': 'y'; "
+            "from hermes_cli.main import main; main()",
+            "plugins",
+            "update",
+            "better_hindsight",
+        ],
         cwd=tmp_path,
         environ=environ,
     )

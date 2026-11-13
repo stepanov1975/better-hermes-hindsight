@@ -318,7 +318,9 @@ def fixture_model(key: str, question: str = QUESTION) -> dict[str, Any]:
 
 
 @pytest.fixture(autouse=True)
-def isolate(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
+    # Calls must originate in the same isolated profile as the real MemoryManager.
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     reset_process_runtime_for_tests()
     for name in tuple(os.environ):
         if name.startswith("HINDSIGHT_"):
@@ -1468,7 +1470,7 @@ def test_redacted_page_search_over_bound_has_no_io(
     from better_hermes_hindsight.redaction import redact_sensitive_text
 
     config_home(tmp_path, server)
-    query = "x" * 1987 + " api_key=abcd"
+    query = "x" * 1987 + " http://a@b.c"
     assert len(query) <= 2000 and len(redact_sensitive_text(query)) > 2000
     assert project_query(query, max_chars=2000, max_tokens=500) == query
     if surface == "operator":

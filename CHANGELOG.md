@@ -7,13 +7,36 @@ For supported settings and migration guidance, see `docs/configuration.md`.
 
 ## Unreleased
 
+## 0.10.0 - 2026-11-13
+
+Source-only snapshot for the standard Hermes Git plugin; no PyPI publication, uploaded package
+assets, automatic live installation, feature enablement, or gateway restart.
+
+### Hermes compatibility
+
+- Update real-host integration fixtures for Hermes v0.23.0's moved Ollama lookup, profile-scoped
+  memory routing, host credential scrubbing, and interactive plugin update scanner.
+- Explicitly enable the standalone planner companion after memory setup and verify its real
+  auxiliary-task registration. Modern Hermes can select the memory provider without enabling
+  generic hooks, even with `install --enable`; planning itself remains off by default.
+- Honor the selected test host's own dependency overrides and lock-aware consistency checks;
+  unknown failures still fail, without new advisory exceptions. Keep tests in their selected
+  interpreter rather than allowing bootstrap re-execution into another managed environment.
+- Run Python 3.14 against reviewed Hermes v0.23.0 for every PR and before snapshot publication,
+  retaining older Python 3.11–3.13 lanes and a separate moving-main canary. Backend live lanes use
+  the reviewed released host. No Hermes-core patch or provider runtime workaround is introduced.
+- Incorporate setup-python 7.1.0, Semgrep 1.181.0 and zizmor 1.31.1 from the reviewed dependency PRs,
+  preserving patched uv 0.13.4 instead of reintroducing 0.13.1.
+
+### Hindsight compatibility and security maintenance
+
 - Add exact Hindsight **1.1.0** to text/canary, multimodal, mental-model and summary/page
   gates, with a digest-pinned isolated CI lane and backward-compatible behavioral regressions.
   Require server `cl100k_base` and the existing 1.0-style tokenizer trace oracle.
 - Document 1.1.0's bank-default retention scopes, explicit recall-preference behavior,
   decision-model and cancellation changes. Refuse refresh/edit of summaries carrying the new
   unsupported independent `full_refresh_cron`. No opt-in, direct runtime dependency constraint,
-  Hermes-pin, package-version or production installation change. Source/fake tests do not establish live-server compatibility;
+  or production installation change. Source/fake tests do not establish live-server compatibility;
   see [the exact contract and proof limits](docs/compatibility.md#exact-hindsight-110-contract).
 - Update locked `certifi` from **2026.7.22 to 2026.10.19** and CI/audit tooling `uv` from
   **0.13.0 to 0.13.4** for security fixes. This does not upgrade Hermes's selected host environment.

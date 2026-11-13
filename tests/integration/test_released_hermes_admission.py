@@ -147,6 +147,7 @@ def test_released_memory_manager_normally_runs_callback_asynchronously_before_lo
 
     reset_process_runtime_for_tests()
     hermes_home = tmp_path / "hermes-home"
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
     config = _write_retain_only_profile(hermes_home)
     client_factory = _NoNetworkClientFactory()
     bootstrap = acquire_process_runtime(
@@ -269,6 +270,7 @@ def test_released_memory_manager_inline_fallback_performs_only_local_admission(
 
     reset_process_runtime_for_tests()
     hermes_home = tmp_path / "hermes-home"
+    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
     config = _write_retain_only_profile(hermes_home)
     client_factory = _NoNetworkClientFactory()
     bootstrap = acquire_process_runtime(

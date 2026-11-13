@@ -69,7 +69,7 @@ test against exact **0.9.2, 0.10.0, 0.10.2, 1.0.0, and 1.1.0** release images pi
 uses Hindsight's real API, local embeddings and local reranker, and selects its deterministic mock
 LLM, so it needs no third-party credentials. The 0.10.0/0.10.2/1.0.0/1.1.0 lanes explicitly select `cl100k_base` and a
 500-token recall ceiling. The Python readiness probe works without curl inside the candidate image.
-The job checks out current Hermes `main` and records the exact Better commit, Hermes commit,
+The job checks out reviewed Hermes v0.23.0 and records the exact Better commit, Hermes commit,
 Hindsight version response, and Hindsight image digest before testing.
 
 GitHub Actions owns the disposable service-container lifecycle. The test still creates and
