@@ -34,6 +34,8 @@ def clean_subprocess_env(
     environment.update(
         {
             "HOME": str(home),
+            # Exercise the explicitly selected interpreter, not PM's auto-repair/re-exec.
+            "HERMES_DISABLE_LAZY_INSTALLS": "1",
             "NO_PROXY": no_proxy,
             "PIP_NO_INDEX": "1",
             "PYTHONDONTWRITEBYTECODE": "1",

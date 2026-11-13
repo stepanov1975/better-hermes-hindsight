@@ -171,7 +171,9 @@ def model(model_id: str, *, source_query: str = "fixture question") -> dict[str,
 
 
 @pytest.fixture(autouse=True)
-def isolate(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
+    # Calls must originate in the same isolated profile as the real MemoryManager.
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     reset_process_runtime_for_tests()
     for name in tuple(os.environ):
         if name.startswith("HINDSIGHT_"):
@@ -421,9 +423,9 @@ def test_definite_rejection_releases_reservation(
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("source_query", "x" * 1987 + " api_key=abcd"),
-        ("source_query", "a " * 496 + "api_key=abcd"),
-        ("name", "x" * 107 + " api_key=abcd"),
+        ("source_query", "x" * 1987 + " http://a@b.c"),
+        ("source_query", "a " * 494 + "http://a@b.c"),
+        ("name", "x" * 107 + " http://a@b.c"),
     ],
 )
 def test_redaction_expansion_rejected_before_io(
@@ -443,13 +445,15 @@ def test_redaction_expansion_rejected_before_io(
 
 def test_bounded_redacted_creation_reconciles(tmp_path: Path, server: Server) -> None:
     host = manager(tmp_path, server, cap=1)
-    args = {**CREATE, "source_query": "a " * 492 + "api_key=abcd", "name": "api_key=abcd"}
+    # Username-only URL credentials survive host password scrubbing, so the
+    # real manager still exercises Better's own expansion and redaction boundary.
+    args = {**CREATE, "source_query": "a " * 489 + "http://a@b.c", "name": "http://a@b.c"}
     assert count_query_tokens(redact_sensitive_text(args["source_query"])) == 500
     first = call(host, args)
     assert first["result"] == "queued"
     post = next(request[2] for request in server.requests if request[0] == "POST")
     assert post["source_query"] == redact_sensitive_text(args["source_query"])
-    assert post["name"] == "api_key=[REDACTED]"
+    assert post["name"] == "http://[REDACTED]@b.c"
     reused = call(host, args)
     assert reused["result"] == "existing" and reused["id"] == first["id"]
     assert sum(request[0] == "POST" for request in server.requests) == 1
