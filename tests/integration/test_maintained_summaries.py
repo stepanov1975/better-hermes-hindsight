@@ -327,7 +327,7 @@ def isolate(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     reset_process_runtime_for_tests()
 
 
-@pytest.fixture(params=["0.10.2", "1.0.0"])
+@pytest.fixture(params=["0.10.2", "1.0.0", "1.1.0"])
 def server(request: pytest.FixtureRequest) -> Iterator[Server]:
     state = Server()
     state.version = request.param
@@ -694,6 +694,7 @@ def test_ambiguous_page_create_is_one_write_and_actionable(tmp_path: Path, serve
     "field,value",
     [
         ("keep_trace", True),
+        ("full_refresh_cron", "0 3 * * 0"),
         ("response_schema", {"private": "RAW-PRIVATE-SENTINEL"}),
         ("tag_groups", [{"tags": ["private"]}]),
         ("fact_types", ["observation"]),
@@ -1424,6 +1425,7 @@ def test_cli_verification_refusal_preserves_ack_not_rejection(
     [
         ("tags", ["scoped", "api_key=abcd"]),
         ("keep_trace", True),
+        ("full_refresh_cron", "0 3 * * 0"),
         ("tag_groups", [{"tags": ["private"]}]),
         ("include_chunks", True),
         ("response_schema", {"description": "api_key=abcd"}),
