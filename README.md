@@ -7,31 +7,36 @@ Better Hermes Hindsight is an unofficial Hermes memory provider for supported ex
 
 The provider ID is `better_hindsight`, deliberately separate from bundled `hindsight`, so the existing provider and bank remain available for rollback.
 
-## Development: exact Hindsight 1.1.0 compatibility
+## 0.10.0 snapshot: Hermes v0.23.0 and Hindsight 1.1.0
 
-The development tree adds exact **1.1.0** to all existing text, multimodal,
-mental-model and Knowledge Page gates, preserving older supported versions. Keep
-server `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base` and the local 500-token
-projection. Unreviewed 1.x versions, prereleases and `v`-prefixed API responses
-remain refused at explicit gates; automatic text recall still has no version preflight.
+This source-only snapshot updates real-host integration tests for **Hermes v0.23.0** and
+adds a reproducible Python 3.14 released-host CI lane alongside the older Python 3.11–3.13
+lanes. Snapshot publication waits for both host lanes. The moving Hermes `main` canary
+remains separate; isolated backend lanes use the reviewed v0.23.0 host.
 
-In 1.1.0, omitted/null retention scopes inherit the bank's new
-`default_observation_scopes`; set `retain.observation_scopes="combined"` to preserve
-the older default independently of bank configuration. Explicit recall preferences
-remain authoritative. Better does not manage the new independent
-`full_refresh_cron`: summaries with that schedule are refused for refresh/edit.
-New decision-model, generation and consolidation behavior must be validated against
-the intended backend. The disposable exact-image 1.1.0 proof passed **25 tests**,
-including retention/replay, recall, reflection, tokenizer, summaries/pages and binary
-provenance, using the official mock LLM and offline local embedding/reranking models.
-This is not hosted-model quality, decision-model or production migration proof.
-Direct runtime dependency constraints and the Hermes pin are unchanged. Security maintenance
-updates locked `certifi` **2026.7.22 → 2026.10.19** and CI/audit tooling `uv` **0.13.0 → 0.13.4**;
-this does not upgrade Hermes's selected host environment. Runtime and uv-toolchain audits pass,
-but the separate scanner-toolchain audit remains blocked by Semgrep's incompatible `mcp` and
-`opentelemetry-api` pins; no audit is suppressed.
-No version bump, production update or plugin installation is included. See the
-[1.1.0 contract](docs/compatibility.md#exact-hindsight-110-contract).
+The test harness follows Hermes's moved model-probing lookup, profile-scoped memory routing,
+current credential scrubbing, and interactive install/update scanning. Test-host installation
+honors the selected Hermes checkout's own dependency overrides and lock-aware consistency checks;
+unknown dependency errors and separate vulnerability audits still fail. No Hermes-core patch,
+provider runtime workaround, opt-in change, live installation, or gateway restart is included.
+
+Exact **Hindsight 1.1.0** is supported across the existing text, multimodal, mental-model and
+Knowledge Page gates. Keep server `HINDSIGHT_API_TOKENIZER_ENCODING=cl100k_base` and the local
+500-token projection. Unreviewed 1.x versions, prereleases and `v`-prefixed API responses remain
+refused at explicit gates; automatic text recall still has no version preflight.
+
+In 1.1.0, omitted/null retention scopes inherit `default_observation_scopes`; use
+`retain.observation_scopes="combined"` to preserve the older default independently of bank
+configuration. Better refuses refresh/edit of summaries carrying unsupported independent
+`full_refresh_cron`. Mock-LLM lifecycle proof is not hosted-model quality, decision-model,
+backend-spend, or production migration proof. See the
+[exact contract and validation evidence](docs/compatibility.md#exact-hindsight-110-contract).
+
+Security maintenance updates locked `certifi` to **2026.10.19** and CI/audit `uv` to **0.13.4**.
+Scanner updates are Semgrep **1.181.0**, zizmor **1.31.1**, and setup-python **7.1.0**.
+The separate scanner-toolchain audit retains known upstream MCP/OpenTelemetry findings;
+no advisory is suppressed and this snapshot does not upgrade Hermes's live dependency environment.
+See [release notes](CHANGELOG.md#0100---2026-11-13).
 
 ## 0.9.0 snapshot: Hindsight 1.0.0 compatibility
 
@@ -63,8 +68,9 @@ Hermes Git plugin: no PyPI publication or uploaded wheel/sdist assets. See
 [immutable rollback](docs/rollback.md#restore-the-prior-better-snapshot). A source version alone
 does not prove that a release has been published or installed; verify the tag and deployed commit.
 
-**Merge is a release action:** a push to `main` that passes the pinned-Hermes CI job automatically
-creates the version tag and publishes a GitHub source snapshot through `release.yml`. That job does
+**Merge is a release action:** a push to `main` that passes both pinned-Hermes and released
+v0.23.0 CI jobs automatically creates the version tag and publishes a GitHub source snapshot through
+`release.yml`. That job does
 not wait for the separately scheduled/manual current-Hermes, live-Hindsight, or security workflows.
 Before merging a version change, verify the combined candidate against pinned/current Hermes,
 packaging/security, and supported isolated live Hindsight. After publication, verify the immutable
@@ -98,14 +104,13 @@ production migration/restore rehearsal. Revalidate the intended backend before e
 local timeouts and output targets do not cap backend spend. See [multimodal requirements](docs/multimodal.md)
 and [compatibility evidence and limits](docs/compatibility.md).
 
-The planner fixes have focused real-host verification, but the full Hermes v0.22.0 suite still has
-known host-specific installer, redaction-placeholder, and scanner-fixture differences. Green pinned
-CI is not an all-green latest-Hermes claim. The locked `multidict` security update also does not
-upgrade Hermes's selected host environment or replace dependencies already imported by a running
-process; verify actual versions and handle any host update/restart separately.
+Installed-host verification is distinct from the moving-Hermes canary and from real backend proof.
+The current fixtures address the previously documented installer, redaction-placeholder and scanner
+fixture differences; see [host compatibility](docs/compatibility.md). Lockfile updates do not upgrade
+Hermes's selected host environment or replace dependencies already imported by a running process;
+verify actual versions and handle any host update/restart separately.
 
-The current development security toolchain pins Semgrep 1.179.0, whose dependency range permits
-patched PyJWT 2.15.x instead of restricting resolution to vulnerable 2.13.x. Scanner-toolchain
+The development security toolchain pins Semgrep 1.181.0 and zizmor 1.31.1. Scanner-toolchain
 and application-runtime audits remain separate, with no advisory suppressions.
 See [security audit scope](docs/github-security.md#security-domains).
 

@@ -6,13 +6,19 @@ Better Hermes Hindsight follows the Hermes checkout used by its maintainer rathe
 
 - Better declares Python `>=3.11,<3.15`. Current Hermes requires Python 3.14 for its core
   runtime dependencies; its broader bootstrap packaging bound does not make 3.13 a working runtime.
-- Required Linux CI tests Python 3.11, 3.12, and 3.13 against one reviewed Hermes source commit.
-- A weekly/manual Python 3.14 canary follows Hermes `main`; a successful canary supports an intentional
-  update of the required commit rather than making pull-request results depend on a moving upstream.
+- Linux CI tests Python 3.11, 3.12, and 3.13 against the older reviewed Hermes source commit,
+  plus Python 3.14 against released Hermes v0.23.0
+  (`2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19`). Both host jobs gate snapshot publication.
+- A weekly/manual Python 3.14 canary follows Hermes `main`; isolated backend live lanes use the
+  reviewed released host so unrelated moving-host failures do not erase backend evidence.
+- Test-host installation honors the selected host's own dependency overrides and lock-aware
+  consistency checker. Unknown conflicts still fail; vulnerability audits are separate.
+- Tests disable lazy dependency installation/re-execution to keep the chosen interpreter and
+  synthetic home, while still exercising explicit plugin install/setup/update and real scanning.
 - Validation records the observed Hermes package version and Git commit when available.
 - A different commit is not rejected solely because its identity changed.
 - Compatibility fails only when required provider/CLI interfaces are missing or behavior tests fail.
-- Historical Hermes versions are not blocking CI lanes.
+- These reviewed source selections are test hosts, not exact-commit runtime prerequisites.
 
 ### 0.7.1 current-host validation
 
