@@ -50,7 +50,10 @@ jobs:
         run: |
           python -m pip install --requirement requirements-ci.txt
           uv sync --frozen --extra dev --python "${{ matrix.python-version }}"
-          python scripts/install_hermes_test_host.py .compat/hermes-current
+          # Preserve the older host's tested install semantics; its broad overrides predate
+          # the lock-aware checker used by modern Hermes.
+          uv pip install --python .venv/bin/python -e .compat/hermes-current
+          uv pip check --python .venv/bin/python
 
       - name: Record tested source identities
         run: |
