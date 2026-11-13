@@ -53,7 +53,7 @@ class Transport:
         pass
 
 
-@pytest.mark.parametrize("version", ["0.10.2", "1.0.0"])
+@pytest.mark.parametrize("version", ["0.10.2", "1.0.0", "1.1.0"])
 def test_attachment_recall_and_reflection_exact_wire(tmp_path: Path, version: str) -> None:
     config = load_config(
         tmp_path,
@@ -125,7 +125,19 @@ def test_reflection_collects_valid_handles_after_attachmentless_sources(
 
 
 @pytest.mark.parametrize(
-    "version", ["0.10.0", "0.9.0", "0.10.3", "unknown", "1.0.0rc1", "v1.0.0", "1.0.1"]
+    "version",
+    [
+        "0.10.0",
+        "0.9.0",
+        "0.10.3",
+        "unknown",
+        "1.0.0rc1",
+        "v1.0.0",
+        "1.0.1",
+        "1.1.1",
+        "1.1.0rc1",
+        "v1.1.0",
+    ],
 )
 def test_unsupported_multimodal_never_sends_caption(tmp_path: Path, version: str) -> None:
     config = load_config(
@@ -239,7 +251,7 @@ while True: time.sleep(.05)
 """
 
 
-@pytest.mark.parametrize("version", ["0.10.2", "1.0.0"])
+@pytest.mark.parametrize("version", ["0.10.2", "1.0.0", "1.1.0"])
 @pytest.mark.parametrize("commit_before_disconnect", [False, True])
 def test_real_model_tool_process_restart_replays_immutable_original_bytes(
     tmp_path: Path, version: str, commit_before_disconnect: bool
@@ -334,7 +346,20 @@ def test_real_model_tool_process_restart_replays_immutable_original_bytes(
 
 
 @pytest.mark.parametrize(
-    "version", ["0.8.5", "0.9.1", "0.9.2", "0.10.0", "0.10.3", "1.0.0rc1", "v1.0.0", "1.0.1"]
+    "version",
+    [
+        "0.8.5",
+        "0.9.1",
+        "0.9.2",
+        "0.10.0",
+        "0.10.3",
+        "1.0.0rc1",
+        "v1.0.0",
+        "1.0.1",
+        "1.1.1",
+        "1.1.0rc1",
+        "v1.1.0",
+    ],
 )
 def test_attachment_reads_gate_exact_version_without_changing_default_text(
     tmp_path: Path, version: str

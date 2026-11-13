@@ -48,6 +48,10 @@ def validate_fixed_policy(model: dict[str, Any]) -> None:
     trigger = model.get("trigger")
     if model.get("tags") != [] or not isinstance(trigger, dict):
         raise ValueError("Summary requires bank-wide fixed policy.")
+    # 1.1.0 adds an independent paid full-refresh schedule. Better cannot manage
+    # that policy: do not silently preserve an active unsupported trigger on edit.
+    if trigger.get("full_refresh_cron") is not None:
+        raise ValueError("Summary full-refresh schedule is unsupported.")
     editable = {
         "mode",
         "budget",

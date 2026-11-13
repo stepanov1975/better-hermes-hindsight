@@ -42,7 +42,7 @@ def tool_schema() -> dict[str, Any]:
         "description": (
             "Explicit opt-in bank-wide mental-model list/read/create/status/refresh and "
             "Knowledge Page page_browse/page_search/page_read. New operations require "
-            "0.10.2 or 1.0.0 and separate operator opt-ins. "
+            "0.10.2, 1.0.0 or 1.1.0 and separate operator opt-ins. "
             "Page search excludes standalone models. "
             "Refresh queues backend work and costs; it cannot edit definitions or policy. "
             "List first and reuse "
@@ -253,14 +253,16 @@ class MentalModels:
         version = await client.mental_model_request(
             "GET", "/version", decoder=lambda value: text(mapping(value).get("api_version"), 64)
         )
-        if version not in {"0.10.0", "0.10.2", "1.0.0"}:
-            return '{"error":"Mental-model pilot requires Hindsight 0.10.0, 0.10.2 or 1.0.0."}'
+        if version not in {"0.10.0", "0.10.2", "1.0.0", "1.1.0"}:
+            return (
+                '{"error":"Mental-model pilot requires Hindsight 0.10.0, 0.10.2, 1.0.0 or 1.1.0."}'
+            )
         action = args["action"]
         if action in {"refresh", "page_browse", "page_read", "page_search"}:
-            if version not in {"0.10.2", "1.0.0"}:
+            if version not in {"0.10.2", "1.0.0", "1.1.0"}:
                 return (
                     '{"error":"Summary maintenance and Knowledge Pages require '
-                    'Hindsight 0.10.2 or 1.0.0."}'
+                    'Hindsight 0.10.2, 1.0.0 or 1.1.0."}'
                 )
             if action == "refresh":
                 async with self.lock:
@@ -295,7 +297,7 @@ class MentalModels:
         if action == "status":
             return await self.status(client, args["id"], args["operation_id"])
         async with self.lock:
-            return await self.create(client, args, modern=version in {"0.10.2", "1.0.0"})
+            return await self.create(client, args, modern=version in {"0.10.2", "1.0.0", "1.1.0"})
 
     def project(self, model: dict[str, Any], *, content: bool = False) -> dict[str, object]:
         if model.get("bank_id") != self.config.bank_id:
@@ -499,7 +501,9 @@ class MentalModels:
         from .summary_policy import SummaryPolicy
 
         if not modern and self.config.mental_models.creation != SummaryPolicy():
-            return '{"error":"Configured creation policy requires Hindsight 0.10.2 or 1.0.0."}'
+            return (
+                '{"error":"Configured creation policy requires Hindsight 0.10.2, 1.0.0 or 1.1.0."}'
+            )
         query = redact_sensitive_text(args["source_query"])
         model_id = stable_id(self.config, query)
         try:
