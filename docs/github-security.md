@@ -6,7 +6,7 @@ Better Hermes Hindsight uses lightweight controls for a public, Linux-only Herme
 
 | File or GitHub feature | Purpose |
 | --- | --- |
-| `.github/workflows/ci.yml` | Tests Python 3.11–3.13 against one reviewed Hermes commit and runs a scheduled/manual Hermes `main` compatibility canary. |
+| `.github/workflows/ci.yml` | Tests Python 3.11–3.13 against the older reviewed Hermes commit, Python 3.14 against reviewed Hermes v0.23.0, and a scheduled/manual Hermes `main` compatibility canary. |
 | `.github/workflows/security.yml` | Runs Gitleaks, actionlint, Semgrep, zizmor, and dependency audits. |
 | `.github/workflows/release.yml` | Publishes an optional source-only snapshot after verified `main` CI when a new synchronized version has no existing tag. |
 | `.github/dependabot.yml` | Maintains weekly Python and GitHub Actions pins with grouped updates and a cooldown. |

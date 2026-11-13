@@ -8,14 +8,19 @@ Better Hermes Hindsight follows rolling Hermes development. Keep changes practic
 mkdir -p .compat
 git clone --depth 1 https://github.com/NousResearch/hermes-agent.git .compat/hermes-current
 uv sync --extra dev --python 3.14
-uv pip install --python .venv/bin/python -e .compat/hermes-current
-uv pip check --python .venv/bin/python
+python scripts/install_hermes_test_host.py .compat/hermes-current
 ```
 
 The tests import Hermes's real provider and plugin interfaces, so `uv sync` alone is not a complete
 development environment. Before validating against a newer Hermes checkout, run
-`git -C .compat/hermes-current pull --ff-only` and reinstall the editable checkout with the final
-`uv pip install` command above.
+`git -C .compat/hermes-current pull --ff-only` and rerun the test-host helper above. It passes the
+selected host's own `[tool.uv]` dependency overrides to the resolver and uses that host's lock-aware
+checker for expected override mismatches. Unrecorded or unreadable dependency failures still fail;
+this does not suppress Better runtime advisory audits or introduce Better-owned exceptions.
+
+Run tests with `HERMES_DISABLE_LAZY_INSTALLS=1` so they exercise the selected interpreter instead of
+Hermes preparing and re-executing into a different package-manager environment. Integration children
+set this in their isolated environment too; real plugin install/setup paths remain exercised.
 
 ## Before committing runtime changes
 
@@ -24,8 +29,9 @@ uv lock --check
 .venv/bin/python -m ruff check better_hermes_hindsight tests scripts __init__.py cli.py
 .venv/bin/python -m ruff format --check better_hermes_hindsight tests scripts __init__.py cli.py
 .venv/bin/python -m mypy
-.venv/bin/python -m pytest -p no:cacheprovider
-uv pip check --python .venv/bin/python
+HERMES_DISABLE_LAZY_INSTALLS=1 .venv/bin/python -m pytest -p no:cacheprovider
+# Dependency consistency is checked by install_hermes_test_host.py above; raw uv pip check
+# also reports deliberate overrides from the selected Hermes lock.
 
 git diff --check
 ```
