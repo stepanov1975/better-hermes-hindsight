@@ -30,16 +30,16 @@ Run the standard Hermes plugin commands:
 ```bash
 hermes plugins install --enable stepanov1975/better-hermes-hindsight
 hermes memory setup better_hindsight
+hermes plugins enable better_hindsight
 ```
 
-Accept the interactive dependency-preparation prompt on current Hermes. Non-interactive installs
-can leave the plugin disabled despite `--enable`; run `hermes plugins enable better_hindsight`
-interactively before setup in that case.
-
-With dependency consent, the first command clones and enables the complete plugin in the current Hermes plugin directory. That
-enablement lets the standalone companion register its `pre_llm_call` hook; the default `planner.mode`
-of `off` still makes the hook inert. The second command selects `better_hindsight` as the active memory
-provider and checks its declared dependency. No custom install script or additional runtime is involved.
+Accept current Hermes's dependency-preparation prompts. The first two commands acquire the plugin,
+install/check its dependencies, and select `better_hindsight` as the memory provider. On modern
+Hermes, `install --enable` can select that provider without enabling generic plugin hooks.
+The final, idempotent `plugins enable` command separately admits the standalone planner companion
+and preserves other plugin selections. Its hook remains inert while the default `planner.mode`
+is `off`; this does not enable planning, reflection or retention. No custom installer or additional
+runtime is involved.
 
 ### Multiple Hermes profiles
 
@@ -49,6 +49,7 @@ Better. For example:
 ```bash
 hermes -p coder plugins install --enable stepanov1975/better-hermes-hindsight
 hermes -p coder memory setup better_hindsight
+hermes -p coder plugins enable better_hindsight
 hermes -p coder better_hindsight status
 ```
 

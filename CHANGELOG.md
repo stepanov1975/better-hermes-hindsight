@@ -16,6 +16,9 @@ assets, automatic live installation, feature enablement, or gateway restart.
 
 - Update real-host integration fixtures for Hermes v0.23.0's moved Ollama lookup, profile-scoped
   memory routing, host credential scrubbing, and interactive plugin update scanner.
+- Explicitly enable the standalone planner companion after memory setup and verify its real
+  auxiliary-task registration. Modern Hermes can select the memory provider without enabling
+  generic hooks, even with `install --enable`; planning itself remains off by default.
 - Honor the selected test host's own dependency overrides and lock-aware consistency checks;
   unknown failures still fail, without new advisory exceptions. Keep tests in their selected
   interpreter rather than allowing bootstrap re-execution into another managed environment.

@@ -123,6 +123,7 @@ their default tokenizer is incompatible.** See [compatibility and validation sta
 ```bash
 hermes plugins install --enable stepanov1975/better-hermes-hindsight
 hermes memory setup better_hindsight
+hermes plugins enable better_hindsight
 ```
 
 Create `$HERMES_HOME/better_hindsight/config.json` (normally
@@ -450,9 +451,10 @@ Retries use a stable document ID and `update_mode="replace"`. A timed-out write 
 The plugin packages the official hash-verified `cl100k_base` encoding table, so recall and reflection
 query counting does not make a first-use network request outside the configured operation deadline.
 
-Compatibility is behavioral rather than release-matrix based. Required CI uses one reviewed Hermes
-commit for reproducibility across Python 3.11–3.13, while a weekly/manual Python 3.14 canary follows
-Hermes `main` and records the resolved commit. The isolated live lanes also use Python 3.14.
+Compatibility is behavioral rather than an exact-commit runtime requirement. CI keeps the reviewed
+older host for Python 3.11–3.13 and released Hermes v0.23.0 for Python 3.14, while a weekly/manual
+Python 3.14 canary follows Hermes `main`. Isolated live lanes use the released host and record all
+resolved identities.
 This is not a guarantee for every Hermes revision; see [validation scope](docs/compatibility.md).
 
 ## Installation
@@ -463,11 +465,13 @@ current Hermes configuration with the same plugin commands used for other Git pl
 ```bash
 hermes plugins install --enable stepanov1975/better-hermes-hindsight
 hermes memory setup better_hindsight
+hermes plugins enable better_hindsight
 ```
 
-On current Hermes, accept the interactive dependency-preparation prompt. A non-interactive
-install can leave the plugin disabled even with `--enable`; run
-`hermes plugins enable better_hindsight` interactively before setup.
+Accept current Hermes's dependency-preparation prompts. The explicit final `plugins enable`
+command activates the standalone planner companion: `install --enable` may select only the memory
+provider, independently of generic hook enablement. It preserves other plugin selections and does
+not turn planning on; `planner.mode` still defaults to `off`.
 
 It does not need another Hermes profile, Python environment, package installation, launcher, or
 custom gateway startup procedure. Its internal HTTP adapter does not import the Hindsight Python
